@@ -1,5 +1,7 @@
 (ns ciseau.core)
 
-(defn foo
-  []
-  (println "Hello, World!"))
+(defn -main
+  [& args]
+  (def files (map slurp args))
+  (doseq [f files]
+    (println f)))
