@@ -1,7 +1,6 @@
-(ns ciseau.core)
-
-(require  'clojure.string
-          'clojure.java.shell)
+(ns ciseau.core
+  (require  [clojure.string     :as string]
+            [clojure.java.shell :as shell]))
 
 (defn sh [command]
   ; FIXME
@@ -16,12 +15,12 @@
 (defn seq_with_keys [keys vals]
   (into {} (map vector keys vals)))
 
-(defn space_split [s] (clojure.string/split s #" "))
+(defn space_split [s] (string/split s #" "))
 
 (defn tty-dims []
-  (->> (clojure.java.shell/sh "/bin/sh" "-c" "stty size < /dev/tty")
+  (->> (shell/sh "/bin/sh" "-c" "stty size < /dev/tty")
        :out
-       clojure.string/trim-newline
+       string/trim-newline
        space_split
        (map read-string)
        (seq_with_keys [:raws :columns])))
@@ -44,14 +43,35 @@
 		(.startScreen screen)))
 
 (defn put-strings [ls ctx]
-  (doseq [[r s] (map-indexed vector ls)]
-    (.putString (:text ctx) 0 r (str r))
-    (.putString (:text ctx) 3 r s))
-	(.refresh (:screen ctx))
-	(.readInput (:screen ctx)))
+  (let [{text :text, screen :screen} ctx]
+    (doseq [[r s] (map-indexed vector ls)]
+      (.putString text 0 r (str r))
+      (.putString text 3 r s))
+    (.refresh screen)
+    (.readInput screen)))
+
+(defn get-now [] (System/currentTimeMillis))
+
+(defn calc-fps [last-timestamp]
+  (let [now (get-now)]
+    [now (/ 1000.0 (- now last-timestamp))]))
+
+(defn bench-put-strings [ls ctx]
+  (let [start (get-now)
+        {text :text, screen :screen} ctx]
+    (loop [[last-ts fps] [1 1]]
+      (.putString text 0 0 (str fps))
+      (doseq [[r s] (map-indexed vector ls)]
+        (.putString text 0 (inc r) (str r))
+        (.putString text 3 (inc r) s))
+      (.refresh screen)
+      (if (> (- (get-now) start) 3000)
+        (.readInput screen)
+        (recur (calc-fps last-ts))))))
 
 (defn -main
   [f & other_args]
   (with-open [reader (clojure.java.io/reader f)
-              viewer (partial put-strings (line-seq reader))]
+              viewer (partial bench-put-strings (apply vector (line-seq reader)))]
+              ;viewer (partial put-strings (line-seq reader))]
     (with-terminal viewer)))
