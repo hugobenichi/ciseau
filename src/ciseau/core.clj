@@ -15,6 +15,12 @@
 (defn seq_with_keys [keys vals]
   (into {} (map vector keys vals)))
 
+(defn get-now [] (System/currentTimeMillis))
+
+(defn calc-fps [last-timestamp]
+  (let [now (get-now)]
+    [now (/ 1000.0 (- now last-timestamp))]))
+
 (defn space_split [s] (string/split s #" "))
 
 (defn tty-dims []
@@ -48,24 +54,6 @@
       (.putString text 0 r s))
     (.refresh screen)
     (.readInput screen)))
-
-(defn get-now [] (System/currentTimeMillis))
-
-(defn calc-fps [last-timestamp]
-  (let [now (get-now)]
-    [now (/ 1000.0 (- now last-timestamp))]))
-
-(defn bench-put-strings [ls ctx]
-  (let [start (get-now)
-        {text :text, screen :screen} ctx]
-    (loop [[last-ts fps] [1 1]]
-      (.putString text 0 0 (str fps))
-      (doseq [[r s] (map-indexed vector ls)]
-        (.putString text 0 (inc r) s))
-      (.refresh screen)
-      (if (> (- (get-now) start) 3000)
-        (.readInput screen)
-        (recur (calc-fps last-ts))))))
 
 (defn read-file [path]
   (with-open [reader  (clojure.java.io/reader path)]
