@@ -45,8 +45,7 @@
 (defn put-strings [ls ctx]
   (let [{text :text, screen :screen} ctx]
     (doseq [[r s] (map-indexed vector ls)]
-      (.putString text 0 r (str r))
-      (.putString text 3 r s))
+      (.putString text 0 r s))
     (.refresh screen)
     (.readInput screen)))
 
@@ -62,16 +61,22 @@
     (loop [[last-ts fps] [1 1]]
       (.putString text 0 0 (str fps))
       (doseq [[r s] (map-indexed vector ls)]
-        (.putString text 0 (inc r) (str r))
-        (.putString text 3 (inc r) s))
+        (.putString text 0 (inc r) s))
       (.refresh screen)
       (if (> (- (get-now) start) 3000)
         (.readInput screen)
         (recur (calc-fps last-ts))))))
 
+(defn read-file [path]
+  (with-open [reader  (clojure.java.io/reader path)]
+    (apply vector (line-seq reader))))
+
+(defn to-buffer [path]
+    ; TODO: compute max length to correctly offset on the left
+    (let [numbers (map (partial format "%4d ") (iterate inc 0))
+          lines   (read-file path)]
+      (map str numbers lines)))
+
 (defn -main
   [f & other_args]
-  (with-open [reader (clojure.java.io/reader f)
-              viewer (partial bench-put-strings (apply vector (line-seq reader)))]
-              ;viewer (partial put-strings (line-seq reader))]
-    (with-terminal viewer)))
+    (with-terminal (partial put-strings (to-buffer f))))
