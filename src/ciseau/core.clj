@@ -2,14 +2,12 @@
   (require  [clojure.string     :as string]
             [clojure.java.shell :as shell]))
 
-(defn sh [command]
-  ; FIXME
-  (with-out-str (util/cmd "/bin/sh" "-c" aommdn)))
+(defn parse [x] (Integer/parseInt x))
 
 (defn dimensions
   []
-  (let [dims (sh "/bin/stty size </dev/tty")
-        [h w] (map parse (str/split (clojure.string/trim-newline dims) #" "))]
+  (let [dims (shell/sh "/bin/sh" "-c" "stty size < /dev/tty")
+        [h w] (map parse (string/split (string/trim-newline dims) #" "))]
     {:rows h :columns w}))
 
 (defn seq_with_keys [keys vals]
