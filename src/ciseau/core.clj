@@ -63,25 +63,29 @@
           lines   (read-file path)]
       (map str numbers lines)))
 
-; TODO replace these arguments by a map representing editor
-(defn editor-loop [render_fn update_fn input_fn close_fn model_zero]
+(defn editor-loop [editor model_zero]
   (try
     (loop [model model_zero]
-      (render_fn model)
-      (let [next_input (input_fn)
-            next_model (update_fn next_input model)]
-        (if next_model (recur next_model) nil)))
-      (finally (close_fn))))
+      ((:render editor) model)
+      (let [next_input ((:input editor))
+            next_model ((:update editor) next_input model)]
+        (if next_model
+          (recur next_model) nil)))
+    (finally ((:close editor)))))
 
 (defn default_update [input model]
   nil)
 
+(defn make-editor [ctx]
+  {:render  (renderer ctx),
+   :input   (get-input ctx),
+   :update  default_update,
+   :close   (fn [] (->> ctx :screen .stopScreen))})
+
 (defn -main [f & other_args]
   (let [ctx (make-terminal)
-        rn  (renderer ctx)
-        in  (get-input ctx)
         model (to-buffer f)]
     (try
-      (editor-loop rn default_update in (fn [] (->> ctx :screen .stopScreen)) model)
+      (editor-loop (make-editor ctx) model)
       (catch Exception e
         (println (str "error: " (.getMessage e)))))))
