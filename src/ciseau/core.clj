@@ -40,20 +40,20 @@
      :screen  screen
      :text    text}))
 
-(defn with-terminal [f]
-  (let [ctx (make-terminal)
-        screen (:screen ctx)]
-		(.startScreen screen)
-		(.clear screen)
-    (f ctx)
-		(.startScreen screen)))
-
-(defn put-strings [ls ctx]
+(defn renderer [ctx]
   (let [{text :text, screen :screen} ctx]
-    (doseq [[r s] (map-indexed vector ls)]
-      (.putString text 0 r s))
-    (.refresh screen)
-    (.readInput screen)))
+    (.startScreen screen)
+    (fn [ls]
+      (.clear screen)
+      (doseq [[r s] (map-indexed vector ls)]
+        (.putString text 0 r s))
+      (.refresh screen))))
+
+(defn get-input [ctx]
+  (let [{screen :screen} ctx]
+    (fn []
+      ; TODO: return a map with next key and screen size
+      (.readInput screen))))
 
 (defn read-file [path]
   (with-open [reader  (clojure.java.io/reader path)]
@@ -65,6 +65,25 @@
           lines   (read-file path)]
       (map str numbers lines)))
 
-(defn -main
-  [f & other_args]
-    (with-terminal (partial put-strings (to-buffer f))))
+; TODO replace these arguments by a map representing editor
+(defn editor-loop [render_fn update_fn input_fn close_fn model_zero]
+  (try
+    (loop [model model_zero]
+      (render_fn model)
+      (let [next_input (input_fn)
+            next_model (update_fn next_input model)]
+        (if next_model (recur next_model) nil)))
+      (finally (close_fn))))
+
+(defn default_update [input model]
+  nil)
+
+(defn -main [f & other_args]
+  (let [ctx (make-terminal)
+        rn  (renderer ctx)
+        in  (get-input ctx)
+        model (to-buffer f)]
+    (try
+      (editor-loop rn default_update in (fn [] (->> ctx :screen .stopScreen)) model)
+      (catch Exception e
+        (println (str "error: " (.getMessage e)))))))
