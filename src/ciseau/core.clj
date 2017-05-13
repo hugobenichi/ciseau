@@ -88,4 +88,4 @@
     (try
       (editor-loop (make-editor ctx) model)
       (catch Exception e
-        (println (str "error: " (.getMessage e)))))))
+        (println (.getMessage e))))))
