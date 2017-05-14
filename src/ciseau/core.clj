@@ -78,15 +78,18 @@
     (editor-main-loop editor model_zero nil)
     (finally ((:close editor)))))
 
-(defn default_update [input model]
-  ; TODO: switch on input
-  :exit)
-  ;model)
+(defn update_default [input model]
+  model)
+
+(defn update_print_input [input model]
+  (->>  input
+        str
+        (conj model)))
 
 (defn make-editor [ctx]
   {:render  (renderer ctx),
    :input   (get-input ctx),
-   :update  default_update,
+   :update  update_print_input, ;update_default,
    :close   (fn [] (->> ctx :screen .stopScreen))})
 
 (defn -main [f & other_args]
