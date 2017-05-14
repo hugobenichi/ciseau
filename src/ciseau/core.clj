@@ -1,6 +1,7 @@
 (ns ciseau.core
   (require  [clojure.string     :as string]
-            [clojure.java.shell :as shell]))
+            [clojure.java.shell :as shell]
+            [clojure.stacktrace :as stacktrace]))
 
 (defn parse [x] (Integer/parseInt x))
 
@@ -63,18 +64,24 @@
           lines   (read-file path)]
       (map str numbers lines)))
 
-(defn editor-loop [editor model_zero]
+(defn editor-main-loop [editor model previous]
+  (when (= :exit model) :exit)
+  (when (not (= model previous))
+    ((:render editor) model))
+  (recur
+    editor
+    ((:update editor) ((:input editor)) model)
+    model))
+
+(defn make-editor-loop [editor model_zero]
   (try
-    (loop [model model_zero]
-      ((:render editor) model)
-      (let [next_input ((:input editor))
-            next_model ((:update editor) next_input model)]
-        (if next_model
-          (recur next_model) nil)))
+    (editor-main-loop editor model_zero nil)
     (finally ((:close editor)))))
 
 (defn default_update [input model]
-  nil)
+  ; TODO: switch on input
+  :exit)
+  ;model)
 
 (defn make-editor [ctx]
   {:render  (renderer ctx),
@@ -83,9 +90,10 @@
    :close   (fn [] (->> ctx :screen .stopScreen))})
 
 (defn -main [f & other_args]
-  (let [ctx (make-terminal)
-        model (to-buffer f)]
+  (let [model (to-buffer f)]
     (try
-      (editor-loop (make-editor ctx) model)
+      ((->> (make-terminal)
+            make-editor
+            (partial make-editor-loop)) model)
       (catch Exception e
-        (println (.getMessage e))))))
+        (stacktrace/print-cause-trace e)))))
