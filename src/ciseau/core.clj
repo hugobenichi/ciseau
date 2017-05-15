@@ -44,11 +44,13 @@
     (new com.googlecode.lanterna.TerminalPosition x y)))
 
 (defn render-cursor [screen model]
+  ; TODO: also render cursor color
   (->> model :cursor lanterna-pos (.setCursorPosition screen)))
 
 (defn renderer [ctx]
   (let [{text_obj :text, screen :screen} ctx]
     (.startScreen screen)
+    ; TODO: introduce and render multiple layers of text
     (fn [model]
       (.clear screen)
       (doseq [[r s] (map-indexed vector (:text model))]
@@ -91,6 +93,7 @@
   model)
 
 (defn update_print_input [input model]
+  ; TODO: update :cursor for arrow keys, as expected
   (let [initial_text (:text model)
         updated_text (conj initial_text (str input))
         [x y]        (:cursor model)]
