@@ -40,13 +40,14 @@
      :text    text}))
 
 (defn renderer [ctx]
-  (let [{text :text, screen :screen} ctx]
+  (let [{text_obj :text, screen :screen} ctx]
     (.startScreen screen)
-    (fn [ls]
-      (.clear screen)
-      (doseq [[r s] (map-indexed vector ls)]
-        (.putString text 0 r s))
-      (.refresh screen))))
+    (fn [model]
+      (let [[[cursor_x cursor y] text] model]
+        (.clear screen)
+        (doseq [[r s] (map-indexed vector text)]
+          (.putString text_obj 0 r s))
+        (.refresh screen)))))
 
 (defn get-input [ctx]
   (let [{screen :screen} ctx]
@@ -83,9 +84,11 @@
   model)
 
 (defn update_print_input [input model]
-  (->>  input
-        str
-        (conj model)))
+  (let [[cursor text] model]
+    [cursor
+     (->>  input
+           str
+           (conj text))]))
 
 (defn make-editor [ctx]
   {:render  (renderer ctx),
@@ -94,7 +97,8 @@
    :close   (fn [] (->> ctx :screen .stopScreen))})
 
 (defn -main [f & other_args]
-  (let [model (to-buffer f)]
+  (let [text  (to-buffer f)
+        model [[0 0] text]]
     (try
       ((->> (make-terminal)
             make-editor
