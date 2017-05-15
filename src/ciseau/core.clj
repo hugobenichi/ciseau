@@ -59,9 +59,10 @@
     (apply vector (line-seq reader))))
 
 (defn to-buffer [path]
-    ; TODO: compute max length to correctly offset on the left
-    (let [numbers (map (partial format "%4d ") (iterate inc 0))
-          lines   (read-file path)]
+    (let [lines     (read-file path)
+          line_cnt  (count lines)
+          fm_str    (str '% (->> line_cnt Math/log10 int inc) "d ")
+          numbers   (map (partial format fm_str) (iterate inc 0))]
       (map str numbers lines)))
 
 (defn editor-main-loop [editor model previous]
