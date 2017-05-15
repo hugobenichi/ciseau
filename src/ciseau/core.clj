@@ -39,6 +39,13 @@
      :screen  screen
      :text    text}))
 
+(defn lanterna-pos [vec2d]
+  (let [[x y] vec2d]
+    (new com.googlecode.lanterna.TerminalPosition x y)))
+
+(defn render-cursor [screen model]
+  (->> model :cursor lanterna-pos (.setCursorPosition screen)))
+
 (defn renderer [ctx]
   (let [{text_obj :text, screen :screen} ctx]
     (.startScreen screen)
@@ -46,6 +53,7 @@
       (.clear screen)
       (doseq [[r s] (map-indexed vector (:text model))]
         (.putString text_obj 0 r s))
+      (render-cursor screen model)
       (.refresh screen))))
 
 (defn get-input [ctx]
