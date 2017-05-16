@@ -52,6 +52,7 @@
     (.startScreen screen)
     ; TODO: introduce and render multiple layers of text
     (fn [model]
+      ; TODO eliminate flickering by removing clear and instead padding all blanks
       (.clear screen)
       (doseq [[r s] (map-indexed vector (:text model))]
         (.putString text_obj 0 r s))
