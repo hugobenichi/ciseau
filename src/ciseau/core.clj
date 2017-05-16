@@ -92,13 +92,32 @@
 (defn update_default [input model]
   model)
 
+(defn cursor_update [f]
+  (fn [model]
+    ; TODO add cursor box bounding
+    (conj model [:cursor (->> model :cursor (apply f))])))
+
+(def cursor_right (cursor_update (fn [x y] [(inc x) y])))
+(def cursor_left  (cursor_update (fn [x y] [(dec x) y])))
+(def cursor_up    (cursor_update (fn [x y] [x (dec y)])))
+(def cursor_down  (cursor_update (fn [x y] [x (inc y)])))
+
+(defn lanterna-key [typ]
+  (new com.googlecode.lanterna.input.KeyStroke typ))
+
+(def input-handler {
+  (lanterna-key com.googlecode.lanterna.input.KeyType/ArrowRight)  cursor_right
+  (lanterna-key com.googlecode.lanterna.input.KeyType/ArrowLeft)   cursor_left
+  (lanterna-key com.googlecode.lanterna.input.KeyType/ArrowUp)     cursor_up
+  (lanterna-key com.googlecode.lanterna.input.KeyType/ArrowDown)   cursor_down
+  })
+
 (defn update_print_input [input model]
-  ; TODO: update :cursor for arrow keys, as expected
   (let [initial_text (:text model)
         updated_text (conj initial_text (str input))
-        [x y]        (:cursor model)]
-     {:cursor [(inc x) (inc y)]
-      :text updated_text}))
+        [x y]        (:cursor model)
+        up_fn        (or (input-handler input) identity)]
+    (conj (up_fn model) [:text updated_text])))
 
 (defn make-editor [ctx]
   {:render  (renderer ctx),
