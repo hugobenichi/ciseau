@@ -32,6 +32,7 @@
 
 (defn make-terminal []
   (let [factory (new com.googlecode.lanterna.terminal.DefaultTerminalFactory)
+        unused  (.setForceTextTerminal factory true)
         term    (.createTerminal factory)
         screen  (new com.googlecode.lanterna.screen.TerminalScreen term)
         text    (.newTextGraphics screen)]
