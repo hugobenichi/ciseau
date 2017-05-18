@@ -43,14 +43,19 @@
   (let [[x y] vec2d]
     (new com.googlecode.lanterna.TerminalPosition x y)))
 
+(defn lanterna-get-term-size [screen]
+  (let [termSizeTovec (fn [ts] [(.getColumns ts) (.getRows ts)])]
+    (->> screen .getTerminalSize termSizeTovec)))
+
 (defn render-cursor [screen model]
   ; TODO: also render cursor color
   (->> model :cursor lanterna-pos (.setCursorPosition screen)))
 
-(defn lanterna-soft-clear-screen [screen]
-  (let [blank_line  (->> " " repeat (take 100) (apply str))]
+(defn lanterna-soft-clear-screen [ts screen]
+  (let [[w h]       ts
+        blank_line  (->> (repeat w " ") (apply str))]
     ; TODO: use terminal size to correctly blank out rectangle
-    (doseq [r (range 100)]
+    (doseq [r (range h)]
       (.putString screen 0 r blank_line))))
 
 (defn renderer [ctx]
@@ -60,7 +65,7 @@
     (.clear screen)
     ; TODO: introduce and render multiple layers of text
     (fn [model]
-      (lanterna-soft-clear-screen text_obj)
+      (lanterna-soft-clear-screen (lanterna-get-term-size screen) text_obj)
       (doseq [[r s] (map-indexed vector (:text model))]
         (.putString text_obj 0 r s))
       (render-cursor screen model)
