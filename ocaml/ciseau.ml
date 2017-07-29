@@ -34,11 +34,13 @@ let white = 7 ;;
 let term_control_sequence_introducer = 27 |> Char.chr |> String.make 1;;
 let term_ctrl_start = term_control_sequence_introducer ^ "[" ;;
 let term_ctrl_end = term_control_sequence_introducer ^ "[0m" ;;
+let term_ctrl_clear = term_control_sequence_introducer ^ "c" ;;
 
 let term_fg c = 30 + c ;;
 let term_bg c = 40 + c ;;
 let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
 
+let term_clear () = print_string term_ctrl_clear ;;
 
 let rec term_print_code_seq = function
   | []      -> ()
@@ -90,6 +92,7 @@ let print_base_color_table () =
 ;;
 
 let main () =
+  term_clear () ;
   print_base_color_table () ;
   (* TODO: do 6x6x6 cubes plus grays
    * TODO: do 24bit colors
