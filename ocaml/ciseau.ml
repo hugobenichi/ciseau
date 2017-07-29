@@ -15,22 +15,27 @@ let cyan = 6 ;;
 let white = 7 ;;
 
 let term_esc = 27 |> Char.chr |> String.make 1;;
-
 let term_esc_start = term_esc ^ "[" ;;
 let term_esc_end = term_esc ^ "[0m\n" ;;
 
-let term_print_code code =
-  print_int code ;
-  print_char ';'
+let rec term_print_code_seq = function
+  | []      -> ()
+  | i :: [] -> (print_int i ; print_char 'm' )
+  | i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
+;;
+
+let term_print codes s =
+  print_string term_esc_start ;
+  term_print_code_seq codes ;
+  print_string s ;
+  print_string term_esc_end
 ;;
 
 let print_color fg bg s =
-  print_string term_esc_start ;
-  term_print_code (fg + 30) ;
-  term_print_code (bg + 40) ; (* WEAKNESS do not print ";m" at the end of code sequence but "m" instead *)
-  print_char 'm' ;
-  print_string s ;
-  print_string term_esc_end
+  term_print [0 ; fg + 30 ; bg + 40] s ;;
+
+let term_rgb (r, g, b) =
+  16 + (36 * r) + (6 * g) + b
 ;;
 
 let color_table = [|
@@ -50,6 +55,7 @@ let print_color_table () =
 
 let main () =
   print_color_table () ;
+  term_print [0 ; 94 ; 42] "something" ;
   ()
 ;;
 
