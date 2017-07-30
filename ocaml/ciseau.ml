@@ -19,6 +19,13 @@ let a_fold = Array.fold_left ;;
 let a_iter = Array.iter ;;
 
 
+(* string utils *)
+
+let padding l s = (String.make (l - (length s)) ' ') ;;
+let postpad l s = s ^ (padding l s) ;;
+let prepad l s = (padding l s) ^ s ;;
+
+
 (* term utils *)
 
 (* turn these into proper enum and put inside module *)
@@ -55,8 +62,15 @@ let term_print codes s =
   print_string term_ctrl_end
 ;;
 
-let print_color fg bg s =
+let term_print_color fg bg s =
   term_print [0 ; term_fg fg ; term_bg bg] s ;;
+
+let term_print_color256 fg bg s =
+  term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
+
+(* TODO: support hex string like specifications like #ffee44 *)
+let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
+  term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
 
 let color_table = [|
   ("black", black, white) ;
@@ -71,11 +85,11 @@ let color_table = [|
 
 let print_base_color_table () =
   let print_one_color (name, bg, fg) =
-    print_color bg black name ;
+    term_print_color bg black name ;
     print_string " -- " ;
     term_print [1 ; term_fg bg ; term_bg black] name ;
     print_string " -- " ;
-    print_color fg bg name ;
+    term_print_color fg bg name ;
     print_string " -- " ;
     term_print [1 ; term_fg fg ; term_bg bg] name ;
     print_newline ()
@@ -84,21 +98,46 @@ let print_base_color_table () =
                 |> a_map (fun (x, _, _) -> length x)
                 |> a_fold max 0
   in
-  let pad s = s ^ (String.make (maxlen - (length s)) ' ')
-  in
-  let padded_color_table = a_map (fun (s, a, b) -> (pad s, a, b)) color_table
+  let padded_color_table = a_map (fun (s, a, b) -> (postpad maxlen s, a, b)) color_table
   in
   a_iter print_one_color padded_color_table
+;;
+
+let print_256_color_table () =
+  (* base colors *)
+  for c = 0 to 6 do
+    term_print_color256 white c ("  " ^ (string_of_int c) ^ "  ")
+  done ;
+  term_print_color256 black 7 " 7 " ;
+  (* base colors *)
+  for c = 8 to 15 do
+    term_print_color256 white c (" " ^ (string_of_int c) ^ " ")
+  done ;
+  print_newline () ;
+
+  for c = 16 to 231 do
+    if (c - 16) mod 36 = 0 then print_newline () ;
+    term_print_color256 white c (" " ^ (prepad 3 (string_of_int c)) ^ " ")
+  done ;
+
+  (* gray scale *)
+  print_newline () ;
+  print_newline () ;
+  for c = 232 to 255 do
+    if c = 244 then print_newline () ;
+    term_print_color256 white c (" " ^ (string_of_int c) ^ " ")
+  done ;
+  print_newline ()
 ;;
 
 let main () =
   term_clear () ;
   print_base_color_table () ;
-  (* TODO: do 6x6x6 cubes plus grays
-   * TODO: do 24bit colors
-   *)
-  term_print [0 ; 94 ; 42] "something\n" ;
-  ()
+  print_newline () ;
+  print_256_color_table () ;
+  print_newline () ;
+  term_print_color24b (0, 204, 153) (242, 230, 255) " something in 24b colors " ;
+  print_newline ()
 ;;
 
 main ()
