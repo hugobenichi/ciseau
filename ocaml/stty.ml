@@ -8,10 +8,9 @@
 let stdin_chan  = stdin ;;
 let stdout_chan = stdout ;;
 
-let read_next_char () = input_char stdin_chan ;;
-
-let read_next_char2 =
-  (* not thread safe *)
+let read_next_char =
+  (* replacement for input_char which considers 0 as Enf_of_file *)
+  (* WARN not thread safe *)
   let buffer = Bytes.make 1 'c' in
     fun () ->
       Unix.read Unix.stdin buffer 0 1 |> ignore ; (* TODO check return value is 1 ! *)
@@ -20,6 +19,13 @@ let read_next_char2 =
 let do_safely action =
   try (action () ; None)
   with e -> Some e ;;
+
+
+let char_to_string c = String.make 1 c ;;
+let term_control_sequence_introducer = 27 |> Char.chr |> char_to_string ;;
+let term_ctrl_clear = term_control_sequence_introducer ^ "c" ;;
+let term_clear () = print_string term_ctrl_clear ;;
+let term_newline () = print_string "\r\n" ;;
 
 (* avoid warning #40 *)
 open Unix
@@ -45,7 +51,8 @@ let term_set_raw_mode action =
                                              but not deal with the hassle of End_of_file from input_char ... *)
     term_want.c_csize   <- 8;       (* 8 bit chars *)
 
-    print_string "before raw mode\n" ;
+    print_string "before raw mode" ;
+    print_newline () ;
     tcsetattr stdin TCSAFLUSH term_want ;
     let error = do_safely action in (
       tcsetattr stdin TCSAFLUSH term_initial ;
@@ -54,19 +61,19 @@ let term_set_raw_mode action =
       | Some e  ->  e |> Printexc.to_string |> (^) "error: " |> print_string ;
                     print_newline () ;
                     stdout |> out_channel_of_descr |> Printexc.print_backtrace
-                    (* flush me *)
-                    (* TODO: close me !! *)
+                    (* TODO: flush me and close me !! *)
     ) ;
-    print_string "after raw mode\n"
+    print_string "after raw mode" ;
+    print_newline ()
   )
 ;;
 
 let action () =
-    print_string "hello raw terminal\n" ;
-    (* stdin |> in_channel_of_descr |> input_char |> print_char ; *)
-    (* probably needs to do my own lowlvl read myself *)
-    (* () |> read_next_char |> print_char ; *)
-    () |> read_next_char2 |> print_char ;
-    print_newline () ;;
+    term_clear () ;
+    print_string "hello raw terminal" ;
+    term_newline () ;
+    () |> read_next_char |> print_char ;
+    term_newline ()
+;;
 
 term_set_raw_mode action ;;

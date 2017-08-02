@@ -25,6 +25,7 @@ let padding l s = (String.make (l - (length s)) ' ') ;;
 let postpad l s = s ^ (padding l s) ;;
 let prepad l s = (padding l s) ^ s ;;
 
+let char_to_string c = String.make 1 c ;;
 
 (* term utils *)
 
@@ -38,7 +39,7 @@ let magenta = 5 ;;
 let cyan = 6 ;;
 let white = 7 ;;
 
-let term_control_sequence_introducer = 27 |> Char.chr |> String.make 1;;
+let term_control_sequence_introducer = 27 |> Char.chr |> char_to_string ;;
 let term_ctrl_start = term_control_sequence_introducer ^ "[" ;;
 let term_ctrl_end = term_control_sequence_introducer ^ "[0m" ;;
 let term_ctrl_clear = term_control_sequence_introducer ^ "c" ;;
