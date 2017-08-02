@@ -69,11 +69,23 @@ let term_set_raw_mode action =
 ;;
 
 let action () =
-    term_clear () ;
-    print_string "hello raw terminal" ;
-    term_newline () ;
-    () |> read_next_char |> print_char ;
-    term_newline ()
+    let rec loop () =
+      let c = read_next_char () in
+      if Char.code c = 27 (* Escape *)
+      then
+          ()
+      else
+        print_char c ;
+        print_string " " ;
+        print_int (Char.code c) ;
+        term_newline () ;
+        (* loop () *)
+    in (
+      (* term_clear () ; *)
+      print_string "hello raw terminal" ;
+      term_newline () ;
+      loop ()
+    )
 ;;
 
 term_set_raw_mode action ;;

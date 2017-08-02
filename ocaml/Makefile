@@ -2,14 +2,22 @@ OUTDIR=build
 
 .DEFAULT_GOAL := build
 
+builddir:
+	mkdir -p $(OUTDIR)
+
 $(OUTDIR)/ciseau: ciseau.ml
-	mkdir -p $(@D)
 	ocamlc -o $@ ciseau.ml
 
-build: $(OUTDIR)/ciseau
+$(OUTDIR)/teststty: stty.ml
+	ocamlc unix.cma -o $@ stty.ml
 
-run: build
+build: builddir $(OUTDIR)/ciseau $(OUTDIR)/teststty
+
+color: build
 	$(OUTDIR)/ciseau
+
+rawmode: build
+	$(OUTDIR)/teststty
 
 clean:
 	rm *cmi
