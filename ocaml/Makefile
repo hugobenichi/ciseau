@@ -6,7 +6,7 @@ builddir:
 	mkdir -p $(OUTDIR)
 
 $(OUTDIR)/ciseau: ciseau.ml
-	ocamlc -o $@ ciseau.ml
+	ocamlc unix.cma -o $@ ciseau.ml
 
 $(OUTDIR)/teststty: stty.ml
 	ocamlc unix.cma -o $@ stty.ml
