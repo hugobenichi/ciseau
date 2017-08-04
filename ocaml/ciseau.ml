@@ -49,14 +49,55 @@ end
 
 module Term = struct
 
+  (* TODO turn these into proper enum and put inside module *)
+  let black = 0 ;;
+  let red = 1 ;;
+  let green = 2 ;;
+  let yellow = 3 ;;
+  let blue = 4 ;;
+  let magenta = 5 ;;
+  let cyan = 6 ;;
+  let white = 7 ;;
+
+
   let do_safely action =
     try (action () ; None)
     with e -> Some e ;;
 
+  (* TODO: put in Control Sequences module *)
   let control_sequence_introducer = 27 |> Char.chr |> Utils.char_to_string ;;
+  let ctrl_start = control_sequence_introducer ^ "[" ;;
+  let ctrl_end = control_sequence_introducer ^ "[0m" ;;
   let ctrl_clear = control_sequence_introducer ^ "c" ;;
   let clear () = print_string ctrl_clear ;;
   let newline () = print_string "\r\n" ;;
+
+  let term_fg c = 30 + c ;;
+  let term_bg c = 40 + c ;;
+  let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
+
+  let rec term_print_code_seq = function
+    | []      -> ()
+    | i :: [] -> (print_int i ; print_char 'm' )
+    | i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
+  ;;
+
+  let term_print codes s =
+    print_string ctrl_start ;
+    term_print_code_seq codes ;
+    print_string s ;
+    print_string ctrl_end
+  ;;
+
+  let term_print_color fg bg s =
+    term_print [0 ; term_fg fg ; term_bg bg] s ;;
+
+  let term_print_color256 fg bg s =
+    term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
+
+  (* TODO: support hex string like specifications like #ffee44 *)
+  let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
+    term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
 
   (* avoid warning #40 *)
   open Unix
@@ -98,52 +139,9 @@ module Term = struct
 end
 
 
-(* turn these into proper enum and put inside module *)
-let black = 0 ;;
-let red = 1 ;;
-let green = 2 ;;
-let yellow = 3 ;;
-let blue = 4 ;;
-let magenta = 5 ;;
-let cyan = 6 ;;
-let white = 7 ;;
-
-let term_control_sequence_introducer = 27 |> Char.chr |> Utils.char_to_string ;;
-let term_ctrl_start = term_control_sequence_introducer ^ "[" ;;
-let term_ctrl_end = term_control_sequence_introducer ^ "[0m" ;;
-let term_ctrl_clear = term_control_sequence_introducer ^ "c" ;;
-
-let term_fg c = 30 + c ;;
-let term_bg c = 40 + c ;;
-let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
-
-let term_clear () = print_string term_ctrl_clear ;;
-
-let rec term_print_code_seq = function
-  | []      -> ()
-  | i :: [] -> (print_int i ; print_char 'm' )
-  | i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
-;;
-
-let term_print codes s =
-  print_string term_ctrl_start ;
-  term_print_code_seq codes ;
-  print_string s ;
-  print_string term_ctrl_end
-;;
-
-let term_print_color fg bg s =
-  term_print [0 ; term_fg fg ; term_bg bg] s ;;
-
-let term_print_color256 fg bg s =
-  term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
-
-(* TODO: support hex string like specifications like #ffee44 *)
-let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
-  term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
-
-
 module ColorTable = struct
+
+  open Term
 
   let color_table = [|
     ("black", black, white) ;
@@ -204,7 +202,7 @@ module ColorTable = struct
   ;;
 
   let main () =
-    term_clear () ;
+    clear () ;
     print_base_color_table () ;
     print_newline () ;
     print_256_color_table () ;
