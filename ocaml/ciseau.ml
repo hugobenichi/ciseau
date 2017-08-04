@@ -1,8 +1,9 @@
 (* TODOs:
- *  - print the 6x6x6 color gradients
- *  - put terminal in raw mode, do stuff, exist
- *  - in raw mode, capture and print input
+ *  - in raw mode, print input in a loop
  *  - get term size with $ stty size or $ tput cols and $ tput lines
+ *  - implement terminal save and restore
+ *
+ *  - primitive for bliting some text in a rectangle somewhere
  *)
 
 
@@ -12,6 +13,7 @@ let length = String.length ;;
 let a_map = Array.map ;;
 let a_fold = Array.fold_left ;;
 let a_iter = Array.iter ;;
+
 
 module IO = struct
 
@@ -44,9 +46,7 @@ module Utils = struct
 end
 
 
-
-(* term utils *)
-
+(* main module for interacting with the terminal *)
 module Term = struct
 
   (* TODO turn these into proper enum and put inside module *)
@@ -59,10 +59,6 @@ module Term = struct
   let cyan = 6 ;;
   let white = 7 ;;
 
-
-  let do_safely action =
-    try (action () ; None)
-    with e -> Some e ;;
 
   (* TODO: put in Control Sequences module *)
   let control_sequence_introducer = 27 |> Char.chr |> Utils.char_to_string ;;
@@ -102,6 +98,10 @@ module Term = struct
   (* avoid warning #40 *)
   open Unix
 
+  let do_safely action =
+    try (action () ; None)
+    with e -> Some e ;;
+
   let set_raw_mode action =
     (* because terminal_io is a record of mutable fields, do tcgetattr twice:
        once for restoring later, once for setting the terminal to raw mode *)
@@ -139,6 +139,7 @@ module Term = struct
 end
 
 
+(* demo for printing color tables *)
 module ColorTable = struct
 
   open Term

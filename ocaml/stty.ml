@@ -1,3 +1,5 @@
+(* this file was just a minimal one-off experiment for setting the terminal in raw mode *)
+
 module IO = struct
 
   (* replacement for input_char which considers 0 as Enf_of_file *)
