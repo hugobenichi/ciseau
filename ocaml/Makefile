@@ -13,10 +13,10 @@ $(OUTDIR)/teststty: stty.ml
 
 build: builddir $(OUTDIR)/ciseau $(OUTDIR)/teststty
 
-color: build
+run: build
 	$(OUTDIR)/ciseau
 
-rawmode: build
+teststty: build
 	$(OUTDIR)/teststty
 
 clean:

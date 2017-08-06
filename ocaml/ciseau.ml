@@ -14,6 +14,8 @@ let a_map = Array.map ;;
 let a_fold = Array.fold_left ;;
 let a_iter = Array.iter ;;
 
+let l_iter = List.iter ;;
+
 
 module IO = struct
 
@@ -24,6 +26,28 @@ module IO = struct
       fun () ->
         Unix.read Unix.stdin buffer 0 1 |> ignore ; (* TODO check return value is 1 ! *)
         Bytes.get buffer 0 ;;
+
+    (* TODO: exception handling *)
+    let do_with_input_file chan fn =
+      let r = fn chan in (
+        close_in chan ;
+        r
+      ) ;;
+
+    let do_with_output_file chan fn =
+      let r = fn chan in (
+        close_out chan ;
+        r
+      ) ;;
+
+    let slurp f =
+      let rec loop lines ch = match input_line ch with
+      | s -> loop (s :: lines) ch
+      | exception End_of_file -> List.rev lines
+      in
+      do_with_input_file (open_in f) (loop []) ;;
+
+    let save f lines = "todo"
 
 end
 
@@ -140,6 +164,7 @@ end
 
 
 (* demo for printing color tables *)
+(* TODO: move to separate file *)
 module ColorTable = struct
 
   open Term
@@ -215,26 +240,27 @@ module ColorTable = struct
 end
 
 
+(* TODO: move to separate file *)
 module RawModeExperiment = struct
 
+  let rec loop () =
+    let c = IO.next_char () in
+    if Char.code c != 27 (* Escape *)
+    then (
+      print_char c ;
+      print_string " " ;
+      print_int (Char.code c) ;
+      Term.newline ()
+      (* loop () ; *)
+    )
+  ;;
+
   let action () =
-      let rec loop () =
-        let c = IO.next_char () in
-        if Char.code c = 27 (* Escape *)
-        then
-            ()
-        else
-          print_char c ;
-          print_string " " ;
-          print_int (Char.code c) ;
-          Term.newline () ;
-          (* loop () ; *)
-      in (
-        (* clear () ; *)
-        print_string "hello raw terminal" ;
-        Term.newline () ;
-        loop ()
-      )
+    (* clear () ; *)
+    print_string "hello raw terminal" ;
+    Term.newline () ;
+    (* not flushed here *)
+    loop ()
   ;;
 
   let main () =
@@ -243,5 +269,18 @@ module RawModeExperiment = struct
 end
 
 
+module Files = struct
+
+  let main () =
+    let lines = IO.slurp __FILE__ in
+    let println s = (print_string s ; print_newline () ) in
+    l_iter println lines ;;
+
+end
+
+
 let () =
-  ColorTable.main () ;;
+  (* ColorTable.main () ; *)
+  (* RawModeExperiment.main () *)
+  Files.main ()
+;;
