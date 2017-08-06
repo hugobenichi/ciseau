@@ -1,7 +1,7 @@
 (* TODOs:
- *  - in raw mode, print input in a loop
- *  - get term size with $ stty size or $ tput cols and $ tput lines
  *  - implement terminal save and restore
+ *  - map character values to character table
+ *  - get term size with $ stty size or $ tput cols and $ tput lines
  *
  *  - primitive for bliting some text in a rectangle somewhere
  *)
@@ -19,21 +19,35 @@ let l_iter = List.iter ;;
 
 module IO = struct
 
-  exception Nothing_to_read ;;
   exception IOError ;;
   exception ReadTooMuch of int ;;
+  exception WroteNotEnough of int ;;
 
   (* replacement for input_char which considers 0 as Enf_of_file *)
   let next_char =
     (* WARN not thread safe *)
-    let buffer = Bytes.make 1 'c' in
+    let buffer = Bytes.make 1 'z' in
     let rec one_byte_reader () =
       match Unix.read Unix.stdin buffer 0 1 with
-      | 0   -> raise Nothing_to_read (* TODO: recur *)
       | 1   -> Bytes.get buffer 0
-      | -1  -> raise IOError (* TODO: add errno ? *)
-      | n   -> raise (ReadTooMuch n) (* cannot happen since we ask for 1 byte only *)
+      | 0   -> one_byte_reader ()     (* timeout *)
+      | -1  -> raise IOError          (* TODO: errno *)
+      | n   -> raise (ReadTooMuch n)  (* cannot happen since we ask for 1 byte only *)
     in one_byte_reader ;;
+
+  let write fd buffer len =
+    match Unix.write fd buffer 0 len with
+    | n when n = len  -> ()
+    | -1              -> raise IOError
+    | n               -> raise (WroteNotEnough n)
+  ;;
+
+  let write_string fd s =
+    (* WARN not thread safe *)
+    (* TODO: use Bytes.blit_string + permanent buffer with cursors to avoid allocation *)
+    let buffer = (Bytes.of_string s) in
+    write fd buffer (Bytes.length buffer)
+  ;;
 
   (* TODO: exception handling *)
   let do_with_input_file chan fn =
@@ -73,13 +87,20 @@ let padding l s = (String.make (l - (length s)) ' ') ;;
 let postpad l s = s ^ (padding l s) ;;
 let prepad l s = (padding l s) ^ s ;;
 
-let char_to_string c = String.make 1 c ;;
+let string_of_char c = String.make 1 c ;;
 
 end
 
 
 (* main module for interacting with the terminal *)
 module Term = struct
+
+  open Utils
+
+  (* bypass buffered output to the stdout *FILE, use direct write() instead *)
+  let print_string = IO.write_string Unix.stdout ;;
+  let print_int = string_of_int >> print_string ;;
+  let print_char = string_of_char >> print_string ;;
 
 (* TODO turn these into proper enum and put inside module *)
 let black = 0 ;;
@@ -93,7 +114,7 @@ let white = 7 ;;
 
 
 (* TODO: put in Control Sequences module *)
-let control_sequence_introducer = 27 |> Char.chr |> Utils.char_to_string ;;
+let control_sequence_introducer = 27 |> Char.chr |> string_of_char ;;
 let ctrl_start = control_sequence_introducer ^ "[" ;;
 let ctrl_end = control_sequence_introducer ^ "[0m" ;;
 let ctrl_clear = control_sequence_introducer ^ "c" ;;
@@ -141,7 +162,7 @@ let do_with_raw_mode action =
   let want = tcgetattr stdin in
   (
       want.c_brkint  <- false ;   (* no break *)
-      (* want.c_icrnl   <- false ;   (* no CR to NL *) *)
+      want.c_icrnl   <- false ;   (* no CR to NL *)
       want.c_inpck   <- false ;   (* no parity check *)
       want.c_istrip  <- false ;   (* no strip character *)
       want.c_ixon    <- false ;
@@ -150,7 +171,7 @@ let do_with_raw_mode action =
       want.c_icanon  <- false ;
       (* want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *) *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 10;      (* 100 * 100 ms timeout for reading input *)
+      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
@@ -256,9 +277,9 @@ module RawModeExperiment = struct
     let c = IO.next_char () in (
     (* if Char.code c != 27 (* Escape *) *)
     (* then ( *)
-      print_char c ;
-      print_string " " ;
-      print_int (Char.code c) ;
+      Term.print_char c ;
+      Term.print_string " " ;
+      Term.print_int (Char.code c) ;
       Term.newline ()
       ; loop ()
     (* ) *)
@@ -266,7 +287,7 @@ module RawModeExperiment = struct
 
   let action () =
     (* clear () ; *)
-    print_string "hello raw terminal" ;
+    Term.print_string "hello raw terminal" ;
     Term.newline () ;
     (* not flushed here *)
     loop ()
