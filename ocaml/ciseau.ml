@@ -19,38 +19,43 @@ let l_iter = List.iter ;;
 
 module IO = struct
 
+  exception Nothing_to_read ;;
+  exception IOError ;;
+  exception ReadTooMuch of int ;;
+
   (* replacement for input_char which considers 0 as Enf_of_file *)
   let next_char =
     (* WARN not thread safe *)
     let buffer = Bytes.make 1 'c' in
-      fun () ->
-        Unix.read Unix.stdin buffer 0 1 |> ignore ; (* TODO check return value is 1 ! *)
-        Bytes.get buffer 0 ;;
+    let rec one_byte_reader () =
+      match Unix.read Unix.stdin buffer 0 1 with
+      | 0   -> raise Nothing_to_read (* TODO: recur *)
+      | 1   -> Bytes.get buffer 0
+      | -1  -> raise IOError (* TODO: add errno ? *)
+      | n   -> raise (ReadTooMuch n) (* cannot happen since we ask for 1 byte only *)
+    in one_byte_reader ;;
 
-  let next_char2 () =
-    input_char stdin ;;
+  (* TODO: exception handling *)
+  let do_with_input_file chan fn =
+    let r = fn chan in (
+      close_in chan ;
+      r
+    ) ;;
 
-    (* TODO: exception handling *)
-    let do_with_input_file chan fn =
-      let r = fn chan in (
-        close_in chan ;
-        r
-      ) ;;
+  let do_with_output_file chan fn =
+    let r = fn chan in (
+      close_out chan ;
+      r
+    ) ;;
 
-    let do_with_output_file chan fn =
-      let r = fn chan in (
-        close_out chan ;
-        r
-      ) ;;
+  let slurp f =
+    let rec loop lines ch = match input_line ch with
+    | s -> loop (s :: lines) ch
+    | exception End_of_file -> List.rev lines
+    in
+    do_with_input_file (open_in f) (loop []) ;;
 
-    let slurp f =
-      let rec loop lines ch = match input_line ch with
-      | s -> loop (s :: lines) ch
-      | exception End_of_file -> List.rev lines
-      in
-      do_with_input_file (open_in f) (loop []) ;;
-
-    let save f lines = "todo"
+  let save f lines = "todo"
 
 end
 
@@ -64,11 +69,11 @@ module Utils = struct
 
   (* string utils *)
 
-  let padding l s = (String.make (l - (length s)) ' ') ;;
-  let postpad l s = s ^ (padding l s) ;;
-  let prepad l s = (padding l s) ^ s ;;
+let padding l s = (String.make (l - (length s)) ' ') ;;
+let postpad l s = s ^ (padding l s) ;;
+let prepad l s = (padding l s) ^ s ;;
 
-  let char_to_string c = String.make 1 c ;;
+let char_to_string c = String.make 1 c ;;
 
 end
 
@@ -76,76 +81,76 @@ end
 (* main module for interacting with the terminal *)
 module Term = struct
 
-  (* TODO turn these into proper enum and put inside module *)
-  let black = 0 ;;
-  let red = 1 ;;
-  let green = 2 ;;
-  let yellow = 3 ;;
-  let blue = 4 ;;
-  let magenta = 5 ;;
-  let cyan = 6 ;;
-  let white = 7 ;;
+(* TODO turn these into proper enum and put inside module *)
+let black = 0 ;;
+let red = 1 ;;
+let green = 2 ;;
+let yellow = 3 ;;
+let blue = 4 ;;
+let magenta = 5 ;;
+let cyan = 6 ;;
+let white = 7 ;;
 
 
-  (* TODO: put in Control Sequences module *)
-  let control_sequence_introducer = 27 |> Char.chr |> Utils.char_to_string ;;
-  let ctrl_start = control_sequence_introducer ^ "[" ;;
-  let ctrl_end = control_sequence_introducer ^ "[0m" ;;
-  let ctrl_clear = control_sequence_introducer ^ "c" ;;
-  let clear () = print_string ctrl_clear ;;
-  let newline () = print_string "\r\n" ;;
+(* TODO: put in Control Sequences module *)
+let control_sequence_introducer = 27 |> Char.chr |> Utils.char_to_string ;;
+let ctrl_start = control_sequence_introducer ^ "[" ;;
+let ctrl_end = control_sequence_introducer ^ "[0m" ;;
+let ctrl_clear = control_sequence_introducer ^ "c" ;;
+let clear () = print_string ctrl_clear ;;
+let newline () = print_string "\r\n" ;;
 
-  let term_fg c = 30 + c ;;
-  let term_bg c = 40 + c ;;
-  let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
+let term_fg c = 30 + c ;;
+let term_bg c = 40 + c ;;
+let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
 
-  let rec term_print_code_seq = function
-    | []      -> ()
-    | i :: [] -> (print_int i ; print_char 'm' )
-    | i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
-  ;;
+let rec term_print_code_seq = function
+| []      -> ()
+| i :: [] -> (print_int i ; print_char 'm' )
+| i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
+;;
 
-  let term_print codes s =
-    print_string ctrl_start ;
-    term_print_code_seq codes ;
-    print_string s ;
-    print_string ctrl_end
-  ;;
+let term_print codes s =
+  print_string ctrl_start ;
+  term_print_code_seq codes ;
+  print_string s ;
+  print_string ctrl_end
+;;
 
-  let term_print_color fg bg s =
-    term_print [0 ; term_fg fg ; term_bg bg] s ;;
+let term_print_color fg bg s =
+  term_print [0 ; term_fg fg ; term_bg bg] s ;;
 
-  let term_print_color256 fg bg s =
-    term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
+let term_print_color256 fg bg s =
+  term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
 
-  (* TODO: support hex string like specifications like #ffee44 *)
-  let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
-    term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
+(* TODO: support hex string like specifications like #ffee44 *)
+let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
+  term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
 
-  (* avoid warning #40 *)
-  open Unix
+(* avoid warning #40 *)
+open Unix
 
-  let do_safely action =
-    try (action () ; None)
-    with e -> Some e ;;
+let do_safely action =
+  try (action () ; None)
+  with e -> Some e ;;
 
-  let do_with_raw_mode action =
-    (* because terminal_io is a record of mutable fields, do tcgetattr twice:
-       once for restoring later, once for setting the terminal to raw mode *)
-    let initial = tcgetattr stdin in
-    let want = tcgetattr stdin in
-    (
+let do_with_raw_mode action =
+  (* because terminal_io is a record of mutable fields, do tcgetattr twice:
+     once for restoring later, once for setting the terminal to raw mode *)
+  let initial = tcgetattr stdin in
+  let want = tcgetattr stdin in
+  (
       want.c_brkint  <- false ;   (* no break *)
-      want.c_icrnl   <- false ;   (* no CR to NL *)
+      (* want.c_icrnl   <- false ;   (* no CR to NL *) *)
       want.c_inpck   <- false ;   (* no parity check *)
       want.c_istrip  <- false ;   (* no strip character *)
       want.c_ixon    <- false ;
       want.c_opost   <- false ;
       want.c_echo    <- false ;
       want.c_icanon  <- false ;
-      want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
+      (* want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *) *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
+      want.c_vtime   <- 10;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
@@ -243,20 +248,17 @@ module ColorTable = struct
 
 end
 
-exception Boom ;;
 
 (* TODO: move to separate file *)
 module RawModeExperiment = struct
 
   let rec loop () =
-    let c = IO.next_char2 () in (
-    (* let c = IO.next_char () in ( *)
+    let c = IO.next_char () in (
     (* if Char.code c != 27 (* Escape *) *)
     (* then ( *)
       print_char c ;
       print_string " " ;
       print_int (Char.code c) ;
-      (* raise Boom ; *)
       Term.newline ()
       ; loop ()
     (* ) *)
