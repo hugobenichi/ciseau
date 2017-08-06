@@ -27,6 +27,9 @@ module IO = struct
         Unix.read Unix.stdin buffer 0 1 |> ignore ; (* TODO check return value is 1 ! *)
         Bytes.get buffer 0 ;;
 
+  let next_char2 () =
+    input_char stdin ;;
+
     (* TODO: exception handling *)
     let do_with_input_file chan fn =
       let r = fn chan in (
@@ -142,7 +145,7 @@ module Term = struct
       want.c_icanon  <- false ;
       want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 1;      (* 100 * 100 ms timeout for reading input *)
+      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
@@ -246,13 +249,14 @@ exception Boom ;;
 module RawModeExperiment = struct
 
   let rec loop () =
-    let c = IO.next_char () in (
+    let c = IO.next_char2 () in (
+    (* let c = IO.next_char () in ( *)
     (* if Char.code c != 27 (* Escape *) *)
     (* then ( *)
       print_char c ;
       print_string " " ;
       print_int (Char.code c) ;
-      raise Boom ;
+      (* raise Boom ; *)
       Term.newline ()
       ; loop ()
     (* ) *)
