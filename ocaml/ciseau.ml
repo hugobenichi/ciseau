@@ -126,7 +126,7 @@ module Term = struct
     try (action () ; None)
     with e -> Some e ;;
 
-  let set_raw_mode action =
+  let do_with_raw_mode action =
     (* because terminal_io is a record of mutable fields, do tcgetattr twice:
        once for restoring later, once for setting the terminal to raw mode *)
     let initial = tcgetattr stdin in
@@ -142,20 +142,21 @@ module Term = struct
       want.c_icanon  <- false ;
       want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
+      want.c_vtime   <- 1;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
 
       tcsetattr stdin TCSAFLUSH want ;
       let error = do_safely action in (
+        Printexc.record_backtrace true ;
         tcsetattr stdin TCSAFLUSH initial ;
         match error with
         | None    ->  ()
-        | Some e  ->  e |> Printexc.to_string |> (^) "error: " |> print_string ;
+        | Some e  ->  print_newline () ;
+                      e |> Printexc.to_string |> (^) "error: " |> print_string ;
                       print_newline () ;
-                      stdout |> out_channel_of_descr |> Printexc.print_backtrace
-                      (* TODO: flush me and close me !! *)
+                      IO.do_with_output_file (out_channel_of_descr stdout) Printexc.print_backtrace
       ) ;
     )
   ;;
@@ -239,21 +240,23 @@ module ColorTable = struct
 
 end
 
+exception Boom ;;
 
 (* TODO: move to separate file *)
 module RawModeExperiment = struct
 
   let rec loop () =
-    let c = IO.next_char () in
-    if Char.code c != 27 (* Escape *)
-    then (
+    let c = IO.next_char () in (
+    (* if Char.code c != 27 (* Escape *) *)
+    (* then ( *)
       print_char c ;
       print_string " " ;
       print_int (Char.code c) ;
+      raise Boom ;
       Term.newline ()
-      (* loop () ; *)
-    )
-  ;;
+      ; loop ()
+    (* ) *)
+    ) ;;
 
   let action () =
     (* clear () ; *)
@@ -264,7 +267,7 @@ module RawModeExperiment = struct
   ;;
 
   let main () =
-    Term.set_raw_mode action ;;
+    Term.do_with_raw_mode action ;;
 
 end
 
@@ -278,9 +281,8 @@ module Files = struct
 
 end
 
-
 let () =
   (* ColorTable.main () ; *)
-  (* RawModeExperiment.main () *)
-  Files.main ()
+  RawModeExperiment.main ()
+  (* Files.main () *)
 ;;
