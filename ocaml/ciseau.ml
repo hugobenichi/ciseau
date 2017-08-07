@@ -311,8 +311,44 @@ module Files = struct
 
 end
 
+
+module CiseauPrototype = struct
+
+  type editor = {
+    mutable files : string list ;
+    mutable status : string ;
+    mutable running : bool ;
+  } ;;
+
+  let init () : editor = {
+    files   = IO.slurp __FILE__ ;
+    (* files   = IO.slurp Sys.argv.(1) ; *)
+    status  = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;
+    running  = true ;
+  } ;;
+
+  let refresh_screen editor = () ;;
+  let process_events editor = () ;;
+
+  let rec loop editor =
+    if editor.running then
+    (
+      refresh_screen editor ;
+      process_events editor ;
+      (* UNDO loop editor *)
+    ) ;;
+
+  let run_loop editor () = loop editor ;;
+
+  let main () =
+    let editor = init () in
+    Term.do_with_raw_mode (run_loop editor)
+
+end
+
 let () =
   (* ColorTable.main () ; *)
-  RawModeExperiment.main ()
+  (* RawModeExperiment.main () *)
   (* Files.main () *)
+  CiseauPrototype.main ()
 ;;
