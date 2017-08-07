@@ -19,6 +19,7 @@ let l_iter = List.iter ;;
 
 module IO = struct
 
+  exception Timeout ;;
   exception IOError ;;
   exception ReadTooMuch of int ;;
   exception WroteNotEnough of int ;;
@@ -30,7 +31,7 @@ module IO = struct
     let rec one_byte_reader () =
       match Unix.read Unix.stdin buffer 0 1 with
       | 1   -> Bytes.get buffer 0
-      | 0   -> one_byte_reader ()     (* timeout *)
+      | 0   -> raise Timeout (* one_byte_reader ()     (* timeout *) *)
       | -1  -> raise IOError          (* TODO: errno *)
       | n   -> raise (ReadTooMuch n)  (* cannot happen since we ask for 1 byte only *)
     in one_byte_reader ;;
@@ -75,6 +76,21 @@ end
 
 
 module Utils = struct
+
+  type 'a either = Left of 'a | Right of exn ;;
+
+  let try_to action =
+    try let x = action () in Left x
+    with e -> Right e
+  ;;
+
+  let try_finally action cleanup =
+    let rez = try_to action in
+    cleanup () ;
+    match rez with
+    | Left success -> success
+    | Right error -> raise error
+  ;;
 
   (* fp utils *)
 
@@ -151,16 +167,12 @@ let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
 (* avoid warning #40 *)
 open Unix
 
-let do_safely action =
-  try (action () ; None)
-  with e -> Some e ;;
-
-let do_with_raw_mode action =
-  (* because terminal_io is a record of mutable fields, do tcgetattr twice:
-     once for restoring later, once for setting the terminal to raw mode *)
-  let initial = tcgetattr stdin in
-  let want = tcgetattr stdin in
-  (
+  let do_with_raw_mode action =
+    (* because terminal_io is a record of mutable fields, do tcgetattr twice:
+       once for restoring later, once for setting the terminal to raw mode *)
+    let initial = tcgetattr stdin in
+    let want    = tcgetattr stdin in
+    (
       want.c_brkint  <- false ;   (* no break *)
       want.c_icrnl   <- false ;   (* no CR to NL *)
       want.c_inpck   <- false ;   (* no parity check *)
@@ -169,26 +181,17 @@ let do_with_raw_mode action =
       want.c_opost   <- false ;
       want.c_echo    <- false ;
       want.c_icanon  <- false ;
+      (* for the time being, we let SIGINT kill the program *)
       (* want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *) *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
+      want.c_vtime   <- 10;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
 
       tcsetattr stdin TCSAFLUSH want ;
-      let error = do_safely action in (
-        Printexc.record_backtrace true ;
-        tcsetattr stdin TCSAFLUSH initial ;
-        match error with
-        | None    ->  ()
-        | Some e  ->  print_newline () ;
-                      e |> Printexc.to_string |> (^) "error: " |> print_string ;
-                      print_newline () ;
-                      IO.do_with_output_file (out_channel_of_descr stdout) Printexc.print_backtrace
-      ) ;
-    )
-  ;;
+      Utils.try_finally action (fun () -> tcsetattr stdin TCSAFLUSH initial)
+    ) ;;
 
 end
 
