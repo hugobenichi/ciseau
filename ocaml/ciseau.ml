@@ -314,35 +314,55 @@ end
 
 module CiseauPrototype = struct
 
+  (* TODO: cursor position, window size *)
   type editor = {
-    mutable files : string list ;
-    mutable status : string ;
-    mutable running : bool ;
+    files : string list ;
+    header : string ;
+    status : string ;
+    running : bool ;
   } ;;
+
+  let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
   let init () : editor = {
     files   = IO.slurp __FILE__ ;
     (* files   = IO.slurp Sys.argv.(1) ; *)
-    status  = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;
+    header  = "Ciseau editor -- version 0" ;
+    status  = default_status ;
     running  = true ;
   } ;;
 
-  let refresh_screen editor = () ;;
-  let process_events editor = () ;;
+  (* TODO: to remove flickering, use an offscreen buffer in editor
+   * to blit the content, then print to terminal *)
+  let refresh_screen editor =
+    Term.clear () ;
+    Term.print_string editor.header ;
+    Term.newline () ;
+    (* TODO print file *)
+    Term.print_string editor.status ;
+    Term.newline () ;
+    editor
+  ;;
+
+  let process_events editor =
+    let c = IO.next_char () in
+    { editor with
+      status = default_status
+             ^ "  last input: "
+             ^ (Utils.string_of_char c)
+             ^ " " ^ (c |> Char.code |> string_of_int) ;
+    } ;;
 
   let rec loop editor =
     if editor.running then
-    (
-      refresh_screen editor ;
-      process_events editor ;
-      (* UNDO loop editor *)
-    ) ;;
+      editor |> refresh_screen |> process_events |> loop
+    ;;
 
   let run_loop editor () = loop editor ;;
 
   let main () =
-    let editor = init () in
-    Term.do_with_raw_mode (run_loop editor)
+    () |> init |> run_loop |> Term.do_with_raw_mode
+  ;;
 
 end
 
