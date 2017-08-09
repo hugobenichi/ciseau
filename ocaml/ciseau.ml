@@ -31,7 +31,7 @@ module IO = struct
     let rec one_byte_reader () =
       match Unix.read Unix.stdin buffer 0 1 with
       | 1   -> Bytes.get buffer 0
-      | 0   -> raise Timeout (* one_byte_reader ()     (* timeout *) *)
+      | 0   -> one_byte_reader ()     (* timeout *)
       | -1  -> raise IOError          (* TODO: errno *)
       | n   -> raise (ReadTooMuch n)  (* cannot happen since we ask for 1 byte only *)
     in one_byte_reader ;;
@@ -184,7 +184,7 @@ open Unix
       (* for the time being, we let SIGINT kill the program *)
       (* want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *) *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 10;      (* 100 * 100 ms timeout for reading input *)
+      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
@@ -320,6 +320,10 @@ module CiseauPrototype = struct
     header : string ;
     status : string ;
     running : bool ;
+
+    (* TODO: queyr using call into C for direct access to ioctl ... *)
+    width : int;
+    height : int;
   } ;;
 
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
@@ -330,6 +334,9 @@ module CiseauPrototype = struct
     header  = "Ciseau editor -- version 0" ;
     status  = default_status ;
     running  = true ;
+
+    width = 56 ;
+    height = 115 ;
   } ;;
 
   (* TODO: to remove flickering, use an offscreen buffer in editor
