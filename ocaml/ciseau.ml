@@ -335,8 +335,8 @@ module CiseauPrototype = struct
     status  = default_status ;
     running  = true ;
 
-    width = 56 ;
-    height = 115 ;
+    width = 115 ;
+    height = 56 ;
   } ;;
 
   (* TODO: to remove flickering, use an offscreen buffer in editor
