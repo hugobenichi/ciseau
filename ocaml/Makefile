@@ -11,7 +11,10 @@ $(OUTDIR)/ciseau: ciseau.ml
 $(OUTDIR)/teststty: stty.ml
 	ocamlc unix.cma -o $@ stty.ml
 
-build: builddir $(OUTDIR)/ciseau $(OUTDIR)/teststty
+$(OUTDIR)/ioctl.o: ioctl.c
+	gcc -o $@ -c ioctl.c -I /usr/local/lib/ocaml
+
+build: builddir $(OUTDIR)/ciseau $(OUTDIR)/teststty $(OUTDIR)/ioctl.o
 
 run: build
 	$(OUTDIR)/ciseau
