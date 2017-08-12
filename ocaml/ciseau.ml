@@ -164,6 +164,10 @@ let term_print_color256 fg bg s =
 let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
   term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
 
+  let cursor_hide () = print_string (ctrl_start ^ "?25l") ;;
+  let cursor_show () = print_string (ctrl_start ^ "?25h") ;;
+  let cursor_set x y = print_string (ctrl_start ^ (string_of_int y) ^ ";" ^ (string_of_int x) ^ "H") ;;
+
 (* avoid warning #40 *)
 open Unix
 
@@ -316,7 +320,12 @@ module CiseauPrototype = struct
 
   (* TODO: cursor position, window size *)
   type editor = {
-    files : string list ;
+    file_buffer : string list ; (* TODO replace with array ? *)
+    file_offset : int ;
+
+    cursor_x : int ;
+    cursor_y : int ;
+
     header : string ;
     status : string ;
     running : bool ;
@@ -329,31 +338,70 @@ module CiseauPrototype = struct
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
   let init () : editor = {
-    files   = IO.slurp __FILE__ ;
-    (* files   = IO.slurp Sys.argv.(1) ; *)
+    file_buffer   = IO.slurp __FILE__ ;
+    file_offset = 0 ;
+
+    (* TODO: instead of taking cursor position relative to screen, take it relative to the file_buffer *)
+    cursor_x = 0 ;
+    cursor_y = 1 ;
+
+    (* file_buffer   = IO.slurp Sys.argv.(1) ; *)
     header  = "Ciseau editor -- version 0" ;
     status  = default_status ;
     running  = true ;
 
-    width = 115 ;
-    height = 56 ;
+    width = 238 ;
+    height = 61 ;
   } ;;
+
+  (* one line for header, one line for status, one line for user input *)
+  let usage_screen_height editor = editor.height - 3 ;;
+
+  let rec skip n ls = match (n, ls) with
+  | (0, _)      -> ls
+  | (n, [])     -> []
+  | (n, _ :: t) -> skip (n - 1) t
+  ;;
+
+  let rec print_file_buffer max_len lines = match (max_len, lines) with
+  | (0, _)      ->  Term.newline ()
+  | (_, [])     ->  Term.newline ()
+  | (n, h :: t) ->  Term.newline () ;
+                    Term.print_string h ;
+                    print_file_buffer (n - 1) t
+  ;;
 
   (* TODO: to remove flickering, use an offscreen buffer in editor
    * to blit the content, then print to terminal *)
   let refresh_screen editor =
+    Term.cursor_hide () ;
     Term.clear () ;
     Term.print_string editor.header ;
-    Term.newline () ;
-    (* TODO print file *)
+    print_file_buffer (usage_screen_height editor) (skip editor.file_offset editor.file_buffer) ;
+    (* skip remaining space, or fill with void *)
     Term.print_string editor.status ;
-    Term.newline () ;
+    Term.cursor_set editor.cursor_x editor.cursor_y ;
+    Term.cursor_show () ;
+
     editor
+  ;;
+
+  let clamp (min, max) x =
+    if x < min then min else if max < x then max else x ;;
+
+  let process_key editor key =
+    match key with
+    | 65 (* up arrow *)     -> { editor with cursor_y = clamp (0, editor.height - 1) (editor.cursor_y - 1) }
+    | 66 (* down arrow *)   -> { editor with cursor_y = clamp (0, editor.height - 1) (editor.cursor_y + 1) }
+    | 67 (* right arrow *)  -> { editor with cursor_x = clamp (0, editor.width - 1) (editor.cursor_x + 1) }
+    | 68 (* left arrow *)   -> { editor with cursor_x = clamp (0, editor.width - 1) (editor.cursor_x - 1) }
+    | _ -> editor (* ignore for now *)
   ;;
 
   let process_events editor =
     let c = IO.next_char () in
-    { editor with
+    let editor' = process_key editor (Char.code c) in
+    { editor' with
       status = default_status
              ^ "  last input: "
              ^ (Utils.string_of_char c)
