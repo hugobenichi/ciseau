@@ -108,6 +108,45 @@ let string_of_char c = String.make 1 c ;;
 end
 
 
+module Bytevector = struct
+
+  type t = {
+    bytes : bytes ;
+    len : int ;
+  } ;;
+
+  let zero = Char.chr 0 ;;
+
+  let init len = {
+    bytes = Bytes.make len zero ;
+    len   = len
+  } ;;
+
+  let scale size = size |> float |> ( *. ) 1.45 |> ceil |> truncate ;;
+
+  let rec next_size needed_size size =
+    if needed_size <= size then size else next_size needed_size (scale size) ;;
+
+  let grow new_size bytes = Bytes.extend bytes 0 (new_size - (Bytes.length bytes)) ;;
+
+  let ensure_size needed_size bytes =
+    let current_size = (Bytes.length bytes) in
+    if (needed_size <= current_size)
+      then bytes
+      else grow (next_size needed_size current_size) bytes
+  ;;
+
+  let append_string t s =
+    let new_length = (String.length s) + (Bytes.length t.bytes) in
+    let new_bytes = ensure_size new_length t.bytes in
+      Bytes.blit_string s 0 new_bytes t.len (String.length s) ;
+      {
+        bytes = new_bytes ;
+        len   = new_length ;
+      }
+  ;;
+end
+
 (* main module for interacting with the terminal *)
 module Term = struct
 
