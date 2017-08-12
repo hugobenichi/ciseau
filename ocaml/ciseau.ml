@@ -136,7 +136,7 @@ module Bytevector = struct
       else grow (next_size needed_size current_size) bytes
   ;;
 
-  let append t s =
+  let append s t =
     let new_length = (String.length s) + t.len in
     let new_bytes = ensure_size new_length t.bytes in
       Bytes.blit_string s 0 new_bytes t.len (String.length s) ;
@@ -192,6 +192,8 @@ let ctrl_end = control_sequence_introducer ^ "[0m" ;;
 let ctrl_clear = control_sequence_introducer ^ "c" ;;
 let clear () = print_string ctrl_clear ;;
 let newline () = print_string "\r\n" ;;
+let ctrl_cursor_hide = ctrl_start ^ "?25l" ;;
+let ctrl_cursor_show = ctrl_start ^ "?25h" ;;
 
 let term_fg c = 30 + c ;;
 let term_bg c = 40 + c ;;
@@ -220,30 +222,34 @@ let term_print_color256 fg bg s =
 let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
   term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
 
-  let cursor_hide () = print_string (ctrl_start ^ "?25l") ;;
-  let cursor_show () = print_string (ctrl_start ^ "?25h") ;;
-  let cursor_set x y = print_string (ctrl_start ^ (string_of_int y) ^ ";" ^ (string_of_int x) ^ "H") ;;
-
   type terminal = {
     buffer : Bytevector.t ;
   } ;;
 
-  let init_terminal len = {
+  let term_init len = {
     buffer = Bytevector.init len ;
   } ;;
 
-  let term_clear term = {
-    buffer = Bytevector.append (Bytevector.reset term.buffer) ctrl_clear ;
-  } ;;
+  let term_reset term = {
+    buffer = Bytevector.reset term.buffer ;
+  }
 
   let term_append s term = {
-    buffer = Bytevector.append term.buffer s ;
+    buffer = Bytevector.append s term.buffer;
   } ;;
+
+  let term_clear term =
+    term |> term_reset |> term_append ctrl_cursor_show |> term_append ctrl_clear ;;
+
+  let term_set_cursor x y term =
+    let cursor_ctrl_string = (ctrl_start ^ (string_of_int y) ^ ";" ^ (string_of_int x) ^ "H") in
+    term_append cursor_ctrl_string term
+  ;;
 
   let term_newline term = term_append "\r\n" term ;;
 
   let term_flush term =
-    Bytevector.write Unix.stdout term.buffer ;
+    term |> term_append ctrl_cursor_show |> (fun bvec -> bvec.buffer) |> Bytevector.write Unix.stdout ;
     term ;;
 
 (* avoid warning #40 *)
@@ -418,7 +424,7 @@ module CiseauPrototype = struct
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
   let init () : editor = {
-    term = Term.init_terminal 0x1000 ;
+    term = Term.term_init 0x1000 ;
 
     file_buffer   = IO.slurp __FILE__ ;
     file_offset = 0 ;
@@ -451,22 +457,18 @@ module CiseauPrototype = struct
   | (n, h :: t) ->  term |> Term.term_newline |> Term.term_append h |> print_file_buffer (n - 1) t
   ;;
 
-  (* TODO: to remove flickering, use an offscreen buffer in editor
-   * to blit the content, then print to terminal *)
+  (* TODO: setting cursor position causes flickering *)
   let refresh_screen editor =
-    Term.cursor_hide () ;
     let new_term = editor.term |> Term.term_clear
                                |> Term.term_append editor.header
                                |> print_file_buffer (usage_screen_height editor)
                                                     (skip editor.file_offset editor.file_buffer)
                                   (* skip remaining space, or fill with void *)
                                |> Term.term_append editor.status
+                               |> Term.term_set_cursor editor.cursor_x editor.cursor_y
                                |> Term.term_flush
-    in (
-      Term.cursor_set editor.cursor_x editor.cursor_y ;
-      Term.cursor_show () ;
+    in
       { editor with term = new_term }
-    )
   ;;
 
   let clamp (min, max) x =
