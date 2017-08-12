@@ -223,12 +223,15 @@ let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
     buffer = Bytevector.append_string (Bytevector.reset term.buffer) ctrl_clear ;
   } ;;
 
-  let term_append term s = {
+  let term_append s term = {
     buffer = Bytevector.append_string term.buffer s ;
   } ;;
 
+  let term_newline term = term_append "\r\n" term ;;
+
   let term_flush term =
-    Bytevector.write Unix.stdout term.buffer ;;
+    Bytevector.write Unix.stdout term.buffer ;
+    term ;;
 
 (* avoid warning #40 *)
 open Unix
@@ -429,27 +432,28 @@ module CiseauPrototype = struct
   | (n, _ :: t) -> skip (n - 1) t
   ;;
 
-  let rec print_file_buffer max_len lines = match (max_len, lines) with
-  | (0, _)      ->  Term.newline ()
-  | (_, [])     ->  Term.newline ()
-  | (n, h :: t) ->  Term.newline () ;
-                    Term.print_string h ;
-                    print_file_buffer (n - 1) t
+  let rec print_file_buffer max_len lines term = match (max_len, lines) with
+  | (0, _)      ->  Term.term_newline term
+  | (_, [])     ->  Term.term_newline term
+  | (n, h :: t) ->  term |> Term.term_newline |> Term.term_append h |> print_file_buffer (n - 1) t
   ;;
 
   (* TODO: to remove flickering, use an offscreen buffer in editor
    * to blit the content, then print to terminal *)
   let refresh_screen editor =
     Term.cursor_hide () ;
-    Term.clear () ;
-    Term.print_string editor.header ;
-    print_file_buffer (usage_screen_height editor) (skip editor.file_offset editor.file_buffer) ;
-    (* skip remaining space, or fill with void *)
-    Term.print_string editor.status ;
-    Term.cursor_set editor.cursor_x editor.cursor_y ;
-    Term.cursor_show () ;
-
-    editor
+    let new_term = editor.term |> Term.term_clear
+                               |> Term.term_append editor.header
+                               |> print_file_buffer (usage_screen_height editor)
+                                                    (skip editor.file_offset editor.file_buffer)
+                                  (* skip remaining space, or fill with void *)
+                               |> Term.term_append editor.status
+                               |> Term.term_flush
+    in (
+      Term.cursor_set editor.cursor_x editor.cursor_y ;
+      Term.cursor_show () ;
+      { editor with term = new_term }
+    )
   ;;
 
   let clamp (min, max) x =
