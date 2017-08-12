@@ -44,8 +44,6 @@ module IO = struct
   ;;
 
   let write_string fd s =
-    (* WARN not thread safe *)
-    (* TODO: use Bytes.blit_string + permanent buffer with cursors to avoid allocation *)
     let buffer = (Bytes.of_string s) in
     write fd buffer (Bytes.length buffer)
   ;;
@@ -122,6 +120,8 @@ module Bytevector = struct
     len   = len
   } ;;
 
+  let reset bytevec = { bytevec with len = 0 } ;;
+
   let scale size = size |> float |> ( *. ) 1.45 |> ceil |> truncate ;;
 
   let rec next_size needed_size size =
@@ -145,6 +145,10 @@ module Bytevector = struct
         len   = new_length ;
       }
   ;;
+
+  let write fd bytev =
+    IO.write fd bytev.bytes bytev.len ;;
+
 end
 
 (* main module for interacting with the terminal *)
@@ -206,6 +210,25 @@ let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
   let cursor_hide () = print_string (ctrl_start ^ "?25l") ;;
   let cursor_show () = print_string (ctrl_start ^ "?25h") ;;
   let cursor_set x y = print_string (ctrl_start ^ (string_of_int y) ^ ";" ^ (string_of_int x) ^ "H") ;;
+
+  type terminal = {
+    buffer : Bytevector.t ;
+  } ;;
+
+  let init_terminal len = {
+    buffer = Bytevector.init len ;
+  } ;;
+
+  let term_clear term = {
+    buffer = Bytevector.append_string (Bytevector.reset term.buffer) ctrl_clear ;
+  } ;;
+
+  let term_append term s = {
+    buffer = Bytevector.append_string term.buffer s ;
+  } ;;
+
+  let term_flush term =
+    Bytevector.write Unix.stdout term.buffer ;;
 
 (* avoid warning #40 *)
 open Unix
@@ -359,6 +382,8 @@ module CiseauPrototype = struct
 
   (* TODO: cursor position, window size *)
   type editor = {
+    term : Term.terminal ;
+
     file_buffer : string list ; (* TODO replace with array ? *)
     file_offset : int ;
 
@@ -377,6 +402,8 @@ module CiseauPrototype = struct
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
   let init () : editor = {
+    term = Term.init_terminal 0x1000 ;
+
     file_buffer   = IO.slurp __FILE__ ;
     file_offset = 0 ;
 
