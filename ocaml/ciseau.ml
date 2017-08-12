@@ -174,53 +174,53 @@ module Term = struct
   let print_int = string_of_int >> print_string ;;
   let print_char = string_of_char >> print_string ;;
 
-(* TODO turn these into proper enum and put inside module *)
-let black = 0 ;;
-let red = 1 ;;
-let green = 2 ;;
-let yellow = 3 ;;
-let blue = 4 ;;
-let magenta = 5 ;;
-let cyan = 6 ;;
-let white = 7 ;;
+  (* TODO turn these into proper enum and put inside module *)
+  let black = 0 ;;
+  let red = 1 ;;
+  let green = 2 ;;
+  let yellow = 3 ;;
+  let blue = 4 ;;
+  let magenta = 5 ;;
+  let cyan = 6 ;;
+  let white = 7 ;;
 
 
-(* TODO: put in Control Sequences module *)
-let control_sequence_introducer = 27 |> Char.chr |> string_of_char ;;
-let ctrl_start = control_sequence_introducer ^ "[" ;;
-let ctrl_end = control_sequence_introducer ^ "[0m" ;;
-let ctrl_clear = control_sequence_introducer ^ "c" ;;
-let clear () = print_string ctrl_clear ;;
-let newline () = print_string "\r\n" ;;
-let ctrl_cursor_hide = ctrl_start ^ "?25l" ;;
-let ctrl_cursor_show = ctrl_start ^ "?25h" ;;
+  (* TODO: put in Control Sequences module *)
+  let control_sequence_introducer = 27 |> Char.chr |> string_of_char ;;
+  let ctrl_start = control_sequence_introducer ^ "[" ;;
+  let ctrl_end = control_sequence_introducer ^ "[0m" ;;
+  let ctrl_clear = control_sequence_introducer ^ "c" ;;
+  let clear () = print_string ctrl_clear ;;
+  let newline () = print_string "\r\n" ;;
+  let ctrl_cursor_hide = ctrl_start ^ "?25l" ;;
+  let ctrl_cursor_show = ctrl_start ^ "?25h" ;;
 
-let term_fg c = 30 + c ;;
-let term_bg c = 40 + c ;;
-let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
+  let term_fg c = 30 + c ;;
+  let term_bg c = 40 + c ;;
+  let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
 
-let rec term_print_code_seq = function
-| []      -> ()
-| i :: [] -> (print_int i ; print_char 'm' )
-| i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
-;;
+  let rec term_print_code_seq = function
+  | []      -> ()
+  | i :: [] -> (print_int i ; print_char 'm' )
+  | i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
+  ;;
 
-let term_print codes s =
-  print_string ctrl_start ;
-  term_print_code_seq codes ;
-  print_string s ;
-  print_string ctrl_end
-;;
+  let term_print codes s =
+    print_string ctrl_start ;
+    term_print_code_seq codes ;
+    print_string s ;
+    print_string ctrl_end
+  ;;
 
-let term_print_color fg bg s =
-  term_print [0 ; term_fg fg ; term_bg bg] s ;;
+  let term_print_color fg bg s =
+    term_print [0 ; term_fg fg ; term_bg bg] s ;;
 
-let term_print_color256 fg bg s =
-  term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
+  let term_print_color256 fg bg s =
+    term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
 
-(* TODO: support hex string like specifications like #ffee44 *)
-let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
-  term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
+  (* TODO: support hex string like specifications like #ffee44 *)
+  let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
+    term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
 
   type terminal = {
     buffer : Bytevector.t ;
