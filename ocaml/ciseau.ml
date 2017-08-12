@@ -117,7 +117,7 @@ module Bytevector = struct
 
   let init len = {
     bytes = Bytes.make len zero ;
-    len   = len
+    len   = 0 ;
   } ;;
 
   let reset bytevec = { bytevec with len = 0 } ;;
@@ -136,8 +136,8 @@ module Bytevector = struct
       else grow (next_size needed_size current_size) bytes
   ;;
 
-  let append_string t s =
-    let new_length = (String.length s) + (Bytes.length t.bytes) in
+  let append t s =
+    let new_length = (String.length s) + t.len in
     let new_bytes = ensure_size new_length t.bytes in
       Bytes.blit_string s 0 new_bytes t.len (String.length s) ;
       {
@@ -145,6 +145,19 @@ module Bytevector = struct
         len   = new_length ;
       }
   ;;
+
+  let cat t bvec =
+    let new_length = t.len + bvec.len in
+    let new_bytes = ensure_size new_length t.bytes in
+      Bytes.blit bvec.bytes 0 new_bytes t.len bvec.len ;
+      {
+        bytes = new_bytes ;
+        len   = new_length ;
+      }
+  ;;
+
+  let to_string bvec =
+    Bytes.sub_string bvec.bytes 0 bvec.len ;;
 
   let write fd bytev =
     IO.write fd bytev.bytes bytev.len ;;
@@ -220,11 +233,11 @@ let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
   } ;;
 
   let term_clear term = {
-    buffer = Bytevector.append_string (Bytevector.reset term.buffer) ctrl_clear ;
+    buffer = Bytevector.append (Bytevector.reset term.buffer) ctrl_clear ;
   } ;;
 
   let term_append s term = {
-    buffer = Bytevector.append_string term.buffer s ;
+    buffer = Bytevector.append term.buffer s ;
   } ;;
 
   let term_newline term = term_append "\r\n" term ;;
@@ -419,8 +432,8 @@ module CiseauPrototype = struct
     status  = default_status ;
     running  = true ;
 
-    width = 238 ;
-    height = 61 ;
+    width = 118 ;
+    height = 59 ;
   } ;;
 
   (* one line for header, one line for status, one line for user input *)
@@ -496,4 +509,5 @@ let () =
   (* RawModeExperiment.main () *)
   (* Files.main () *)
   CiseauPrototype.main ()
+  (* () *)
 ;;
