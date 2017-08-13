@@ -1,7 +1,8 @@
 (* TODOs:
- *  - implement terminal save and restore
+ *  - implement terminal save and restore:
+ *      use $ tput smcup before, and $ tput rmcup after
+ *      however, this doe snot save cursor position
  *  - map character values to character table
- *  - get term size with $ stty size or $ tput cols and $ tput lines
  *
  *  - primitive for bliting some text in a rectangle somewhere
  *)
@@ -166,6 +167,8 @@ end
 
 (* main module for interacting with the terminal *)
 module Term = struct
+
+  external get_terminal_size : unit -> (int * int) = "get_terminal_size" ;;
 
   open Utils
 
@@ -423,24 +426,25 @@ module CiseauPrototype = struct
 
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
-  let init () : editor = {
-    term = Term.term_init 0x1000 ;
+  let init () : editor =
+    let (term_rows, term_cols) = Term.get_terminal_size () in {
+      term = Term.term_init 0x1000 ;
 
-    file_buffer   = IO.slurp __FILE__ ;
-    file_offset = 0 ;
+      file_buffer   = IO.slurp __FILE__ ;
+      file_offset = 0 ;
 
-    (* TODO: instead of taking cursor position relative to screen, take it relative to the file_buffer *)
-    cursor_x = 0 ;
-    cursor_y = 1 ;
+      (* TODO: instead of taking cursor position relative to screen, take it relative to the file_buffer *)
+      cursor_x = 0 ;
+      cursor_y = 1 ;
 
-    (* file_buffer   = IO.slurp Sys.argv.(1) ; *)
-    header  = "Ciseau editor -- version 0" ;
-    status  = default_status ;
-    running  = true ;
+      (* file_buffer   = IO.slurp Sys.argv.(1) ; *)
+      header  = "Ciseau editor -- version 0" ;
+      status  = default_status ;
+      running  = true ;
 
-    width = 118 ;
-    height = 59 ;
-  } ;;
+      width = term_cols ;
+      height = term_rows ;
+    } ;;
 
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
@@ -457,10 +461,12 @@ module CiseauPrototype = struct
   | (n, h :: t) ->  term |> Term.term_newline |> Term.term_append h |> print_file_buffer (n - 1) t
   ;;
 
+  let window_size editor = "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
+
   (* TODO: setting cursor position causes flickering *)
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
-                               |> Term.term_append editor.header
+                               |> Term.term_append (editor.header ^ "  " ^ (window_size editor))
                                |> print_file_buffer (usage_screen_height editor)
                                                     (skip editor.file_offset editor.file_buffer)
                                   (* skip remaining space, or fill with void *)

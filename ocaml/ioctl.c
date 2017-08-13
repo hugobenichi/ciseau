@@ -1,35 +1,28 @@
 #include <sys/ioctl.h>
 
+#include "caml/alloc.h"
+#include "caml/memory.h"
 #include "caml/mlvalues.h"
 
-CAMLprim value get_size_for_ocaml() {
-    struct winsize w;
+CAMLprim value get_terminal_size() {
+    CAMLparam0();
 
+    CAMLlocal1(tup);
+    tup = caml_alloc(2, 0);
+
+    struct winsize w = {};
     int ret = ioctl(1, TIOCGWINSZ, &w);
-    if (ret == -1 || w.ws_col == 0) {
-        return -1;
+    if (ret != -1) {
+        Store_field(tup, 0, Val_int(w.ws_row));
+        Store_field(tup, 1, Val_int(w.ws_col));
     }
 
-    return 0;
+    CAMLreturn(tup);
 }
 
-int get_size(int *rows, int *cols) {
-    struct winsize w;
-
-    int ret = ioctl(1, TIOCGWINSZ, &w);
-    if (ret == -1 || w.ws_col == 0) {
-        return -1;
-    }
-
-    *cols = w.ws_col;
-    *rows = w.ws_row;
-    return 0;
-}
-
-#include <stdio.h>
-int main() {
-    int rows;
-    int columns;
-    get_size(&rows, &columns);
-    printf("rows: %d, columns: %d\n", rows, columns);
-}
+//#include <stdio.h>
+//int main() {
+//    struct winsize w = {};
+//    ioctl(1, TIOCGWINSZ, &w);
+//    printf("rows: %d, columns: %d\n", w.ws_row, w.ws_col);
+//}

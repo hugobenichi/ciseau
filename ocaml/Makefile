@@ -5,14 +5,14 @@ OUTDIR=build
 builddir:
 	mkdir -p $(OUTDIR)
 
-$(OUTDIR)/ciseau: ciseau.ml
-	ocamlc unix.cma -o $@ ciseau.ml
+$(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
+	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
 
 $(OUTDIR)/teststty: stty.ml
-	ocamlc unix.cma -o $@ stty.ml
+	ocamlc unix.cma -o $@ $<
 
 $(OUTDIR)/ioctl.o: ioctl.c
-	gcc -o $@ -c ioctl.c -I /usr/local/lib/ocaml
+	gcc -c -o $@ $< -I /usr/local/lib/ocaml
 
 build: builddir $(OUTDIR)/ciseau $(OUTDIR)/teststty $(OUTDIR)/ioctl.o
 
@@ -23,6 +23,7 @@ teststty: build
 	$(OUTDIR)/teststty
 
 clean:
-	rm *cmi
-	rm *cmo
+	rm -f *\.cmi
+	rm -f *\.cmo
+	rm -f *\.o
 	rm -rf $(OUTDIR)
