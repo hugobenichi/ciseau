@@ -426,6 +426,7 @@ end
  * It contains both file information, and windowing information
  * TODO: to properly support multiple editing views into the same file, I need to split these into two
  * TODO: handle long lines: need to wrap line correctly, but need to detect in advance at creation and track correspondly *)
+(* TODO: add line number *)
 module Filebuffer = struct
 
   type t = {
@@ -491,6 +492,7 @@ module CiseauPrototype = struct
   type editor = {
     term : Term.terminal ;
 
+    file : string ;
     filebuffer : Filebuffer.t ;
     view_offset : Vec2.t ;
 
@@ -506,17 +508,17 @@ module CiseauPrototype = struct
 
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
-  let init () : editor =
+  let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let lines = IO.slurp __FILE__ in
-    (* lines = IO.slurp Sys.argv.(1) in *)
+    let lines = IO.slurp file in
     {
       term = Term.term_init 0x1000 ;
 
+      file = file ;
       filebuffer = Filebuffer.init lines (term_rows - 3) ;
       view_offset = Vec2.make (0, 2);
 
-      header  = "Ciseau editor -- version 0" ;
+      header  = "Ciseau editor v0  --  " ;
       status  = default_status ;
       user_input = "" ;
       running  = true ;
@@ -528,6 +530,7 @@ module CiseauPrototype = struct
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
 
+  (* TODO: this function should fill remaining vertical spaces with newlines *)
   let rec print_file_buffer max_len lines term = match (max_len, lines) with
   | (0, _)      ->  Term.term_newline term
   | (_, [])     ->  Term.term_newline term
@@ -536,18 +539,17 @@ module CiseauPrototype = struct
 
   let window_size editor = "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
 
-  (* TODO: setting cursor position causes flickering *)
   (* TODO: use color for header bar and for status *)
-  (* TODO: print currently edited file in header *)
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
-                               |> Term.term_append (editor.header ^ "  " ^ (window_size editor))
+                               |> Term.term_append (editor.header ^ (window_size editor) ^ "  " ^ editor.file)
                                |> print_file_buffer (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
-                                  (* skip remaining space, or fill with void *)
                                |> Term.term_append editor.status
                                |> Term.term_newline
                                |> Term.term_append editor.user_input
+                               (* TODO: there is a off by -1 error in the horizontal position of the cursor ??? *)
+                               (* TODO: setting cursor position causes flickering *)
                                |> Term.term_set_cursor
                                     (editor.filebuffer |> Filebuffer.cursor_position_relative_to_view |> Vec2.add editor.view_offset)
                                |> Term.term_flush
@@ -589,7 +591,8 @@ module CiseauPrototype = struct
   let run_loop editor () = loop editor ;;
 
   let main () =
-    () |> init |> run_loop |> Term.do_with_raw_mode
+    (* Sys.argv.(1) *)
+    __FILE__ |> init |> run_loop |> Term.do_with_raw_mode
   ;;
 
 end
