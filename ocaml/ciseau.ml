@@ -31,7 +31,7 @@ module IO = struct
     let buffer = Bytes.make 1 'z' in
     let rec one_byte_reader () =
       match Unix.read Unix.stdin buffer 0 1 with
-      | 1   -> Bytes.get buffer 0
+      | 1   -> Bytes.get buffer 0 |> Char.code
       | 0   -> one_byte_reader ()     (* timeout *)
       | -1  -> raise IOError          (* TODO: errno *)
       | n   -> raise (ReadTooMuch n)  (* cannot happen since we ask for 1 byte only *)
@@ -111,11 +111,14 @@ module Utils = struct
 
   (* string utils *)
 
-let padding l s = (String.make (l - (length s)) ' ') ;;
-let postpad l s = s ^ (padding l s) ;;
-let prepad l s = (padding l s) ^ s ;;
+  let padding l s = (String.make (l - (length s)) ' ') ;;
+  let postpad l s = s ^ (padding l s) ;;
+  let prepad l s = (padding l s) ^ s ;;
 
-let string_of_char c = String.make 1 c ;;
+  let string_of_char c = String.make 1 c ;;
+
+  let truncate l s =
+    if String.length s > l then String.sub s 0 l else s ;;
 
 end
 
@@ -383,7 +386,8 @@ end
 module RawModeExperiment = struct
 
   let rec loop () =
-    let c = IO.next_char () in (
+    let code = IO.next_char () in
+    let c = Char.chr code in (
     (* if Char.code c != 27 (* Escape *) *)
     (* then ( *)
       Term.print_char c ;
@@ -492,6 +496,7 @@ module CiseauPrototype = struct
 
     header : string ;
     status : string ;
+    user_input : string ;
     running : bool ;
 
     (* TODO: queyr using call into C for direct access to ioctl ... *)
@@ -513,6 +518,7 @@ module CiseauPrototype = struct
 
       header  = "Ciseau editor -- version 0" ;
       status  = default_status ;
+      user_input = "" ;
       running  = true ;
 
       width = term_cols ;
@@ -532,7 +538,6 @@ module CiseauPrototype = struct
 
   (* TODO: setting cursor position causes flickering *)
   (* TODO: use color for header bar and for status *)
-  (* TODO: print user key in user line at the bottom *)
   (* TODO: print currently edited file in header *)
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
@@ -541,6 +546,8 @@ module CiseauPrototype = struct
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
                                   (* skip remaining space, or fill with void *)
                                |> Term.term_append editor.status
+                               |> Term.term_newline
+                               |> Term.term_append editor.user_input
                                |> Term.term_set_cursor
                                     (editor.filebuffer |> Filebuffer.cursor_position_relative_to_view |> Vec2.add editor.view_offset)
                                |> Term.term_flush
@@ -548,8 +555,8 @@ module CiseauPrototype = struct
       { editor with term = new_term }
   ;;
 
-  let process_key editor key =
-    match key with
+  let process_key keycode editor =
+    match keycode with
     | 65 (* up arrow *)     -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
     | 66 (* down arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
     | 67 (* right arrow *)  -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
@@ -557,15 +564,22 @@ module CiseauPrototype = struct
     | _ -> editor (* ignore for now *)
   ;;
 
+  let make_user_input keycode editor =
+    let keychar = (keycode |> Char.chr |> Utils.string_of_char) in
+    let new_head = keychar ^ "(" ^ (string_of_int keycode) ^ ")" in
+    let new_user_input = new_head ^ " " ^ editor.user_input in
+      { editor with
+        user_input = Utils.truncate editor.width new_user_input ;
+      } ;;
+
+  let update_status editor = editor ;;
+
   let process_events editor =
-    let c = IO.next_char () in
-    let editor' = process_key editor (Char.code c) in
-    { editor' with
-      status = default_status
-             ^ "  last input: "
-             ^ (Utils.string_of_char c)
-             ^ " " ^ (c |> Char.code |> string_of_int) ;
-    } ;;
+    let keycode = IO.next_char () in
+      editor |> process_key keycode
+             |> make_user_input keycode
+             |> update_status
+    ;;
 
   let rec loop editor =
     if editor.running then
