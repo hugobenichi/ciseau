@@ -403,6 +403,70 @@ module Files = struct
 end
 
 
+(* This represents a file currently edited
+ * It contains both file information, and windowing information
+ * TODO: to properly support multiple editing views into the same file, I need to split these into two
+ * TODO: handle long lines: need to wrap line correctly, but need to detect in advance at creation and track correspondly *)
+module Filebuffer = struct
+
+  type t = {
+      (* TOOD: refactor this into slice *)
+      buffer: string array ; (* the file data, line per line *)
+      buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
+
+      cursor_y : int ;       (* index in the array *)
+      cursor_x : int ;       (* index in the string *)
+
+      view_start : int ;     (* index of first row in view *)
+      view_diff  : int;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
+                             (* index of last row in view is view_start + view_diff *)
+  } ;;
+
+  let init lines view_h =
+    let buffer = Array.of_list lines in {
+      buffer        = buffer ;
+      buflen        = Array.length buffer ;
+      cursor_y      = 0 ;
+      cursor_x      = 0 ;
+      view_start    = 0 ;
+      view_diff     = view_h - 1;
+    } ;;
+
+  let inc x = x + 1 ;;
+  let dec x = x - 1 ;;
+
+  let adjust_view t =
+    if t.cursor_y < t.view_start then
+      { t with
+        view_start  = t.cursor_y ;
+      }
+    else if t.cursor_y > t.view_start + t.view_diff then
+      { t with
+        view_start  = t.cursor_y - t.view_diff ;
+      }
+    else t
+
+  let move_cursor_left t  = adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
+  let move_cursor_right t = adjust_view { t with cursor_x = t.cursor_x |> inc |> min ((length t.buffer.(t.cursor_y)) - 1) ; } ;;
+  let move_cursor_up t    = adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
+  let move_cursor_down t  = adjust_view { t with cursor_x = t.cursor_x |> inc |> min (t.buflen - 1) ; } ;;
+
+  (* TODO: introduce a proper {x: y:} record for terminal position instead of keeping the order of fields in the head ... *)
+  let cursor_position_relative_to_view t =
+    (t.cursor_y - t.view_start, t.cursor_x) ;;
+
+  let apply_view_frustrum t =
+    let rec loop i accum =
+      if i < t.view_start
+      then accum
+      else loop (i - 1) (t.buffer.(i) :: accum)
+    in
+      loop (t.view_start + t.view_diff) []
+    ;;
+
+end
+
+
 module CiseauPrototype = struct
 
   (* TODO: cursor position, window size *)
