@@ -74,6 +74,19 @@ module IO = struct
 end
 
 
+module Vec2 = struct
+
+  type t = {
+    x : int ;
+    y : int ;
+  } ;;
+
+  let make (x, y) = { x = x ; y = y } ;;
+  let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
+  let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
+end
+
+
 module Utils = struct
 
   type 'a either = Left of 'a | Right of exn ;;
@@ -244,7 +257,9 @@ module Term = struct
   let term_clear term =
     term |> term_reset |> term_append ctrl_cursor_show |> term_append ctrl_clear ;;
 
-  let term_set_cursor x y term =
+  open Vec2
+
+  let term_set_cursor {x ; y ; _ } term =
     let cursor_ctrl_string = (ctrl_start ^ (string_of_int y) ^ ";" ^ (string_of_int x) ^ "H") in
     term_append cursor_ctrl_string term
   ;;
@@ -448,12 +463,11 @@ module Filebuffer = struct
 
   let move_cursor_left t  = adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
   let move_cursor_right t = adjust_view { t with cursor_x = t.cursor_x |> inc |> min ((length t.buffer.(t.cursor_y)) - 1) ; } ;;
-  let move_cursor_up t    = adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
-  let move_cursor_down t  = adjust_view { t with cursor_x = t.cursor_x |> inc |> min (t.buflen - 1) ; } ;;
+  let move_cursor_up t    = adjust_view { t with cursor_y = t.cursor_y |> dec |> max 0 ; } ;;
+  let move_cursor_down t  = adjust_view { t with cursor_y = t.cursor_y |> inc |> min (t.buflen - 1) ; } ;;
 
   (* TODO: introduce a proper {x: y:} record for terminal position instead of keeping the order of fields in the head ... *)
-  let cursor_position_relative_to_view t =
-    (t.cursor_y - t.view_start, t.cursor_x) ;;
+  let cursor_position_relative_to_view t = Vec2.make (t.cursor_x, t.cursor_y - t.view_start) ;;
 
   let apply_view_frustrum t =
     let rec loop i accum =
@@ -473,11 +487,8 @@ module CiseauPrototype = struct
   type editor = {
     term : Term.terminal ;
 
-    file_buffer : string list ; (* TODO replace with array ? *)
-    file_offset : int ;
-
-    cursor_x : int ;
-    cursor_y : int ;
+    filebuffer : Filebuffer.t ;
+    view_offset : Vec2.t ;
 
     header : string ;
     status : string ;
@@ -491,17 +502,15 @@ module CiseauPrototype = struct
   let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
 
   let init () : editor =
-    let (term_rows, term_cols) = Term.get_terminal_size () in {
+    let (term_rows, term_cols) = Term.get_terminal_size () in
+    let lines = IO.slurp __FILE__ in
+    (* lines = IO.slurp Sys.argv.(1) in *)
+    {
       term = Term.term_init 0x1000 ;
 
-      file_buffer   = IO.slurp __FILE__ ;
-      file_offset = 0 ;
+      filebuffer = Filebuffer.init lines (term_rows - 3) ;
+      view_offset = Vec2.make (0, 2);
 
-      (* TODO: instead of taking cursor position relative to screen, take it relative to the file_buffer *)
-      cursor_x = 0 ;
-      cursor_y = 1 ;
-
-      (* file_buffer   = IO.slurp Sys.argv.(1) ; *)
       header  = "Ciseau editor -- version 0" ;
       status  = default_status ;
       running  = true ;
@@ -513,12 +522,6 @@ module CiseauPrototype = struct
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
 
-  let rec skip n ls = match (n, ls) with
-  | (0, _)      -> ls
-  | (n, [])     -> []
-  | (n, _ :: t) -> skip (n - 1) t
-  ;;
-
   let rec print_file_buffer max_len lines term = match (max_len, lines) with
   | (0, _)      ->  Term.term_newline term
   | (_, [])     ->  Term.term_newline term
@@ -528,28 +531,29 @@ module CiseauPrototype = struct
   let window_size editor = "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
 
   (* TODO: setting cursor position causes flickering *)
+  (* TODO: use color for header bar and for status *)
+  (* TODO: print user key in user line at the bottom *)
+  (* TODO: print currently edited file in header *)
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
                                |> Term.term_append (editor.header ^ "  " ^ (window_size editor))
                                |> print_file_buffer (usage_screen_height editor)
-                                                    (skip editor.file_offset editor.file_buffer)
+                                                    (Filebuffer.apply_view_frustrum editor.filebuffer)
                                   (* skip remaining space, or fill with void *)
                                |> Term.term_append editor.status
-                               |> Term.term_set_cursor editor.cursor_x editor.cursor_y
+                               |> Term.term_set_cursor
+                                    (editor.filebuffer |> Filebuffer.cursor_position_relative_to_view |> Vec2.add editor.view_offset)
                                |> Term.term_flush
     in
       { editor with term = new_term }
   ;;
 
-  let clamp (min, max) x =
-    if x < min then min else if max < x then max else x ;;
-
   let process_key editor key =
     match key with
-    | 65 (* up arrow *)     -> { editor with cursor_y = clamp (0, editor.height - 1) (editor.cursor_y - 1) }
-    | 66 (* down arrow *)   -> { editor with cursor_y = clamp (0, editor.height - 1) (editor.cursor_y + 1) }
-    | 67 (* right arrow *)  -> { editor with cursor_x = clamp (0, editor.width - 1) (editor.cursor_x + 1) }
-    | 68 (* left arrow *)   -> { editor with cursor_x = clamp (0, editor.width - 1) (editor.cursor_x - 1) }
+    | 65 (* up arrow *)     -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
+    | 66 (* down arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
+    | 67 (* right arrow *)  -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
+    | 68 (* left arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
     | _ -> editor (* ignore for now *)
   ;;
 
