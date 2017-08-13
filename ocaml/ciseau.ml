@@ -2,9 +2,6 @@
  *  - implement terminal save and restore:
  *      use $ tput smcup before, and $ tput rmcup after
  *      however, this doe snot save cursor position
- *  - map character values to character table
- *
- *  - primitive for bliting some text in a rectangle somewhere
  *)
 
 
@@ -491,6 +488,9 @@ module CiseauPrototype = struct
   (* TODO: cursor position, window size *)
   type editor = {
     term : Term.terminal ;
+    width : int;
+    height : int;
+    running : bool ;
 
     file : string ;
     filebuffer : Filebuffer.t ;
@@ -499,32 +499,26 @@ module CiseauPrototype = struct
     header : string ;
     status : string ;
     user_input : string ;
-    running : bool ;
-
-    (* TODO: queyr using call into C for direct access to ioctl ... *)
-    width : int;
-    height : int;
   } ;;
 
-  let default_status = "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find (not implemented)" ;;
+  let default_status = "Ciseau editor v0  " ;;
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
     let lines = IO.slurp file in
     {
-      term = Term.term_init 0x1000 ;
+      term            = Term.term_init 0x1000 ;
+      width           = term_cols ;
+      height          = term_rows ;
+      running         = true ;
 
-      file = file ;
-      filebuffer = Filebuffer.init lines (term_rows - 3) ;
-      view_offset = Vec2.make (0, 2);
+      file            = file ;
+      filebuffer      = Filebuffer.init lines (term_rows - 3) ;
+      view_offset     = Vec2.make (0, 2);
 
-      header  = "Ciseau editor v0  --  " ;
-      status  = default_status ;
-      user_input = "" ;
-      running  = true ;
-
-      width = term_cols ;
-      height = term_rows ;
+      header          = file ^ " @ " ^ (Sys.getcwd ()) ;
+      status          = default_status ;
+      user_input      = "" ;
     } ;;
 
   (* one line for header, one line for status, one line for user input *)
@@ -537,15 +531,17 @@ module CiseauPrototype = struct
   | (n, h :: t) ->  term |> Term.term_newline |> Term.term_append h |> print_file_buffer (n - 1) t
   ;;
 
-  let window_size editor = "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
+  let window_size editor =
+    "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
 
-  (* TODO: use color for header bar and for status *)
+  (* TODO HUD use color for header bar and for status *)
+  (* TODO HUD Other header metadata: cursor position in the file, file length, file dirty bit *)
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
-                               |> Term.term_append (editor.header ^ (window_size editor) ^ "  " ^ editor.file)
+                               |> Term.term_append editor.header
                                |> print_file_buffer (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
-                               |> Term.term_append editor.status
+                               |> Term.term_append (editor.status ^ (window_size editor))
                                |> Term.term_newline
                                |> Term.term_append editor.user_input
                                (* TODO: there is a off by -1 error in the horizontal position of the cursor ??? *)
@@ -558,6 +554,7 @@ module CiseauPrototype = struct
   ;;
 
   let process_key keycode editor =
+    (* TODO use table to map keycodes to character enum table *)
     match keycode with
     | 65 (* up arrow *)     -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
     | 66 (* down arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
