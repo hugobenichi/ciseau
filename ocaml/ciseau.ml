@@ -1,7 +1,5 @@
 (* TODOs:
- *  - implement terminal save and restore:
- *      use $ tput smcup before, and $ tput rmcup after
- *      however, this doe snot save cursor position
+ *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
 
@@ -211,6 +209,9 @@ module Term = struct
   let ctrl_cursor_hide = ctrl_start ^ "?25l" ;;
   let ctrl_cursor_show = ctrl_start ^ "?25h" ;;
 
+  let ctrl_switch_offscreen = ctrl_start ^ "?47h" ;;
+  let ctrl_switch_mainscreen = ctrl_start ^ "?47l" ;;
+
   let term_fg c = 30 + c ;;
   let term_bg c = 40 + c ;;
   let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
@@ -288,15 +289,21 @@ open Unix
       want.c_echo    <- false ;
       want.c_icanon  <- false ;
       (* for the time being, we let SIGINT kill the program *)
-      (* want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *) *)
+      want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
       want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
                                   (* TODO: how to set a low timeout in order to process async IO results
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
 
+      (* TODO: save cursor position *)
+      print_string ctrl_switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
-      Utils.try_finally action (fun () -> tcsetattr stdin TCSAFLUSH initial)
+      Utils.try_finally action (fun () ->
+        tcsetattr stdin TCSAFLUSH initial ;
+        print_string ctrl_switch_mainscreen
+        (* TODO: restore cursor position *)
+      )
     ) ;;
 
 end
@@ -556,6 +563,8 @@ module CiseauPrototype = struct
   let process_key keycode editor =
     (* TODO use table to map keycodes to character enum table *)
     match keycode with
+    |  3 (* ^c ie sigint *) -> { editor with running = false }
+
     | 65 (* up arrow *)     -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
     | 66 (* down arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
     | 67 (* right arrow *)  -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
@@ -599,5 +608,4 @@ let () =
   (* RawModeExperiment.main () *)
   (* Files.main () *)
   CiseauPrototype.main ()
-  (* () *)
 ;;
