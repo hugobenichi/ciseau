@@ -79,6 +79,8 @@ module Vec2 = struct
   let make (x, y) = { x = x ; y = y } ;;
   let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
   let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
+
+  let to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
 end
 
 
@@ -459,6 +461,8 @@ module Filebuffer = struct
   let inc x = x + 1 ;;
   let dec x = x - 1 ;;
 
+  let saturate_up length x = min (max (length - 1) 0) x ;;
+
   let adjust_view t =
     if t.cursor_y < t.view_start then
       { t with
@@ -470,12 +474,27 @@ module Filebuffer = struct
       }
     else t
 
-  let move_cursor_left t  = adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
-  let move_cursor_right t = adjust_view { t with cursor_x = t.cursor_x |> inc |> min ((length t.buffer.(t.cursor_y)) - 1) ; } ;;
-  let move_cursor_up t    = adjust_view { t with cursor_y = t.cursor_y |> dec |> max 0 ; } ;;
-  let move_cursor_down t  = adjust_view { t with cursor_y = t.cursor_y |> inc |> min (t.buflen - 1) ; } ;;
+  let recenter_view t =
+    let new_start = t.cursor_y - t.view_diff / 2 in
+    let adjusted_bottom = max new_start 0 in
+    let adjusted_top = (saturate_up t.buflen (adjusted_bottom + t.view_diff) - t.view_diff) in
+    { t with view_start = adjusted_top }
+  ;;
 
-  (* TODO: introduce a proper {x: y:} record for terminal position instead of keeping the order of fields in the head ... *)
+  let move_cursor_left t  =
+    adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
+  let move_cursor_right t =
+    adjust_view { t with cursor_x = t.cursor_x |> inc |> saturate_up (length t.buffer.(t.cursor_y)) ; } ;;
+
+  let move_n_up   n t = adjust_view { t with cursor_y = t.cursor_y |> fun x -> x - n |> max 0 ; } ;;
+  let move_n_down n t = adjust_view { t with cursor_y = t.cursor_y |> (+) n |> saturate_up t.buflen ; } ;;
+
+  let move_cursor_up   = move_n_up 1 ;;
+  let move_cursor_down = move_n_down 1 ;;
+  let move_page_up   t = move_n_up (t.view_diff + 1) t ;;
+  let move_page_down t = move_n_down (t.view_diff + 1) t ;;
+
+  let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
   let cursor_position_relative_to_view t = Vec2.make (t.cursor_x, t.cursor_y - t.view_start) ;;
 
   let apply_view_frustrum t =
@@ -492,7 +511,6 @@ end
 
 module CiseauPrototype = struct
 
-  (* TODO: cursor position, window size *)
   type editor = {
     term : Term.terminal ;
     width : int;
@@ -523,7 +541,7 @@ module CiseauPrototype = struct
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;
       view_offset     = Vec2.make (0, 2);
 
-      header          = file ^ " @ " ^ (Sys.getcwd ()) ;
+      header          = (Sys.getcwd ()) ^ "/" ^ file ;
       status          = default_status ;
       user_input      = "" ;
     } ;;
@@ -541,11 +559,16 @@ module CiseauPrototype = struct
   let window_size editor =
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
 
+  let show_header editor term =
+    term |> Term.term_append editor.header
+         |> Term.term_append (" " ^ (editor.filebuffer |> Filebuffer.cursor_position |> Vec2.to_string))
+    ;;
+
   (* TODO HUD use color for header bar and for status *)
-  (* TODO HUD Other header metadata: cursor position in the file, file length, file dirty bit *)
+  (* TODO HUD Other header metadata: file length, file dirty bit *)
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
-                               |> Term.term_append editor.header
+                               |> show_header editor
                                |> print_file_buffer (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
                                |> Term.term_append (editor.status ^ (window_size editor))
@@ -564,6 +587,10 @@ module CiseauPrototype = struct
     (* TODO use table to map keycodes to character enum table *)
     match keycode with
     |  3 (* ^c ie sigint *) -> { editor with running = false }
+
+    |  4 (* ^d *)           -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
+    | 21 (* ^u *)           -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
+    | 26 (* ^z *)           -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
 
     | 65 (* up arrow *)     -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
     | 66 (* down arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
