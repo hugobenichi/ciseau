@@ -1,6 +1,5 @@
 (* TODOs:
  *  - finish implementing terminal save and restore by restoring cursor position
- *  - add character table
  *  - add next/prev word and paragraph movement mapped to ^hjkl
  *  - color up the cursor and active line
  *  - start cleanup dead code
@@ -124,6 +123,55 @@ module Utils = struct
 end
 
 
+(* Mappings of character codes
+ * char code -> char enum
+ * char code -> char string repr
+ *)
+module Keys = struct
+
+  type key = Unknown
+    | Ctrl_c
+    | Ctrl_d
+    | Ctrl_u
+    | Ctrl_z
+    | ArrowUp
+    | ArrowDown
+    | ArrowRight
+    | ArrowLeft
+  ;;
+
+  let code_to_key_table = Array.make 256 (Unknown, "unkown", 0) ;;
+  code_to_key_table.(3)   <- (Ctrl_c,     "Ctrl_c",       3) ;;
+  code_to_key_table.(4)   <- (Ctrl_d,     "Ctrl_d",       4) ;;
+  code_to_key_table.(21)  <- (Ctrl_u,     "Ctrl_u",       21) ;;
+  code_to_key_table.(26)  <- (Ctrl_z,     "Ctrl_z",       26) ;;
+  code_to_key_table.(65)  <- (ArrowUp,    "ArrowUp",      65) ;;
+  code_to_key_table.(66)  <- (ArrowDown,  "ArrowDown",    66) ;;
+  code_to_key_table.(67)  <- (ArrowRight, "ArrowRight",   67) ;;
+  code_to_key_table.(68)  <- (ArrowLeft,  "ArrowLeft",    68) ;;
+
+  let code_to_key code =
+    match code_to_key_table.(code) with
+    | (Unknown, repr, _) -> (Unknown, repr, code)
+    | found              -> found
+  ;;
+
+  (* really necessary ? *)
+  let key_to_code = function
+    | Unknown       -> 0
+    | Ctrl_c        -> 3
+    | Ctrl_d        -> 4
+    | Ctrl_u        -> 21
+    | Ctrl_z        -> 26
+    | ArrowUp       -> 65
+    | ArrowDown     -> 66
+    | ArrowRight    -> 67
+    | ArrowLeft     -> 68
+  ;;
+
+end
+
+
 module Bytevector = struct
 
   type t = {
@@ -185,6 +233,7 @@ end
 (* main module for interacting with the terminal *)
 module Term = struct
 
+
   external get_terminal_size : unit -> (int * int) = "get_terminal_size" ;;
 
   open Utils
@@ -194,7 +243,8 @@ module Term = struct
   let print_int = string_of_int >> print_string ;;
   let print_char = string_of_char >> print_string ;;
 
-  (* TODO turn these into proper enum and put inside module *)
+  (* TODO turn these into proper variant and put inside module *)
+  (* TODO variant should look like term_color = Basic of ?? | RGB6 of ?? | Gray of ?? | RGB24b of ?? *)
   let black = 0 ;;
   let red = 1 ;;
   let green = 2 ;;
@@ -501,6 +551,7 @@ module Filebuffer = struct
   let move_cursor_up   = move_n_up 1 ;;
   let move_cursor_down = move_n_down 1 ;;
   let move_page_up   t = move_n_up (t.view_diff + 1) t ;;
+  (* BUG when doing page down one more time after having hit the bottom *)
   let move_page_down t = move_n_down (t.view_diff + 1) t ;;
 
   let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
@@ -609,26 +660,23 @@ module CiseauPrototype = struct
       { editor with term = new_term }
   ;;
 
-  let process_key keycode editor =
+  let process_key (keycode, _, _) editor =
     (* TODO use table to map keycodes to character enum table *)
     match keycode with
-    |  3 (* ^c ie sigint *) -> { editor with running = false }
-
-    |  4 (* ^d *)           -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
-    | 21 (* ^u *)           -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
-    | 26 (* ^z *)           -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
-
-    | 65 (* up arrow *)     -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
-    | 66 (* down arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
-    | 67 (* right arrow *)  -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
-    | 68 (* left arrow *)   -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
-    | _ -> editor (* ignore for now *)
+    | Keys.Ctrl_c       -> { editor with running = false }
+    | Keys.Ctrl_d       -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
+    | Keys.Ctrl_u       -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
+    | Keys.Ctrl_z       -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
+    | Keys.ArrowUp      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
+    | Keys.ArrowDown    -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
+    | Keys.ArrowRight   -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
+    | Keys.ArrowLeft    -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
+    | Keys.Unknown      -> editor (* ignore for now *)
   ;;
 
   (* TODO: use keycode table to avoid introducing new line when hitting "return" *)
-  let make_user_input keycode editor =
-    let keychar = (keycode |> Char.chr |> Utils.string_of_char) in
-    let new_head = keychar ^ "(" ^ (string_of_int keycode) ^ ")" in
+  let make_user_input (key, keyrepr, keycode) editor =
+    let new_head = keyrepr ^ "(" ^ (string_of_int keycode) ^ ")" in
     let new_user_input = new_head ^ " " ^ editor.user_input in
       { editor with
         user_input = Utils.truncate editor.width new_user_input ;
@@ -637,7 +685,7 @@ module CiseauPrototype = struct
   let update_status editor = editor ;;
 
   let process_events editor =
-    let keycode = IO.next_char () in
+    let keycode = () |> IO.next_char |> Keys.code_to_key in
       editor |> process_key keycode
              |> make_user_input keycode
              |> update_status
