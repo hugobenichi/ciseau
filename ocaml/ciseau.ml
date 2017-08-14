@@ -82,6 +82,9 @@ end
 
 module Utils = struct
 
+  let inc x = x + 1 ;;
+  let dec x = x - 1 ;;
+
   type 'a either = Left of 'a | Right of exn ;;
 
   let try_to action =
@@ -131,6 +134,10 @@ module Keys = struct
     | ArrowDown
     | ArrowRight
     | ArrowLeft
+    | Lower_h
+    | Lower_j
+    | Lower_k
+    | Lower_l
   ;;
 
   let code_to_key_table = Array.make 256 (Unknown, "unkown", 0) ;;
@@ -142,24 +149,15 @@ module Keys = struct
   code_to_key_table.(66)  <- (ArrowDown,  "ArrowDown",    66) ;;
   code_to_key_table.(67)  <- (ArrowRight, "ArrowRight",   67) ;;
   code_to_key_table.(68)  <- (ArrowLeft,  "ArrowLeft",    68) ;;
+  code_to_key_table.(104) <- (Lower_h,    "h",            104) ;;
+  code_to_key_table.(106) <- (Lower_j,    "j",            106) ;;
+  code_to_key_table.(107) <- (Lower_k,    "k",            107) ;;
+  code_to_key_table.(108) <- (Lower_l,    "l",            108) ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
     | (Unknown, repr, _) -> (Unknown, repr, code)
     | found              -> found
-  ;;
-
-  (* really necessary ? *)
-  let key_to_code = function
-    | Unknown       -> 0
-    | Ctrl_c        -> 3
-    | Ctrl_d        -> 4
-    | Ctrl_u        -> 21
-    | Ctrl_z        -> 26
-    | ArrowUp       -> 65
-    | ArrowDown     -> 66
-    | ArrowRight    -> 67
-    | ArrowLeft     -> 68
   ;;
 
 end
@@ -313,8 +311,10 @@ module Term = struct
 
   open Vec2
 
-  let term_set_cursor {x ; y ; _ } term =
-    let cursor_ctrl_string = (ctrl_start ^ (string_of_int y) ^ ";" ^ (string_of_int x) ^ "H") in
+  let term_set_cursor {x ; y} term =
+    (* cursor positions are 1 based in the terminal referential *)
+    let (y_pos, x_pos) = (y |> inc |> string_of_int, x |> inc |> string_of_int) in
+    let cursor_ctrl_string = ctrl_start ^ y_pos ^ ";" ^ x_pos ^ "H" in
     term_append cursor_ctrl_string term
   ;;
 
@@ -340,7 +340,6 @@ module Term = struct
       want.c_opost   <- false ;
       want.c_echo    <- false ;
       want.c_icanon  <- false ;
-      (* for the time being, we let SIGINT kill the program *)
       want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
       want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
       want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
@@ -351,7 +350,7 @@ module Term = struct
       (* TODO: save cursor position *)
       print_string ctrl_switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
-      Utils.try_finally action (fun () ->
+      try_finally action (fun () ->
         tcsetattr stdin TCSAFLUSH initial ;
         print_string ctrl_switch_mainscreen
         (* TODO: restore cursor position *)
@@ -468,9 +467,6 @@ module Filebuffer = struct
       view_diff     = view_h - 1;
     } ;;
 
-  let inc x = x + 1 ;;
-  let dec x = x - 1 ;;
-
   let saturate_up length x = min (max (length - 1) 0) x ;;
 
   let adjust_view t =
@@ -492,9 +488,9 @@ module Filebuffer = struct
   ;;
 
   let move_cursor_left t  =
-    adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
+    adjust_view { t with cursor_x = t.cursor_x |> Utils.dec |> max 0 ; } ;;
   let move_cursor_right t =
-    adjust_view { t with cursor_x = t.cursor_x |> inc |> saturate_up (length t.buffer.(t.cursor_y)) ; } ;;
+    adjust_view { t with cursor_x = t.cursor_x |> Utils.inc |> saturate_up (length t.buffer.(t.cursor_y)) ; } ;;
 
   let move_n_up   n t = adjust_view { t with cursor_y = t.cursor_y |> fun x -> x - n |> max 0 ; } ;;
   let move_n_down n t = adjust_view { t with cursor_y = t.cursor_y |> (+) n |> saturate_up t.buflen ; } ;;
@@ -551,7 +547,7 @@ module CiseauPrototype = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;
-      view_offset     = Vec2.make (0, 2);
+      view_offset     = Vec2.make (0, 1);
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       status          = default_status ;
@@ -621,6 +617,10 @@ module CiseauPrototype = struct
     | Keys.ArrowDown    -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
     | Keys.ArrowRight   -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
     | Keys.ArrowLeft    -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
+    | Keys.Lower_k      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
+    | Keys.Lower_j      -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
+    | Keys.Lower_l      -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
+    | Keys.Lower_h      -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
     | Keys.Unknown      -> editor (* ignore for now *)
   ;;
 
