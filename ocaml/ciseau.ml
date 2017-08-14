@@ -1,5 +1,9 @@
 (* TODOs:
  *  - finish implementing terminal save and restore by restoring cursor position
+ *  - add character table
+ *  - add next/prev word and paragraph movement mapped to ^hjkl
+ *  - color up the cursor and active line
+ *  - start cleanup dead code
  *)
 
 
@@ -214,6 +218,8 @@ module Term = struct
   let ctrl_switch_offscreen = ctrl_start ^ "?47h" ;;
   let ctrl_switch_mainscreen = ctrl_start ^ "?47l" ;;
 
+  let ctrl_gohome = ctrl_start ^ "H" ;;
+
   let term_fg c = 30 + c ;;
   let term_bg c = 40 + c ;;
   let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
@@ -261,7 +267,7 @@ module Term = struct
   } ;;
 
   let term_clear term =
-    term |> term_reset |> term_append ctrl_cursor_show |> term_append ctrl_clear ;;
+    term |> term_reset |> term_append ctrl_cursor_hide |> term_append ctrl_gohome ;;
 
   open Vec2
 
@@ -554,10 +560,13 @@ module CiseauPrototype = struct
   let usage_screen_height editor = editor.height - 3 ;;
 
   (* TODO: this function should fill remaining vertical spaces with newlines *)
-  let rec print_file_buffer max_len lines term = match (max_len, lines) with
+  let rec print_file_buffer padder max_len lines term = match (max_len, lines) with
   | (0, _)      ->  Term.term_newline term
   | (_, [])     ->  Term.term_newline term
-  | (n, h :: t) ->  term |> Term.term_newline |> Term.term_append h |> print_file_buffer (n - 1) t
+  | (n, h :: t) ->  term |> Term.term_newline
+                         (* PERF: instead of string concat, make Term auto add the necessary number of spaces *)
+                         |> Term.term_append (padder h)
+                         |> print_file_buffer padder (n - 1) t
   ;;
 
   let pad_line editor = Utils.postpad editor.width ;;
@@ -582,18 +591,17 @@ module CiseauPrototype = struct
 
   (* TODO HUD show current mode and pending command *)
   let show_user_input editor term =
-    Term.term_append editor.user_input term ;;
+    Term.term_append (pad_line editor editor.user_input) term ;;
 
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
                                (* TODO: show line numbers *)
-                               |> print_file_buffer (usage_screen_height editor)
+                               |> print_file_buffer (pad_line editor) (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
                                |> show_status editor
                                |> Term.term_newline
                                |> show_user_input editor
-                               (* TODO: setting cursor position causes flickering *)
                                |> Term.term_set_cursor
                                     (editor.filebuffer |> Filebuffer.cursor_position_relative_to_view |> Vec2.add editor.view_offset)
                                |> Term.term_flush
