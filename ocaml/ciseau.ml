@@ -2,18 +2,12 @@
  *  - finish implementing terminal save and restore by restoring cursor position
  *  - add next/prev word and paragraph movement mapped to ^hjkl
  *  - color up the cursor and active line
- *  - start cleanup dead code
  *)
 
 
 (* remappings *)
 
 let length = String.length ;;
-let a_map = Array.map ;;
-let a_fold = Array.fold_left ;;
-let a_iter = Array.iter ;;
-
-let l_iter = List.iter ;;
 
 
 module IO = struct
@@ -82,7 +76,6 @@ module Vec2 = struct
   let make (x, y) = { x = x ; y = y } ;;
   let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
   let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
-
   let to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
 end
 
@@ -233,7 +226,6 @@ end
 (* main module for interacting with the terminal *)
 module Term = struct
 
-
   external get_terminal_size : unit -> (int * int) = "get_terminal_size" ;;
 
   open Utils
@@ -332,10 +324,9 @@ module Term = struct
     term |> term_append ctrl_cursor_show |> (fun bvec -> bvec.buffer) |> Bytevector.write Unix.stdout ;
     term ;;
 
-(* avoid warning #40 *)
-open Unix
 
   let do_with_raw_mode action =
+    let open Unix in
     (* because terminal_io is a record of mutable fields, do tcgetattr twice:
        once for restoring later, once for setting the terminal to raw mode *)
     let initial = tcgetattr stdin in
@@ -399,12 +390,12 @@ module ColorTable = struct
       print_newline ()
     in
     let maxlen = color_table
-                  |> a_map (fun (x, _, _) -> length x)
-                  |> a_fold max 0
+                  |> Array.map (fun (x, _, _) -> length x)
+                  |> Array.fold_left max 0
     in
-    let padded_color_table = a_map (fun (s, a, b) -> (Utils.postpad maxlen s, a, b)) color_table
+    let padded_color_table = Array.map (fun (s, a, b) -> (Utils.postpad maxlen s, a, b)) color_table
     in
-    a_iter print_one_color padded_color_table
+    Array.iter print_one_color padded_color_table
   ;;
 
   let print_256_color_table () =
@@ -443,46 +434,6 @@ module ColorTable = struct
     term_print_color24b (0, 204, 153) (242, 230, 255) " something in 24b colors " ;
     print_newline ()
   ;;
-
-end
-
-
-(* TODO: move to separate file *)
-module RawModeExperiment = struct
-
-  let rec loop () =
-    let code = IO.next_char () in
-    let c = Char.chr code in (
-    (* if Char.code c != 27 (* Escape *) *)
-    (* then ( *)
-      Term.print_char c ;
-      Term.print_string " " ;
-      Term.print_int (Char.code c) ;
-      Term.newline ()
-      ; loop ()
-    (* ) *)
-    ) ;;
-
-  let action () =
-    (* clear () ; *)
-    Term.print_string "hello raw terminal" ;
-    Term.newline () ;
-    (* not flushed here *)
-    loop ()
-  ;;
-
-  let main () =
-    Term.do_with_raw_mode action ;;
-
-end
-
-
-module Files = struct
-
-  let main () =
-    let lines = IO.slurp __FILE__ in
-    let println s = (print_string s ; print_newline () ) in
-    l_iter println lines ;;
 
 end
 
@@ -661,7 +612,6 @@ module CiseauPrototype = struct
   ;;
 
   let process_key (keycode, _, _) editor =
-    (* TODO use table to map keycodes to character enum table *)
     match keycode with
     | Keys.Ctrl_c       -> { editor with running = false }
     | Keys.Ctrl_d       -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
@@ -674,7 +624,6 @@ module CiseauPrototype = struct
     | Keys.Unknown      -> editor (* ignore for now *)
   ;;
 
-  (* TODO: use keycode table to avoid introducing new line when hitting "return" *)
   let make_user_input (key, keyrepr, keycode) editor =
     let new_head = keyrepr ^ "(" ^ (string_of_int keycode) ^ ")" in
     let new_user_input = new_head ^ " " ^ editor.user_input in
@@ -706,8 +655,4 @@ module CiseauPrototype = struct
 end
 
 let () =
-  (* ColorTable.main () ; *)
-  (* RawModeExperiment.main () *)
-  (* Files.main () *)
-  CiseauPrototype.main ()
-;;
+  CiseauPrototype.main () ;;
