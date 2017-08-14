@@ -219,17 +219,20 @@ module Term = struct
   let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
 
   let rec term_print_code_seq = function
-  | []      -> ()
-  | i :: [] -> (print_int i ; print_char 'm' )
-  | i :: t  -> (print_int i ; print_char ';' ; term_print_code_seq t)
+  | []      -> ""
+  | i :: [] -> (string_of_int i ^ "m" )
+  | i :: t  -> (string_of_int i ^ ";" ^ term_print_code_seq t)
   ;;
 
+  let term_make_string codes s =
+    ctrl_start ^ (term_print_code_seq codes) ^ s ^ ctrl_end ;;
+
   let term_print codes s =
-    print_string ctrl_start ;
-    term_print_code_seq codes ;
-    print_string s ;
-    print_string ctrl_end
+    print_string (term_make_string codes s) ;;
   ;;
+
+  let term_with_color fg bg s =
+    term_make_string [0 ; term_fg fg ; term_bg bg] s ;;
 
   let term_print_color fg bg s =
     term_print [0 ; term_fg fg ; term_bg bg] s ;;
@@ -496,6 +499,7 @@ module Filebuffer = struct
 
   let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
   let cursor_position_relative_to_view t = Vec2.make (t.cursor_x, t.cursor_y - t.view_start) ;;
+  let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   let apply_view_frustrum t =
     let rec loop i accum =
@@ -556,25 +560,39 @@ module CiseauPrototype = struct
   | (n, h :: t) ->  term |> Term.term_newline |> Term.term_append h |> print_file_buffer (n - 1) t
   ;;
 
+  let pad_line editor = Utils.postpad editor.width ;;
+
   let window_size editor =
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
 
+  (* TODO HUD other metadata: file dirty bit, other tabs *)
   let show_header editor term =
-    term |> Term.term_append editor.header
-         |> Term.term_append (" " ^ (editor.filebuffer |> Filebuffer.cursor_position |> Vec2.to_string))
+    let s = editor.header
+          ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
+          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor_position |> Vec2.to_string)
+    in let
+      prettified_s = s |> pad_line editor |> Term.term_with_color Term.black Term.yellow
+    in
+      Term.term_append prettified_s term
     ;;
 
-  (* TODO HUD use color for header bar and for status *)
-  (* TODO HUD Other header metadata: file length, file dirty bit *)
+  let show_status editor term =
+    let s = (editor.status ^ (window_size editor)) |> pad_line editor |> Term.term_with_color Term.black Term.white in
+    Term.term_append s term ;;
+
+  (* TODO HUD show current mode and pending command *)
+  let show_user_input editor term =
+    Term.term_append editor.user_input term ;;
+
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
+                               (* TODO: show line numbers *)
                                |> print_file_buffer (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
-                               |> Term.term_append (editor.status ^ (window_size editor))
+                               |> show_status editor
                                |> Term.term_newline
-                               |> Term.term_append editor.user_input
-                               (* TODO: there is a off by -1 error in the horizontal position of the cursor ??? *)
+                               |> show_user_input editor
                                (* TODO: setting cursor position causes flickering *)
                                |> Term.term_set_cursor
                                     (editor.filebuffer |> Filebuffer.cursor_position_relative_to_view |> Vec2.add editor.view_offset)
@@ -599,6 +617,7 @@ module CiseauPrototype = struct
     | _ -> editor (* ignore for now *)
   ;;
 
+  (* TODO: use keycode table to avoid introducing new line when hitting "return" *)
   let make_user_input keycode editor =
     let keychar = (keycode |> Char.chr |> Utils.string_of_char) in
     let new_head = keychar ^ "(" ^ (string_of_int keycode) ^ ")" in
