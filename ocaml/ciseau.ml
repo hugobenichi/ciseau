@@ -706,14 +706,18 @@ module CiseauPrototype = struct
     view_offset : Vec2.t ;
 
     header : string ;
-    status : string ;
     user_input : string ;
 
+    (* TODO: add every X a full stats collection for printing total footprint *)
+    (* TODO: keep a rolling buffer of alloc diff per frame and show quantiles *)
+    (* TODO: export stats to some log files for doing more offline statistics *)
     gc_stats : Gc.stat ;
     gc_stats_diff : float * float ;
-  } ;;
 
-  let default_status = "Ciseau editor v0  " ;;
+    timestamp           : float ;
+    last_input_duration : float ;
+    last_cycle_duration : float ;
+  } ;;
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
@@ -729,11 +733,28 @@ module CiseauPrototype = struct
       view_offset     = Vec2.make (0, 1);
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
-      status          = default_status ;
       user_input      = "" ;
 
       gc_stats = Gc.quick_stat () ;
       gc_stats_diff = (0., 0.) ;
+
+      timestamp           = Sys.time() ;
+      last_input_duration = 0. ;
+      last_cycle_duration = 0. ;
+    } ;;
+
+  let update_stats now input_duration editor =
+    let open Gc in
+    (* let _ = Bytes.make (1024 * 1024) '0' in (* DEBUG uncomment me to pressure the gc *) *)
+    let new_gc_stats = quick_stat () in
+    let minor_diff = new_gc_stats.minor_words -. editor.gc_stats.minor_words in
+    let major_diff = new_gc_stats.major_words -. editor.gc_stats.major_words in
+    { editor with
+      gc_stats            = new_gc_stats ;
+      gc_stats_diff       = (minor_diff, major_diff) ;
+      timestamp           = now ;
+      last_input_duration = input_duration ;
+      last_cycle_duration = now -. editor.timestamp ;
     } ;;
 
   let word_byte_size = float (Sys.word_size / 8)
@@ -755,6 +776,9 @@ module CiseauPrototype = struct
       (format_memory_counters editor.gc_stats_diff)
       editor.gc_stats.major_collections
       editor.gc_stats.minor_collections
+
+  let format_time_stats editor =
+    Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
 
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
@@ -786,7 +810,7 @@ module CiseauPrototype = struct
     ;;
 
   let show_status editor term =
-    let s = editor.status ^ (window_size editor) ^ (format_memory_stats editor)
+    let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
           |> pad_line editor
           |> Term.term_with_color Term.black Term.white in
     Term.term_append s term ;;
@@ -843,28 +867,18 @@ module CiseauPrototype = struct
         user_input = Utils.truncate editor.width new_user_input ;
       } ;;
 
-  let update_status editor = editor ;;
-
   let process_events editor =
+    let before = Sys.time () in
     let keycode = () |> IO.next_char |> Keys.code_to_key in
+    let after = Sys.time () in
       editor |> process_key keycode
              |> make_user_input keycode
-             |> update_status
+             |> update_stats (Sys.time ()) (after -. before)
     ;;
-
-  let get_stats editor =
-    let open Gc in
-    let new_stats = quick_stat () in
-    let minor_diff = new_stats.minor_words -. editor.gc_stats.minor_words in
-    let major_diff = new_stats.major_words -. editor.gc_stats.major_words in
-    { editor with
-      gc_stats = new_stats ;
-      gc_stats_diff = (minor_diff, major_diff) ;
-    } ;;
 
   let rec loop editor =
     if editor.running then
-      editor |> get_stats |> refresh_screen |> process_events |> loop
+      editor |> refresh_screen |> process_events |> loop
     ;;
 
   let run_loop editor () = loop editor ;;
