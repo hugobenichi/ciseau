@@ -1,6 +1,8 @@
 (* TODOs:
  *  - cleanup the move command and introduce command variant
  *  - implement redo command, and do n times
+ *  - properly append terminal buffer bitblit with end-of-line padding, and end-of-file padding
+ *      then fix recenter view to really adjust to middle when at end-of-file
  *  - add selection of current word (with highlight), go to next selection, search function
  *  - add next/prev number
  *  - color up the cursor and active line
@@ -75,6 +77,8 @@ module Vec2 = struct
     x : int ;
     y : int ;
   } ;;
+
+  let zero = { x = 0; y = 0 } ;;
 
   let make (x, y) = { x = x ; y = y } ;;
   let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
@@ -481,14 +485,14 @@ end
 module Filebuffer = struct
 
   open Utils
+  open Vec2
 
   type t = {
       (* TOOD: refactor this into slice *)
       buffer: string array ; (* the file data, line per line *)
       buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
 
-      cursor_y : int ;       (* index in the array *)
-      cursor_x : int ;       (* index in the string *)
+      cursor : Vec2.t ;      (* current position string array: y = index array (rows), x = string array (cols) *)
 
       view_start : int ;     (* index of first row in view *)
       view_diff  : int;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
@@ -499,27 +503,35 @@ module Filebuffer = struct
     let buffer = Array.of_list lines in {
       buffer        = buffer ;
       buflen        = Array.length buffer ;
-      cursor_y      = 0 ;
-      cursor_x      = 0 ;
+      cursor        = Vec2.zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
     } ;;
 
-  let current_line t = t.buffer.(t.cursor_y)
-  let current_char t = String.get (current_line t) t.cursor_x ;;
+  let is_current_char_valid t = t.cursor.x < (length t.buffer.(t.cursor.y)) ;;
+  let current_line t = t.buffer.(t.cursor.y)
+  let current_char t = String.get (current_line t) t.cursor.x ;;
 
   let saturate_up length x = min (max (length - 1) 0) x ;;
 
   let adjust_view t =
-    if t.cursor_y < t.view_start then
+    if t.cursor.y < t.view_start then
       { t with
-        view_start  = t.cursor_y ;
+        view_start  = t.cursor.y ;
       }
-    else if t.cursor_y > t.view_start + t.view_diff then
+    else if t.cursor.y > t.view_start + t.view_diff then
       { t with
-        view_start  = t.cursor_y - t.view_diff ;
+        view_start  = t.cursor.y - t.view_diff ;
       }
     else t
+
+  let adjust_cursor vec2 t = { t with cursor = vec2 } ;;
+
+  type command = Move of (t -> Vec2.t) ;;
+
+  let apply_move_command (Move fn) t =
+    t |> adjust_cursor (fn t) |> adjust_view ;;
+
 
   (* TODO: regroup movement commands into submodules and give them a proper enum name
    * to allow to put them in a table (for later configuration
@@ -529,27 +541,54 @@ module Filebuffer = struct
    *  Then if in momvement mode this can be used to update the editor and do a view adjustment
    *  Otherwise in selection mode, this can update the selection
    *  To do this I need to:
-   *      change the Filebuffer cursor_x, _y into a Vec2
+   *      (done) change the Filebuffer cursor_x, _y into a Vec2
+   *      (done) introduce a 'command' variant with a Move ctor
    *      regroup movement commands and make them follow the editor -> cursor
-   *      introduce a 'command' variant with a Move ctor
    *      name the commands into a table (can I use something like an anonymous record ?)
    *)
 
   let recenter_view t =
-    let new_start = t.cursor_y - t.view_diff / 2 in
+    let new_start = t.cursor.y - t.view_diff / 2 in
     let adjusted_bottom = max new_start 0 in
     let adjusted_top = (saturate_up t.buflen (adjusted_bottom + t.view_diff) - t.view_diff) in
     { t with view_start = adjusted_top }
   ;;
 
   (* move_* commands saturates at 0 and end of line *)
-  let move_cursor_left t  =
-    adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
-  let move_cursor_right t =
-    adjust_view { t with cursor_x = t.cursor_x |> inc |> saturate_up (length t.buffer.(t.cursor_y)) ; } ;;
+  let move_cursor_left t =
+    t |> adjust_cursor {
+      x = t.cursor.x |> dec |> max 0 ;
+      y = t.cursor.y ;
+    } |> adjust_view
+  ;;
 
-  let move_n_up   n t = adjust_view { t with cursor_y = t.cursor_y |> fun x -> x - n |> max 0 ; } ;;
-  let move_n_down n t = adjust_view { t with cursor_y = t.cursor_y |> (+) n |> saturate_up t.buflen ; } ;;
+  let move_cursor_left2 t =
+    t |> adjust_cursor {
+      x = t.cursor.x |> dec |> max 0 ;
+      y = t.cursor.y ;
+    } |> adjust_view
+  ;;
+
+  let move_cursor_right t =
+    t |> adjust_cursor {
+      x = t.cursor.x |> inc |> saturate_up (length t.buffer.(t.cursor.y)) ;
+      y = t.cursor.y ;
+    } |> adjust_view
+  ;;
+
+  let move_n_up n t =
+    t |> adjust_cursor {
+      x = t.cursor.x ;
+      y = t.cursor.y |> fun x -> x - n |> max 0 ;
+    } |> adjust_view
+  ;;
+
+  let move_n_down n t =
+    t |> adjust_cursor {
+      x = t.cursor.x ;
+      y = t.cursor.y |> (+) n |> saturate_up t.buflen ;
+    } |> adjust_view
+  ;;
 
   let move_cursor_up   = move_n_up 1 ;;
   let move_cursor_down = move_n_down 1 ;;
@@ -564,13 +603,11 @@ module Filebuffer = struct
       | _ when 0 = length t.buffer.(y)  -> first_non_empty (y + 1)
       | _                               -> y
     in
-    let (x', y') = if t.cursor_x + 1 < length (current_line t)
-                   then (t.cursor_x + 1, t.cursor_y)
-                   else (0, first_non_empty (t.cursor_y + 1)) (* skip empty lines *)
-    in adjust_view {
-      t with cursor_x = x' ;
-             cursor_y = y' ;
-    }
+    let cursor' =
+      if t.cursor.x + 1 < length (current_line t)
+      then { x = t.cursor.x + 1; y = t.cursor.y}
+      else { x = 0; y = first_non_empty (t.cursor.y + 1) } (* skip empty lines *)
+    in t |> adjust_cursor cursor' |> adjust_view
   ;;
 
   let cursor_prev_char t =
@@ -581,43 +618,48 @@ module Filebuffer = struct
       | _ when 0 = length t.buffer.(y)  -> last_non_empty (y - 1)
       | _                               -> y
     in
-    let (x', y') =
-      if t.cursor_x - 1 > 0
-      then (t.cursor_x - 1, t.cursor_y)
+    let cursor' =
+      if t.cursor.x - 1 > 0
+      then { x = t.cursor.x - 1 ; y = t.cursor.y }
       else
-        let y' = last_non_empty (t.cursor_y - 1) in
-        ((length t.buffer.(y')) - 1, y')
-    in adjust_view {
-      t with cursor_x = x' ;
-             cursor_y = y' ;
-    }
+        let y' = last_non_empty (t.cursor.y - 1) in
+        { x = (length t.buffer.(y')) - 1 ; y = y'}
+    in t |> adjust_cursor cursor' |> adjust_view
   ;;
 
   let cursor_next_line t =
-    adjust_view { t with cursor_y = (t.cursor_y + 1) mod t.buflen }
+    t |> adjust_cursor {
+      x = t.cursor.x ;
+      y = (t.cursor.y + 1) mod t.buflen ;
+    } |> adjust_view
   ;;
 
   let cursor_prev_line t =
-    let y' = if t.cursor_y - 1 >= 0 then t.cursor_y - 1 else t.buflen - 1 in
-    adjust_view { t with cursor_y = y' }
+    let y' = if t.cursor.y - 1 >= 0 then t.cursor.y - 1 else t.buflen - 1 in
+    t |> adjust_cursor {
+      x = t.cursor.x ;
+      y = y' ;
+    } |> adjust_view
   ;;
 
-  (* BUG if current cursor position points to nowhere *)
   let rec cursor_move_while u f t =
     if f t then t |> u |> cursor_move_while u f else t ;;
 
   let move_next_word t =
-    t |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
+    t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
+      |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum >> not)
   ;;
 
   let move_prev_word t =
-    t |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
+    t |> cursor_move_while cursor_prev_char (is_current_char_valid >> not)
+      |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
       |> cursor_move_while cursor_prev_char (current_char >> is_alphanum >> not)
       |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
       |> cursor_next_char
   ;;
 
+  (* BUG when wrapping over the end of a file, last paragraph and first paragraph are see as one paragraph only *)
   let move_next_paragraph t =
     t |> cursor_move_while cursor_next_line (current_line >> is_empty)
       |> cursor_move_while cursor_next_line (current_line >> is_empty >> not)
@@ -630,13 +672,13 @@ module Filebuffer = struct
       |> cursor_move_while cursor_prev_line (current_line >> is_empty)
   ;;
 
-  let move_line_start t = adjust_view { t with cursor_x = 0 } ;;
-  let move_line_end t   = adjust_view { t with cursor_x = max 0 ((length t.buffer.(t.cursor_y)) - 1) } ;;
-  let move_file_start t = adjust_view { t with cursor_y = 0 } ;;
-  let move_file_end t   = adjust_view { t with cursor_y = t.buflen - 1 } ;;
+  let move_line_start t = t |> adjust_cursor { x = 0 ; y = t.cursor.y } |> adjust_view ;;
+  let move_line_end t   = t |> adjust_cursor { x = max 0 ((length t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } |> adjust_view ;;
+  let move_file_start t = t |> adjust_cursor { x = t.cursor.x ; y = 0 } |> adjust_view ;;
+  let move_file_end t   = t |> adjust_cursor { x = t.cursor.x ; y = t.buflen - 1 } |> adjust_view ;;
 
-  let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
-  let cursor_position_relative_to_view t = Vec2.make (t.cursor_x, t.cursor_y - t.view_start) ;;
+  let cursor_position t = Vec2.make (t.cursor.x, t.cursor.y) ;;
+  let cursor_position_relative_to_view t = Vec2.make (t.cursor.x, t.cursor.y - t.view_start) ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   let apply_view_frustrum t =
