@@ -708,6 +708,9 @@ module CiseauPrototype = struct
     header : string ;
     status : string ;
     user_input : string ;
+
+    stats : float * float * float ;
+    stats_diff : float * float * float ;
   } ;;
 
   let default_status = "Ciseau editor v0  " ;;
@@ -728,7 +731,27 @@ module CiseauPrototype = struct
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       status          = default_status ;
       user_input      = "" ;
+
+      stats = Gc.counters () ;
+      stats_diff = (0., 0., 0.) ;
     } ;;
+
+  let word_byte_size = float (Sys.word_size / 8)
+
+  let format_memory_counter word_count = match word_count /. word_byte_size with
+    | x when x < 1024.          -> Printf.sprintf "%.2fB" x
+    | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
+    | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
+
+  let format_memory_counters (minor, promoted, major) =
+    Printf.sprintf "%s/%s" (format_memory_counter major)
+                           (* (format_memory_counter promoted) *)
+                           (format_memory_counter minor)
+
+  (* TODO: add number of gc collections *)
+  let format_memory_stats editor =
+    Printf.sprintf "  mem total = (%s)  mem delta = (%s)" (format_memory_counters editor.stats)
+                                                          (format_memory_counters editor.stats_diff)
 
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
@@ -760,7 +783,9 @@ module CiseauPrototype = struct
     ;;
 
   let show_status editor term =
-    let s = (editor.status ^ (window_size editor)) |> pad_line editor |> Term.term_with_color Term.black Term.white in
+    let s = editor.status ^ (window_size editor) ^ (format_memory_stats editor)
+          |> pad_line editor
+          |> Term.term_with_color Term.black Term.white in
     Term.term_append s term ;;
 
   (* TODO HUD show current mode and pending command *)
@@ -824,16 +849,28 @@ module CiseauPrototype = struct
              |> update_status
     ;;
 
+  let get_stats editor =
+    let new_stats = Gc.counters () in
+    let (x, y, z) = editor.stats in
+    let (x', y', z') = new_stats in
+    let new_diff = (x' -. x, y' -. y, z' -. z) in
+    { editor with
+      stats = new_stats ;
+      stats_diff = new_diff ;
+    } ;;
+
   let rec loop editor =
     if editor.running then
-      editor |> refresh_screen |> process_events |> loop
+      editor |> get_stats |> refresh_screen |> process_events |> loop
     ;;
 
   let run_loop editor () = loop editor ;;
 
   let main () =
-    (* Sys.argv.(1) *)
-    __FILE__ |> init |> run_loop |> Term.do_with_raw_mode
+    (if Array.length Sys.argv > 1 then Sys.argv.(1) else __FILE__)
+      |> init
+      |> run_loop
+      |> Term.do_with_raw_mode
   ;;
 
 end
