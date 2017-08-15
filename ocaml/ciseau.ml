@@ -1,5 +1,5 @@
 (* TODOs:
- *  - add beginning of line, end of line
+ *  - cleanup the move command and introduce command variant
  *  - implement redo command, and do n times
  *  - add selection of current word (with highlight), go to next selection, search function
  *  - add next/prev number
@@ -143,6 +143,10 @@ module Keys = struct
     | Ctrl_k
     | Ctrl_u
     | Ctrl_z
+    | Alt_h
+    | Alt_j
+    | Alt_k
+    | Alt_l
     | ArrowUp
     | ArrowDown
     | ArrowRight
@@ -166,12 +170,16 @@ module Keys = struct
   code_to_key_table.(66)  <- (ArrowDown,  "ArrowDown",    66) ;;
   code_to_key_table.(67)  <- (ArrowRight, "ArrowRight",   67) ;;
   code_to_key_table.(68)  <- (ArrowLeft,  "ArrowLeft",    68) ;;
+  code_to_key_table.(98)  <- (Lower_b,    "w",            98) ;;
   code_to_key_table.(104) <- (Lower_h,    "h",            104) ;;
   code_to_key_table.(106) <- (Lower_j,    "j",            106) ;;
   code_to_key_table.(107) <- (Lower_k,    "k",            107) ;;
   code_to_key_table.(108) <- (Lower_l,    "l",            108) ;;
   code_to_key_table.(119) <- (Lower_w,    "w",            119) ;;
-  code_to_key_table.(98)  <- (Lower_b,    "w",            98) ;;
+  code_to_key_table.(153) <- (Alt_h,      "Alt_h",        153) ;;
+  code_to_key_table.(134) <- (Alt_j,      "Alt_j",        134) ;;
+  code_to_key_table.(154) <- (Alt_k,      "Alt_k",        154) ;;
+  code_to_key_table.(172) <- (Alt_l,      "Alt_l",        172) ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
@@ -513,6 +521,20 @@ module Filebuffer = struct
       }
     else t
 
+  (* TODO: regroup movement commands into submodules and give them a proper enum name
+   * to allow to put them in a table (for later configuration
+   * This also allows to refactor adjust_view in one place
+   *
+   * Ideally, a movement command should be a function of type editor -> cursor
+   *  Then if in momvement mode this can be used to update the editor and do a view adjustment
+   *  Otherwise in selection mode, this can update the selection
+   *  To do this I need to:
+   *      change the Filebuffer cursor_x, _y into a Vec2
+   *      regroup movement commands and make them follow the editor -> cursor
+   *      introduce a 'command' variant with a Move ctor
+   *      name the commands into a table (can I use something like an anonymous record ?)
+   *)
+
   let recenter_view t =
     let new_start = t.cursor_y - t.view_diff / 2 in
     let adjusted_bottom = max new_start 0 in
@@ -607,6 +629,11 @@ module Filebuffer = struct
       |> cursor_move_while cursor_prev_line (current_line >> is_empty >> not)
       |> cursor_move_while cursor_prev_line (current_line >> is_empty)
   ;;
+
+  let move_line_start t = adjust_view { t with cursor_x = 0 } ;;
+  let move_line_end t   = adjust_view { t with cursor_x = max 0 ((length t.buffer.(t.cursor_y)) - 1) } ;;
+  let move_file_start t = adjust_view { t with cursor_y = 0 } ;;
+  let move_file_end t   = adjust_view { t with cursor_y = t.buflen - 1 } ;;
 
   let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
   let cursor_position_relative_to_view t = Vec2.make (t.cursor_x, t.cursor_y - t.view_start) ;;
@@ -722,6 +749,10 @@ module CiseauPrototype = struct
     | Keys.Ctrl_k       -> { editor with filebuffer = Filebuffer.move_prev_paragraph editor.filebuffer }
     | Keys.Ctrl_u       -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
     | Keys.Ctrl_z       -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
+    | Keys.Alt_k        -> { editor with filebuffer = Filebuffer.move_file_start    editor.filebuffer }
+    | Keys.Alt_j        -> { editor with filebuffer = Filebuffer.move_file_end      editor.filebuffer }
+    | Keys.Alt_l        -> { editor with filebuffer = Filebuffer.move_line_end      editor.filebuffer }
+    | Keys.Alt_h        -> { editor with filebuffer = Filebuffer.move_line_start    editor.filebuffer }
     | Keys.ArrowUp      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
     | Keys.ArrowDown    -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
     | Keys.ArrowRight   -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
