@@ -709,8 +709,8 @@ module CiseauPrototype = struct
     status : string ;
     user_input : string ;
 
-    stats : float * float * float ;
-    stats_diff : float * float * float ;
+    gc_stats : Gc.stat ;
+    gc_stats_diff : float * float ;
   } ;;
 
   let default_status = "Ciseau editor v0  " ;;
@@ -732,8 +732,8 @@ module CiseauPrototype = struct
       status          = default_status ;
       user_input      = "" ;
 
-      stats = Gc.counters () ;
-      stats_diff = (0., 0., 0.) ;
+      gc_stats = Gc.quick_stat () ;
+      gc_stats_diff = (0., 0.) ;
     } ;;
 
   let word_byte_size = float (Sys.word_size / 8)
@@ -743,15 +743,18 @@ module CiseauPrototype = struct
     | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
     | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
 
-  let format_memory_counters (minor, promoted, major) =
+  let format_memory_counters (minor, major) =
     Printf.sprintf "%s/%s" (format_memory_counter major)
-                           (* (format_memory_counter promoted) *)
                            (format_memory_counter minor)
 
   (* TODO: add number of gc collections *)
   let format_memory_stats editor =
-    Printf.sprintf "  mem total = (%s)  mem delta = (%s)" (format_memory_counters editor.stats)
-                                                          (format_memory_counters editor.stats_diff)
+    let open Gc in
+    Printf.sprintf "  mem total = (%s)  mem delta = (%s)  gc = (%d,%d)"
+      (format_memory_counters (editor.gc_stats.minor_words, editor.gc_stats.major_words))
+      (format_memory_counters editor.gc_stats_diff)
+      editor.gc_stats.major_collections
+      editor.gc_stats.minor_collections
 
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
@@ -850,13 +853,13 @@ module CiseauPrototype = struct
     ;;
 
   let get_stats editor =
-    let new_stats = Gc.counters () in
-    let (x, y, z) = editor.stats in
-    let (x', y', z') = new_stats in
-    let new_diff = (x' -. x, y' -. y, z' -. z) in
+    let open Gc in
+    let new_stats = quick_stat () in
+    let minor_diff = new_stats.minor_words -. editor.gc_stats.minor_words in
+    let major_diff = new_stats.major_words -. editor.gc_stats.major_words in
     { editor with
-      stats = new_stats ;
-      stats_diff = new_diff ;
+      gc_stats = new_stats ;
+      gc_stats_diff = (minor_diff, major_diff) ;
     } ;;
 
   let rec loop editor =
