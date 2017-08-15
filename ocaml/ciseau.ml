@@ -1,7 +1,11 @@
 (* TODOs:
- *  - finish implementing terminal save and restore by restoring cursor position
- *  - add next/prev word and paragraph movement mapped to ^hjkl
+ *  - add previous word and paragraph
+ *  - add beginning of line, end of line
+ *  - implement redo command, and do n times
+ *  - add selection of current word (with highlight), go to next selection, search function
+ *  - add next/prev number
  *  - color up the cursor and active line
+ *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
 
@@ -116,6 +120,14 @@ module Utils = struct
   let truncate l s =
     if String.length s > l then String.sub s 0 l else s ;;
 
+  let is_empty s = (length s = 0) ;;
+
+  let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n') ;;
+  let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z')) ;;
+  let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
+  let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
+  let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
+
 end
 
 
@@ -128,6 +140,7 @@ module Keys = struct
   type key = Unknown
     | Ctrl_c
     | Ctrl_d
+    | Ctrl_j
     | Ctrl_u
     | Ctrl_z
     | ArrowUp
@@ -138,11 +151,13 @@ module Keys = struct
     | Lower_j
     | Lower_k
     | Lower_l
+    | Lower_w
   ;;
 
   let code_to_key_table = Array.make 256 (Unknown, "unkown", 0) ;;
   code_to_key_table.(3)   <- (Ctrl_c,     "Ctrl_c",       3) ;;
   code_to_key_table.(4)   <- (Ctrl_d,     "Ctrl_d",       4) ;;
+  code_to_key_table.(10)  <- (Ctrl_j,     "Ctrl_j",       10) ;;
   code_to_key_table.(21)  <- (Ctrl_u,     "Ctrl_u",       21) ;;
   code_to_key_table.(26)  <- (Ctrl_z,     "Ctrl_z",       26) ;;
   code_to_key_table.(65)  <- (ArrowUp,    "ArrowUp",      65) ;;
@@ -153,6 +168,7 @@ module Keys = struct
   code_to_key_table.(106) <- (Lower_j,    "j",            106) ;;
   code_to_key_table.(107) <- (Lower_k,    "k",            107) ;;
   code_to_key_table.(108) <- (Lower_l,    "l",            108) ;;
+  code_to_key_table.(119) <- (Lower_w,    "w",            119) ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
@@ -442,7 +458,18 @@ end
  * TODO: to properly support multiple editing views into the same file, I need to split these into two
  * TODO: handle long lines: need to wrap line correctly, but need to detect in advance at creation and track correspondly *)
 (* TODO: add line number *)
+(* TODO: Some of the first cracks in this reprensentation are already showing up.
+         For instance, empty lines are empty strings, but in the file they take characters
+         this requires special handling in the editor, because we still need to restore these empty lines at save
+         and need to display them.
+         The naive version of move_next_word therefore fails on empty lines without special handling.
+         Similarly move_next_paragraph requires special cursor advance function, because it must not ignore
+         empty line, while move_next_word must absolutely do.
+         Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
+         representation. *)
 module Filebuffer = struct
+
+  open Utils
 
   type t = {
       (* TOOD: refactor this into slice *)
@@ -467,6 +494,9 @@ module Filebuffer = struct
       view_diff     = view_h - 1;
     } ;;
 
+  let current_line t = t.buffer.(t.cursor_y)
+  let current_char t = String.get (current_line t) t.cursor_x ;;
+
   let saturate_up length x = min (max (length - 1) 0) x ;;
 
   let adjust_view t =
@@ -487,10 +517,11 @@ module Filebuffer = struct
     { t with view_start = adjusted_top }
   ;;
 
+  (* move_* commands saturates at 0 and end of line *)
   let move_cursor_left t  =
-    adjust_view { t with cursor_x = t.cursor_x |> Utils.dec |> max 0 ; } ;;
+    adjust_view { t with cursor_x = t.cursor_x |> dec |> max 0 ; } ;;
   let move_cursor_right t =
-    adjust_view { t with cursor_x = t.cursor_x |> Utils.inc |> saturate_up (length t.buffer.(t.cursor_y)) ; } ;;
+    adjust_view { t with cursor_x = t.cursor_x |> inc |> saturate_up (length t.buffer.(t.cursor_y)) ; } ;;
 
   let move_n_up   n t = adjust_view { t with cursor_y = t.cursor_y |> fun x -> x - n |> max 0 ; } ;;
   let move_n_down n t = adjust_view { t with cursor_y = t.cursor_y |> (+) n |> saturate_up t.buflen ; } ;;
@@ -498,8 +529,42 @@ module Filebuffer = struct
   let move_cursor_up   = move_n_up 1 ;;
   let move_cursor_down = move_n_down 1 ;;
   let move_page_up   t = move_n_up (t.view_diff + 1) t ;;
-  (* BUG when doing page down one more time after having hit the bottom *)
   let move_page_down t = move_n_down (t.view_diff + 1) t ;;
+
+  let cursor_next_char t =
+    (* BUG: infinite loop on file where the matcher never return true *)
+    let rec first_non_empty y =
+      match y with
+      | _ when y = t.buflen             -> first_non_empty 0
+      | _ when 0 = length t.buffer.(y)  -> first_non_empty (y + 1)
+      | _                               -> y
+    in
+    let (x', y') = if t.cursor_x + 1 < length (current_line t)
+                   then (t.cursor_x + 1, t.cursor_y)
+                   else (0, first_non_empty (t.cursor_y + 1)) (* skip empty lines *)
+    in adjust_view {
+      t with cursor_x = x' ;
+             cursor_y = y' ;
+    }
+  ;;
+
+  let cursor_next_line t =
+    adjust_view { t with cursor_y = (t.cursor_y + 1) mod t.buflen }
+  ;;
+
+  let rec cursor_move_while u f t =
+    if f t then t |> u |> cursor_move_while u f else t ;;
+
+  let move_next_word t =
+    t |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
+      |> cursor_move_while cursor_next_char (current_char >> is_alphanum >> not)
+  ;;
+
+  let move_next_paragraph t =
+    t |> cursor_move_while cursor_next_line (current_line >> is_empty)
+      |> cursor_move_while cursor_next_line (current_line >> is_empty >> not)
+      |> cursor_move_while cursor_next_line (current_line >> is_empty)
+  ;;
 
   let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
   let cursor_position_relative_to_view t = Vec2.make (t.cursor_x, t.cursor_y - t.view_start) ;;
@@ -611,6 +676,7 @@ module CiseauPrototype = struct
     match keycode with
     | Keys.Ctrl_c       -> { editor with running = false }
     | Keys.Ctrl_d       -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
+    | Keys.Ctrl_j       -> { editor with filebuffer = Filebuffer.move_next_paragraph editor.filebuffer }
     | Keys.Ctrl_u       -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
     | Keys.Ctrl_z       -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
     | Keys.ArrowUp      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
@@ -621,6 +687,7 @@ module CiseauPrototype = struct
     | Keys.Lower_j      -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
     | Keys.Lower_l      -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
     | Keys.Lower_h      -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
+    | Keys.Lower_w      -> { editor with filebuffer = Filebuffer.move_next_word     editor.filebuffer }
     | Keys.Unknown      -> editor (* ignore for now *)
   ;;
 
