@@ -1,5 +1,4 @@
 (* TODOs:
- *  - add previous word and paragraph
  *  - add beginning of line, end of line
  *  - implement redo command, and do n times
  *  - add selection of current word (with highlight), go to next selection, search function
@@ -141,6 +140,7 @@ module Keys = struct
     | Ctrl_c
     | Ctrl_d
     | Ctrl_j
+    | Ctrl_k
     | Ctrl_u
     | Ctrl_z
     | ArrowUp
@@ -152,12 +152,14 @@ module Keys = struct
     | Lower_k
     | Lower_l
     | Lower_w
+    | Lower_b
   ;;
 
   let code_to_key_table = Array.make 256 (Unknown, "unkown", 0) ;;
   code_to_key_table.(3)   <- (Ctrl_c,     "Ctrl_c",       3) ;;
   code_to_key_table.(4)   <- (Ctrl_d,     "Ctrl_d",       4) ;;
   code_to_key_table.(10)  <- (Ctrl_j,     "Ctrl_j",       10) ;;
+  code_to_key_table.(11)  <- (Ctrl_k,     "Ctrl_k",       11) ;;
   code_to_key_table.(21)  <- (Ctrl_u,     "Ctrl_u",       21) ;;
   code_to_key_table.(26)  <- (Ctrl_z,     "Ctrl_z",       26) ;;
   code_to_key_table.(65)  <- (ArrowUp,    "ArrowUp",      65) ;;
@@ -169,6 +171,7 @@ module Keys = struct
   code_to_key_table.(107) <- (Lower_k,    "k",            107) ;;
   code_to_key_table.(108) <- (Lower_l,    "l",            108) ;;
   code_to_key_table.(119) <- (Lower_w,    "w",            119) ;;
+  code_to_key_table.(98)  <- (Lower_b,    "w",            98) ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
@@ -548,10 +551,36 @@ module Filebuffer = struct
     }
   ;;
 
+  let cursor_prev_char t =
+    (* BUG: infinite loop on file where the matcher never return true *)
+    let rec last_non_empty y =
+      match y with
+      | _ when y = -1                   -> last_non_empty (t.buflen - 1)
+      | _ when 0 = length t.buffer.(y)  -> last_non_empty (y - 1)
+      | _                               -> y
+    in
+    let (x', y') =
+      if t.cursor_x - 1 > 0
+      then (t.cursor_x - 1, t.cursor_y)
+      else
+        let y' = last_non_empty (t.cursor_y - 1) in
+        ((length t.buffer.(y')) - 1, y')
+    in adjust_view {
+      t with cursor_x = x' ;
+             cursor_y = y' ;
+    }
+  ;;
+
   let cursor_next_line t =
     adjust_view { t with cursor_y = (t.cursor_y + 1) mod t.buflen }
   ;;
 
+  let cursor_prev_line t =
+    let y' = if t.cursor_y - 1 >= 0 then t.cursor_y - 1 else t.buflen - 1 in
+    adjust_view { t with cursor_y = y' }
+  ;;
+
+  (* BUG if current cursor position points to nowhere *)
   let rec cursor_move_while u f t =
     if f t then t |> u |> cursor_move_while u f else t ;;
 
@@ -560,10 +589,23 @@ module Filebuffer = struct
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum >> not)
   ;;
 
+  let move_prev_word t =
+    t |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
+      |> cursor_move_while cursor_prev_char (current_char >> is_alphanum >> not)
+      |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
+      |> cursor_next_char
+  ;;
+
   let move_next_paragraph t =
     t |> cursor_move_while cursor_next_line (current_line >> is_empty)
       |> cursor_move_while cursor_next_line (current_line >> is_empty >> not)
       |> cursor_move_while cursor_next_line (current_line >> is_empty)
+  ;;
+
+  let move_prev_paragraph t =
+    t |> cursor_move_while cursor_prev_line (current_line >> is_empty)
+      |> cursor_move_while cursor_prev_line (current_line >> is_empty >> not)
+      |> cursor_move_while cursor_prev_line (current_line >> is_empty)
   ;;
 
   let cursor_position t = Vec2.make (t.cursor_x, t.cursor_y) ;;
@@ -677,6 +719,7 @@ module CiseauPrototype = struct
     | Keys.Ctrl_c       -> { editor with running = false }
     | Keys.Ctrl_d       -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
     | Keys.Ctrl_j       -> { editor with filebuffer = Filebuffer.move_next_paragraph editor.filebuffer }
+    | Keys.Ctrl_k       -> { editor with filebuffer = Filebuffer.move_prev_paragraph editor.filebuffer }
     | Keys.Ctrl_u       -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
     | Keys.Ctrl_z       -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
     | Keys.ArrowUp      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
@@ -688,6 +731,7 @@ module CiseauPrototype = struct
     | Keys.Lower_l      -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
     | Keys.Lower_h      -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
     | Keys.Lower_w      -> { editor with filebuffer = Filebuffer.move_next_word     editor.filebuffer }
+    | Keys.Lower_b      -> { editor with filebuffer = Filebuffer.move_prev_word     editor.filebuffer }
     | Keys.Unknown      -> editor (* ignore for now *)
   ;;
 
