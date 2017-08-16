@@ -12,7 +12,9 @@
 
 (* remappings *)
 
-let length = String.length ;;
+let alen = Array.length ;;
+let blen = Bytes.length ;;
+let slen = String.length ;;
 
 
 module Utils = struct
@@ -42,16 +44,16 @@ module Utils = struct
 
   (* string utils *)
 
-  let padding l s = (String.make (l - (length s)) ' ') ;;
+  let padding l s = (String.make (l - (slen s)) ' ') ;;
   let postpad l s = s ^ (padding l s) ;;
   let prepad l s = (padding l s) ^ s ;;
 
   let string_of_char c = String.make 1 c ;;
 
   let truncate l s =
-    if String.length s > l then String.sub s 0 l else s ;;
+    if slen s > l then String.sub s 0 l else s ;;
 
-  let is_empty s = (length s = 0) ;;
+  let is_empty s = (slen s = 0) ;;
 
   (* char utils *)
 
@@ -87,7 +89,7 @@ module Utils = struct
 
   let write_string fd s =
     let buffer = (Bytes.of_string s) in
-    write fd buffer (Bytes.length buffer)
+    write fd buffer (blen buffer)
   ;;
 
   let do_with_input_file chan fn =
@@ -218,19 +220,19 @@ module Bytevector = struct
   let rec next_size needed_size size =
     if needed_size <= size then size else next_size needed_size (scale size) ;;
 
-  let grow new_size bytes = Bytes.extend bytes 0 (new_size - (Bytes.length bytes)) ;;
+  let grow new_size bytes = Bytes.extend bytes 0 (new_size - (blen bytes)) ;;
 
   let ensure_size needed_size bytes =
-    let current_size = (Bytes.length bytes) in
+    let current_size = (blen bytes) in
     if (needed_size <= current_size)
       then bytes
       else grow (next_size needed_size current_size) bytes
   ;;
 
   let append s t =
-    let new_length = (String.length s) + t.len in
+    let new_length = (slen s) + t.len in
     let new_bytes = ensure_size new_length t.bytes in
-      Bytes.blit_string s 0 new_bytes t.len (String.length s) ;
+      Bytes.blit_string s 0 new_bytes t.len (slen s) ;
       {
         bytes = new_bytes ;
         len   = new_length ;
@@ -423,7 +425,7 @@ module ColorTable = struct
       print_newline ()
     in
     let maxlen = color_table
-                  |> Array.map (fun (x, _, _) -> length x)
+                  |> Array.map (fun (x, _, _) -> slen x)
                   |> Array.fold_left max 0
     in
     let padded_color_table = Array.map (fun (s, a, b) -> (Utils.postpad maxlen s, a, b)) color_table
@@ -505,13 +507,13 @@ module Filebuffer = struct
   let init lines view_h =
     let buffer = Array.of_list lines in {
       buffer        = buffer ;
-      buflen        = Array.length buffer ;
+      buflen        = alen buffer ;
       cursor        = Vec2.zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
     } ;;
 
-  let is_current_char_valid t = t.cursor.x < (length t.buffer.(t.cursor.y)) ;;
+  let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
   let current_line t = t.buffer.(t.cursor.y)
   let current_char t = String.get (current_line t) t.cursor.x ;;
 
@@ -574,7 +576,7 @@ module Filebuffer = struct
 
   let move_cursor_right t =
     t |> adjust_cursor {
-      x = t.cursor.x |> inc |> saturate_up (length t.buffer.(t.cursor.y)) ;
+      x = t.cursor.x |> inc |> saturate_up (slen t.buffer.(t.cursor.y)) ;
       y = t.cursor.y ;
     } |> adjust_view
   ;;
@@ -602,12 +604,12 @@ module Filebuffer = struct
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec first_non_empty y =
       match y with
-      | _ when y = t.buflen             -> first_non_empty 0
-      | _ when 0 = length t.buffer.(y)  -> first_non_empty (y + 1)
-      | _                               -> y
+      | _ when y = t.buflen           -> first_non_empty 0
+      | _ when 0 = slen t.buffer.(y)  -> first_non_empty (y + 1)
+      | _                             -> y
     in
     let cursor' =
-      if t.cursor.x + 1 < length (current_line t)
+      if t.cursor.x + 1 < slen (current_line t)
       then { x = t.cursor.x + 1; y = t.cursor.y}
       else { x = 0; y = first_non_empty (t.cursor.y + 1) } (* skip empty lines *)
     in t |> adjust_cursor cursor' |> adjust_view
@@ -617,16 +619,16 @@ module Filebuffer = struct
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec last_non_empty y =
       match y with
-      | _ when y = -1                   -> last_non_empty (t.buflen - 1)
-      | _ when 0 = length t.buffer.(y)  -> last_non_empty (y - 1)
-      | _                               -> y
+      | _ when y = -1                 -> last_non_empty (t.buflen - 1)
+      | _ when 0 = slen t.buffer.(y)  -> last_non_empty (y - 1)
+      | _                             -> y
     in
     let cursor' =
       if t.cursor.x - 1 > 0
       then { x = t.cursor.x - 1 ; y = t.cursor.y }
       else
         let y' = last_non_empty (t.cursor.y - 1) in
-        { x = (length t.buffer.(y')) - 1 ; y = y'}
+        { x = (slen t.buffer.(y')) - 1 ; y = y'}
     in t |> adjust_cursor cursor' |> adjust_view
   ;;
 
@@ -676,7 +678,7 @@ module Filebuffer = struct
   ;;
 
   let move_line_start t = t |> adjust_cursor { x = 0 ; y = t.cursor.y } |> adjust_view ;;
-  let move_line_end t   = t |> adjust_cursor { x = max 0 ((length t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } |> adjust_view ;;
+  let move_line_end t   = t |> adjust_cursor { x = max 0 ((slen t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } |> adjust_view ;;
   let move_file_start t = t |> adjust_cursor { x = t.cursor.x ; y = 0 } |> adjust_view ;;
   let move_file_end t   = t |> adjust_cursor { x = t.cursor.x ; y = t.buflen - 1 } |> adjust_view ;;
 
@@ -887,7 +889,7 @@ module Ciseau = struct
   let run_loop editor () = loop editor ;;
 
   let main () =
-    (if Array.length Sys.argv > 1 then Sys.argv.(1) else __FILE__)
+    (if alen Sys.argv > 1 then Sys.argv.(1) else __FILE__)
       |> init
       |> run_loop
       |> Term.do_with_raw_mode
