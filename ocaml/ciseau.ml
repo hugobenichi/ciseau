@@ -1,5 +1,4 @@
 (* TODOs:
- *  - cleanup the move command and introduce command variant
  *  - implement redo command, and do n times
  *  - properly append terminal buffer bitblit with end-of-line padding, and end-of-file padding
  *      then fix recenter view to really adjust to middle when at end-of-file
@@ -532,68 +531,41 @@ module Filebuffer = struct
 
   let adjust_cursor vec2 t = { t with cursor = vec2 } ;;
 
-  type command = Move of (t -> Vec2.t) ;;
-
-  let apply_move_command (Move fn) t =
+  let apply_movement fn t =
     t |> adjust_cursor (fn t) |> adjust_view ;;
-
-
-  (* TODO: regroup movement commands into submodules and give them a proper enum name
-   * to allow to put them in a table (for later configuration
-   * This also allows to refactor adjust_view in one place
-   *
-   * Ideally, a movement command should be a function of type editor -> cursor
-   *  Then if in momvement mode this can be used to update the editor and do a view adjustment
-   *  Otherwise in selection mode, this can update the selection
-   *  To do this I need to:
-   *      (done) change the Filebuffer cursor_x, _y into a Vec2
-   *      (done) introduce a 'command' variant with a Move ctor
-   *      regroup movement commands and make them follow the editor -> cursor
-   *      name the commands into a table (can I use something like an anonymous record ?)
-   *)
 
   let recenter_view t =
     let new_start = t.cursor.y - t.view_diff / 2 in
     let adjusted_bottom = max new_start 0 in
     let adjusted_top = (saturate_up t.buflen (adjusted_bottom + t.view_diff) - t.view_diff) in
     { t with view_start = adjusted_top }
-  ;;
 
+  (* TODO: regroup movement functions that fit the Ciseau.command type into a specific submodule. *)
   (* move_* commands saturates at 0 and end of line *)
-  let move_cursor_left t =
-    t |> adjust_cursor {
-      x = t.cursor.x |> dec |> max 0 ;
-      y = t.cursor.y ;
-    } |> adjust_view
-  ;;
+  let move_cursor_left t = {
+    x = t.cursor.x |> dec |> max 0 ;
+    y = t.cursor.y ;
+  }
 
-  let move_cursor_left2 t =
-    t |> adjust_cursor {
-      x = t.cursor.x |> dec |> max 0 ;
-      y = t.cursor.y ;
-    } |> adjust_view
-  ;;
+  let move_cursor_left2 t = {
+    x = t.cursor.x |> dec |> max 0 ;
+    y = t.cursor.y ;
+  }
 
-  let move_cursor_right t =
-    t |> adjust_cursor {
-      x = t.cursor.x |> inc |> saturate_up (slen t.buffer.(t.cursor.y)) ;
-      y = t.cursor.y ;
-    } |> adjust_view
-  ;;
+  let move_cursor_right t = {
+    x = t.cursor.x |> inc |> saturate_up (slen t.buffer.(t.cursor.y)) ;
+    y = t.cursor.y ;
+  }
 
-  let move_n_up n t =
-    t |> adjust_cursor {
-      x = t.cursor.x ;
-      y = t.cursor.y |> fun x -> x - n |> max 0 ;
-    } |> adjust_view
-  ;;
+  let move_n_up n t = {
+    x = t.cursor.x ;
+    y = t.cursor.y |> fun x -> x - n |> max 0 ;
+  }
 
-  let move_n_down n t =
-    t |> adjust_cursor {
-      x = t.cursor.x ;
-      y = t.cursor.y |> (+) n |> saturate_up t.buflen ;
-    } |> adjust_view
-  ;;
+  let move_n_down n t = {
+    x = t.cursor.x ;
+    y = t.cursor.y |> (+) n |> saturate_up t.buflen ;
+  }
 
   let move_cursor_up   = move_n_up 1 ;;
   let move_cursor_down = move_n_down 1 ;;
@@ -636,7 +608,7 @@ module Filebuffer = struct
     t |> adjust_cursor {
       x = t.cursor.x ;
       y = (t.cursor.y + 1) mod t.buflen ;
-    } |> adjust_view
+    }
   ;;
 
   let cursor_prev_line t =
@@ -644,7 +616,7 @@ module Filebuffer = struct
     t |> adjust_cursor {
       x = t.cursor.x ;
       y = y' ;
-    } |> adjust_view
+    }
   ;;
 
   let rec cursor_move_while u f t =
@@ -677,10 +649,10 @@ module Filebuffer = struct
       |> cursor_move_while cursor_prev_line (current_line >> is_empty)
   ;;
 
-  let move_line_start t = t |> adjust_cursor { x = 0 ; y = t.cursor.y } |> adjust_view ;;
-  let move_line_end t   = t |> adjust_cursor { x = max 0 ((slen t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } |> adjust_view ;;
-  let move_file_start t = t |> adjust_cursor { x = t.cursor.x ; y = 0 } |> adjust_view ;;
-  let move_file_end t   = t |> adjust_cursor { x = t.cursor.x ; y = t.buflen - 1 } |> adjust_view ;;
+  let move_line_start t = { x = 0 ; y = t.cursor.y } ;;
+  let move_line_end t   = { x = max 0 ((slen t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } ;;
+  let move_file_start t = { x = t.cursor.x ; y = 0 } ;;
+  let move_file_end t   = { x = t.cursor.x ; y = t.buflen - 1 } ;;
 
   let cursor_position t = Vec2.make (t.cursor.x, t.cursor.y) ;;
   let cursor_position_relative_to_view t = Vec2.make (t.cursor.x, t.cursor.y - t.view_start) ;;
@@ -699,6 +671,8 @@ end
 
 
 module Ciseau = struct
+
+  open Utils
 
   type editor = {
     term : Term.terminal ;
@@ -724,9 +698,10 @@ module Ciseau = struct
     last_cycle_duration : float ;
   } ;;
 
+
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let lines = Utils.slurp file in
+    let lines = slurp file in
     {
       term            = Term.term_init 0x1000 ;
       width           = term_cols ;
@@ -747,6 +722,22 @@ module Ciseau = struct
       last_input_duration = 0. ;
       last_cycle_duration = 0. ;
     } ;;
+
+
+  (* Represents an editor command *)
+  type command = Noop
+               | Stop
+               | Move of (Filebuffer.t -> Vec2.t)
+               | View of (Filebuffer.t -> Filebuffer.t)
+
+
+  let apply_command command editor =
+    match command with
+    | Noop    -> editor
+    | Stop    -> { editor with running = false }
+    | Move fn -> { editor with filebuffer = Filebuffer.apply_movement fn editor.filebuffer }
+    | View fn -> { editor with filebuffer = fn editor.filebuffer }
+
 
   let update_stats now input_duration editor =
     let open Gc in
@@ -798,7 +789,7 @@ module Ciseau = struct
                          |> print_file_buffer padder (n - 1) t
   ;;
 
-  let pad_line editor = Utils.postpad editor.width ;;
+  let pad_line editor = postpad editor.width ;;
 
   let window_size editor =
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
@@ -840,43 +831,44 @@ module Ciseau = struct
       { editor with term = new_term }
   ;;
 
-  let process_key key editor =
-    match key.Keys.symbol with
-    | Keys.Ctrl_c       -> { editor with running = false }
-    | Keys.Ctrl_d       -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
-    | Keys.Ctrl_j       -> { editor with filebuffer = Filebuffer.move_next_paragraph editor.filebuffer }
-    | Keys.Ctrl_k       -> { editor with filebuffer = Filebuffer.move_prev_paragraph editor.filebuffer }
-    | Keys.Ctrl_u       -> { editor with filebuffer = Filebuffer.move_page_up editor.filebuffer }
-    | Keys.Ctrl_z       -> { editor with filebuffer = Filebuffer.recenter_view editor.filebuffer }
-    | Keys.Alt_k        -> { editor with filebuffer = Filebuffer.move_file_start    editor.filebuffer }
-    | Keys.Alt_j        -> { editor with filebuffer = Filebuffer.move_file_end      editor.filebuffer }
-    | Keys.Alt_l        -> { editor with filebuffer = Filebuffer.move_line_end      editor.filebuffer }
-    | Keys.Alt_h        -> { editor with filebuffer = Filebuffer.move_line_start    editor.filebuffer }
-    | Keys.ArrowUp      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
-    | Keys.ArrowDown    -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
-    | Keys.ArrowRight   -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
-    | Keys.ArrowLeft    -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
-    | Keys.Lower_k      -> { editor with filebuffer = Filebuffer.move_cursor_up     editor.filebuffer }
-    | Keys.Lower_j      -> { editor with filebuffer = Filebuffer.move_cursor_down   editor.filebuffer }
-    | Keys.Lower_l      -> { editor with filebuffer = Filebuffer.move_cursor_right  editor.filebuffer }
-    | Keys.Lower_h      -> { editor with filebuffer = Filebuffer.move_cursor_left   editor.filebuffer }
-    | Keys.Lower_w      -> { editor with filebuffer = Filebuffer.move_next_word     editor.filebuffer }
-    | Keys.Lower_b      -> { editor with filebuffer = Filebuffer.move_prev_word     editor.filebuffer }
-    | Keys.Unknown      -> editor (* ignore for now *)
-  ;;
+  (* TODO: refactor move_{next,prev}_{word,paragraph} to fit a Move command instead *)
+  let key_to_command = function
+    | Keys.Ctrl_c       -> Stop
+    | Keys.Ctrl_d       -> Move Filebuffer.move_page_down
+    | Keys.Ctrl_j       -> View Filebuffer.move_next_paragraph
+    | Keys.Ctrl_k       -> View Filebuffer.move_prev_paragraph
+    | Keys.Ctrl_u       -> Move Filebuffer.move_page_up
+    | Keys.Ctrl_z       -> View Filebuffer.recenter_view
+    | Keys.Alt_k        -> Move Filebuffer.move_file_start
+    | Keys.Alt_j        -> Move Filebuffer.move_file_end
+    | Keys.Alt_l        -> Move Filebuffer.move_line_end
+    | Keys.Alt_h        -> Move Filebuffer.move_line_start
+    | Keys.ArrowUp      -> Move Filebuffer.move_cursor_up
+    | Keys.ArrowDown    -> Move Filebuffer.move_cursor_down
+    | Keys.ArrowRight   -> Move Filebuffer.move_cursor_right
+    | Keys.ArrowLeft    -> Move Filebuffer.move_cursor_left
+    | Keys.Lower_k      -> Move Filebuffer.move_cursor_up
+    | Keys.Lower_j      -> Move Filebuffer.move_cursor_down
+    | Keys.Lower_l      -> Move Filebuffer.move_cursor_right
+    | Keys.Lower_h      -> Move Filebuffer.move_cursor_left
+    | Keys.Lower_w      -> View Filebuffer.move_next_word
+    | Keys.Lower_b      -> View Filebuffer.move_prev_word
+    | Keys.Unknown      -> Noop (* ignore for now *)
+
+  let process_key = key_to_command >> apply_command
 
   let make_user_input key editor =
     let new_head = key.Keys.repr ^ "(" ^ (string_of_int key.Keys.code) ^ ")" in
     let new_user_input = new_head ^ " " ^ editor.user_input in
       { editor with
-        user_input = Utils.truncate editor.width new_user_input ;
+        user_input = truncate editor.width new_user_input ;
       } ;;
 
   let process_events editor =
     let before = Sys.time () in
-    let key = () |> Utils.next_char |> Keys.code_to_key in
+    let key = () |> next_char |> Keys.code_to_key in
     let after = Sys.time () in
-      editor |> process_key key
+      editor |> process_key key.Keys.symbol
              |> make_user_input key
              |> update_stats (Sys.time ()) (after -. before)
     ;;
