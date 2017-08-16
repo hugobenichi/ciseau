@@ -15,78 +15,6 @@
 let length = String.length ;;
 
 
-module IO = struct
-
-  exception Timeout ;;
-  exception IOError ;;
-  exception ReadTooMuch of int ;;
-  exception WroteNotEnough of int ;;
-
-  (* replacement for input_char which considers 0 as Enf_of_file *)
-  let next_char =
-    (* WARN not thread safe *)
-    let buffer = Bytes.make 1 'z' in
-    let rec one_byte_reader () =
-      match Unix.read Unix.stdin buffer 0 1 with
-      | 1   -> Bytes.get buffer 0 |> Char.code
-      | 0   -> one_byte_reader ()     (* timeout *)
-      | -1  -> raise IOError          (* TODO: errno *)
-      | n   -> raise (ReadTooMuch n)  (* cannot happen since we ask for 1 byte only *)
-    in one_byte_reader ;;
-
-  let write fd buffer len =
-    match Unix.write fd buffer 0 len with
-    | n when n = len  -> ()
-    | -1              -> raise IOError
-    | n               -> raise (WroteNotEnough n)
-  ;;
-
-  let write_string fd s =
-    let buffer = (Bytes.of_string s) in
-    write fd buffer (Bytes.length buffer)
-  ;;
-
-  (* TODO: exception handling *)
-  let do_with_input_file chan fn =
-    let r = fn chan in (
-      close_in chan ;
-      r
-    ) ;;
-
-  let do_with_output_file chan fn =
-    let r = fn chan in (
-      close_out chan ;
-      r
-    ) ;;
-
-  let slurp f =
-    let rec loop lines ch = match input_line ch with
-    | s -> loop (s :: lines) ch
-    | exception End_of_file -> List.rev lines
-    in
-    do_with_input_file (open_in f) (loop []) ;;
-
-  let save f lines = "todo"
-
-end
-
-
-module Vec2 = struct
-
-  type t = {
-    x : int ;
-    y : int ;
-  } ;;
-
-  let zero = { x = 0; y = 0 } ;;
-
-  let make (x, y) = { x = x ; y = y } ;;
-  let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
-  let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
-  let to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
-end
-
-
 module Utils = struct
 
   let inc x = x + 1 ;;
@@ -103,8 +31,8 @@ module Utils = struct
     let rez = try_to action in
     cleanup () ;
     match rez with
-    | Left success -> success
-    | Right error -> raise error
+    | Left success  -> success
+    | Right error   -> raise error
   ;;
 
   (* fp utils *)
@@ -125,12 +53,73 @@ module Utils = struct
 
   let is_empty s = (length s = 0) ;;
 
+  (* char utils *)
+
   let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n') ;;
   let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z')) ;;
   let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
   let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
   let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
 
+  (* IO utils *)
+
+  exception IOError ;;
+  exception IOUnexpectedByteNumber of int ;;
+
+  (* replacement for input_char which considers 0 as Enf_of_file *)
+  let next_char =
+    (* WARN not thread safe *)
+    let buffer = Bytes.make 1 'z' in
+    let rec one_byte_reader () =
+      match Unix.read Unix.stdin buffer 0 1 with
+      | 1   -> Bytes.get buffer 0 |> Char.code
+      | 0   -> one_byte_reader ()     (* timeout *)
+      | -1  -> raise IOError          (* TODO: errno *)
+      | n   -> raise (IOUnexpectedByteNumber n)  (* cannot happen since we ask for 1 byte only *)
+    in one_byte_reader ;;
+
+  let write fd buffer len =
+    match Unix.write fd buffer 0 len with
+    | n when n = len  -> ()
+    | -1              -> raise IOError
+    | n               -> raise (IOUnexpectedByteNumber n)
+  ;;
+
+  let write_string fd s =
+    let buffer = (Bytes.of_string s) in
+    write fd buffer (Bytes.length buffer)
+  ;;
+
+  let do_with_input_file chan fn =
+    let action () = fn chan in
+    let cleanup () = close_in chan in
+    try_finally action cleanup
+
+  let slurp f =
+    let rec loop lines ch = match input_line ch with
+    | s                     -> loop (s :: lines) ch
+    | exception End_of_file -> List.rev lines
+    in
+    do_with_input_file (open_in f) (loop []) ;;
+
+  let save f lines = "TODO"
+
+end
+
+
+module Vec2 = struct
+
+  type t = {
+    x : int ;
+    y : int ;
+  } ;;
+
+  let zero = { x = 0; y = 0 } ;;
+
+  let make (x, y) = { x = x ; y = y } ;;
+  let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
+  let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
+  let to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
 end
 
 
@@ -140,7 +129,7 @@ end
  *)
 module Keys = struct
 
-  type key = Unknown
+  type key_symbol = Unknown
     | Ctrl_c
     | Ctrl_d
     | Ctrl_j
@@ -163,32 +152,46 @@ module Keys = struct
     | Lower_b
   ;;
 
-  let code_to_key_table = Array.make 256 (Unknown, "unkown", 0) ;;
-  code_to_key_table.(3)   <- (Ctrl_c,     "Ctrl_c",       3) ;;
-  code_to_key_table.(4)   <- (Ctrl_d,     "Ctrl_d",       4) ;;
-  code_to_key_table.(10)  <- (Ctrl_j,     "Ctrl_j",       10) ;;
-  code_to_key_table.(11)  <- (Ctrl_k,     "Ctrl_k",       11) ;;
-  code_to_key_table.(21)  <- (Ctrl_u,     "Ctrl_u",       21) ;;
-  code_to_key_table.(26)  <- (Ctrl_z,     "Ctrl_z",       26) ;;
-  code_to_key_table.(65)  <- (ArrowUp,    "ArrowUp",      65) ;;
-  code_to_key_table.(66)  <- (ArrowDown,  "ArrowDown",    66) ;;
-  code_to_key_table.(67)  <- (ArrowRight, "ArrowRight",   67) ;;
-  code_to_key_table.(68)  <- (ArrowLeft,  "ArrowLeft",    68) ;;
-  code_to_key_table.(98)  <- (Lower_b,    "w",            98) ;;
-  code_to_key_table.(104) <- (Lower_h,    "h",            104) ;;
-  code_to_key_table.(106) <- (Lower_j,    "j",            106) ;;
-  code_to_key_table.(107) <- (Lower_k,    "k",            107) ;;
-  code_to_key_table.(108) <- (Lower_l,    "l",            108) ;;
-  code_to_key_table.(119) <- (Lower_w,    "w",            119) ;;
-  code_to_key_table.(153) <- (Alt_h,      "Alt_h",        153) ;;
-  code_to_key_table.(134) <- (Alt_j,      "Alt_j",        134) ;;
-  code_to_key_table.(154) <- (Alt_k,      "Alt_k",        154) ;;
-  code_to_key_table.(172) <- (Alt_l,      "Alt_l",        172) ;;
+  type key = {
+    symbol  : key_symbol ;
+    repr    : string ;
+    code    : int ;
+  }
+
+  let unknown_key = {
+    symbol  = Unknown ;
+    repr    = "unknown" ;
+    code    = 0 ;
+  }
+
+  let make_key s r c = { symbol = s; repr = r; code = c }
+
+  let code_to_key_table = Array.make 256 unknown_key ;;
+  code_to_key_table.(3)   <- make_key Ctrl_c      "Ctrl_c"        3 ;;
+  code_to_key_table.(4)   <- make_key Ctrl_d      "Ctrl_d"        4 ;;
+  code_to_key_table.(10)  <- make_key Ctrl_j      "Ctrl_j"        10 ;;
+  code_to_key_table.(11)  <- make_key Ctrl_k      "Ctrl_k"        11 ;;
+  code_to_key_table.(21)  <- make_key Ctrl_u      "Ctrl_u"        21 ;;
+  code_to_key_table.(26)  <- make_key Ctrl_z      "Ctrl_z"        26 ;;
+  code_to_key_table.(65)  <- make_key ArrowUp     "ArrowUp"       65 ;;
+  code_to_key_table.(66)  <- make_key ArrowDown   "ArrowDown"     66 ;;
+  code_to_key_table.(67)  <- make_key ArrowRight  "ArrowRight"    67 ;;
+  code_to_key_table.(68)  <- make_key ArrowLeft   "ArrowLeft"     68 ;;
+  code_to_key_table.(98)  <- make_key Lower_b     "w"             98 ;;
+  code_to_key_table.(104) <- make_key Lower_h     "h"             104 ;;
+  code_to_key_table.(106) <- make_key Lower_j     "j"             106 ;;
+  code_to_key_table.(107) <- make_key Lower_k     "k"             107 ;;
+  code_to_key_table.(108) <- make_key Lower_l     "l"             108 ;;
+  code_to_key_table.(119) <- make_key Lower_w     "w"             119 ;;
+  code_to_key_table.(153) <- make_key Alt_h       "Alt_h"         153 ;;
+  code_to_key_table.(134) <- make_key Alt_j       "Alt_j"         134 ;;
+  code_to_key_table.(154) <- make_key Alt_k       "Alt_k"         154 ;;
+  code_to_key_table.(172) <- make_key Alt_l       "Alt_l"         172 ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
-    | (Unknown, repr, _) -> (Unknown, repr, code)
-    | found              -> found
+    | unknown when unknown.symbol = Unknown -> { unknown with code = code }
+    | found                                 -> found
   ;;
 
 end
@@ -248,7 +251,7 @@ module Bytevector = struct
     Bytes.sub_string bvec.bytes 0 bvec.len ;;
 
   let write fd bytev =
-    IO.write fd bytev.bytes bytev.len ;;
+    Utils.write fd bytev.bytes bytev.len ;;
 
 end
 
@@ -260,7 +263,7 @@ module Term = struct
   open Utils
 
   (* bypass buffered output to the stdout *FILE, use direct write() instead *)
-  let print_string = IO.write_string Unix.stdout ;;
+  let print_string = write_string Unix.stdout ;;
   let print_int = string_of_int >> print_string ;;
   let print_char = string_of_char >> print_string ;;
 
@@ -693,7 +696,7 @@ module Filebuffer = struct
 end
 
 
-module CiseauPrototype = struct
+module Ciseau = struct
 
   type editor = {
     term : Term.terminal ;
@@ -721,7 +724,7 @@ module CiseauPrototype = struct
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let lines = IO.slurp file in
+    let lines = Utils.slurp file in
     {
       term            = Term.term_init 0x1000 ;
       width           = term_cols ;
@@ -835,8 +838,8 @@ module CiseauPrototype = struct
       { editor with term = new_term }
   ;;
 
-  let process_key (keycode, _, _) editor =
-    match keycode with
+  let process_key key editor =
+    match key.Keys.symbol with
     | Keys.Ctrl_c       -> { editor with running = false }
     | Keys.Ctrl_d       -> { editor with filebuffer = Filebuffer.move_page_down editor.filebuffer }
     | Keys.Ctrl_j       -> { editor with filebuffer = Filebuffer.move_next_paragraph editor.filebuffer }
@@ -860,8 +863,8 @@ module CiseauPrototype = struct
     | Keys.Unknown      -> editor (* ignore for now *)
   ;;
 
-  let make_user_input (key, keyrepr, keycode) editor =
-    let new_head = keyrepr ^ "(" ^ (string_of_int keycode) ^ ")" in
+  let make_user_input key editor =
+    let new_head = key.Keys.repr ^ "(" ^ (string_of_int key.Keys.code) ^ ")" in
     let new_user_input = new_head ^ " " ^ editor.user_input in
       { editor with
         user_input = Utils.truncate editor.width new_user_input ;
@@ -869,10 +872,10 @@ module CiseauPrototype = struct
 
   let process_events editor =
     let before = Sys.time () in
-    let keycode = () |> IO.next_char |> Keys.code_to_key in
+    let key = () |> Utils.next_char |> Keys.code_to_key in
     let after = Sys.time () in
-      editor |> process_key keycode
-             |> make_user_input keycode
+      editor |> process_key key
+             |> make_user_input key
              |> update_stats (Sys.time ()) (after -. before)
     ;;
 
@@ -893,4 +896,4 @@ module CiseauPrototype = struct
 end
 
 let () =
-  CiseauPrototype.main () ;;
+  Ciseau.main () ;;
