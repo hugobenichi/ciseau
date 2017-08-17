@@ -501,7 +501,7 @@ module Filebuffer = struct
       view_start : int ;     (* index of first row in view *)
       view_diff  : int;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                              (* index of last row in view is view_start + view_diff *)
-  } ;;
+  }
 
   let init lines view_h =
     let buffer = Array.of_list lines in {
@@ -510,13 +510,14 @@ module Filebuffer = struct
       cursor        = Vec2.zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
-    } ;;
+    }
 
   let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
   let current_line t = t.buffer.(t.cursor.y)
   let current_char t = String.get (current_line t) t.cursor.x ;;
+  let current_cursor t = t.cursor ;;
 
-  let saturate_up length x = min (max (length - 1) 0) x ;;
+  let saturate_up length x = min (max (length - 1) 0) x
 
   let adjust_view t =
     if t.cursor.y < t.view_start then
@@ -529,10 +530,10 @@ module Filebuffer = struct
       }
     else t
 
-  let adjust_cursor vec2 t = { t with cursor = vec2 } ;;
+  let adjust_cursor vec2 t = { t with cursor = vec2 }
 
   let apply_movement fn t =
-    t |> adjust_cursor (fn t) |> adjust_view ;;
+    t |> adjust_cursor (fn t) |> adjust_view
 
   let recenter_view t =
     let new_start = t.cursor.y - t.view_diff / 2 in
@@ -580,12 +581,9 @@ module Filebuffer = struct
       | _ when 0 = slen t.buffer.(y)  -> first_non_empty (y + 1)
       | _                             -> y
     in
-    let cursor' =
       if t.cursor.x + 1 < slen (current_line t)
       then { x = t.cursor.x + 1; y = t.cursor.y}
       else { x = 0; y = first_non_empty (t.cursor.y + 1) } (* skip empty lines *)
-    in t |> adjust_cursor cursor' |> adjust_view
-  ;;
 
   let cursor_prev_char t =
     (* BUG: infinite loop on file where the matcher never return true *)
@@ -595,59 +593,55 @@ module Filebuffer = struct
       | _ when 0 = slen t.buffer.(y)  -> last_non_empty (y - 1)
       | _                             -> y
     in
-    let cursor' =
       if t.cursor.x - 1 > 0
       then { x = t.cursor.x - 1 ; y = t.cursor.y }
       else
         let y' = last_non_empty (t.cursor.y - 1) in
         { x = (slen t.buffer.(y')) - 1 ; y = y'}
-    in t |> adjust_cursor cursor' |> adjust_view
-  ;;
 
-  let cursor_next_line t =
-    t |> adjust_cursor {
+  let cursor_next_line t = {
       x = t.cursor.x ;
       y = (t.cursor.y + 1) mod t.buflen ;
     }
-  ;;
 
   let cursor_prev_line t =
-    let y' = if t.cursor.y - 1 >= 0 then t.cursor.y - 1 else t.buflen - 1 in
-    t |> adjust_cursor {
+    let y' = if t.cursor.y - 1 >= 0 then t.cursor.y - 1 else t.buflen - 1 in {
       x = t.cursor.x ;
       y = y' ;
     }
-  ;;
 
+  (* TODO: refactor to remove the use of adjust cursor *)
   let rec cursor_move_while u f t =
-    if f t then t |> u |> cursor_move_while u f else t ;;
+    if f t
+    then t |> adjust_cursor (u t) |> cursor_move_while u f
+    else t
 
   let move_next_word t =
     t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum >> not)
-  ;;
+      |> current_cursor
 
+  (* BUG: when starting from an empty line, the first previous word is skipped and the cursor goes to the second previous word *)
   let move_prev_word t =
     t |> cursor_move_while cursor_prev_char (is_current_char_valid >> not)
       |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
       |> cursor_move_while cursor_prev_char (current_char >> is_alphanum >> not)
       |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
       |> cursor_next_char
-  ;;
 
   (* BUG when wrapping over the end of a file, last paragraph and first paragraph are see as one paragraph only *)
   let move_next_paragraph t =
     t |> cursor_move_while cursor_next_line (current_line >> is_empty)
       |> cursor_move_while cursor_next_line (current_line >> is_empty >> not)
       |> cursor_move_while cursor_next_line (current_line >> is_empty)
-  ;;
+      |> current_cursor
 
   let move_prev_paragraph t =
     t |> cursor_move_while cursor_prev_line (current_line >> is_empty)
       |> cursor_move_while cursor_prev_line (current_line >> is_empty >> not)
       |> cursor_move_while cursor_prev_line (current_line >> is_empty)
-  ;;
+      |> current_cursor
 
   let move_line_start t = { x = 0 ; y = t.cursor.y } ;;
   let move_line_end t   = { x = max 0 ((slen t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } ;;
@@ -665,7 +659,6 @@ module Filebuffer = struct
       else loop (i - 1) (t.buffer.(i) :: accum)
     in
       loop (t.view_start + t.view_diff) []
-    ;;
 
 end
 
@@ -831,12 +824,11 @@ module Ciseau = struct
       { editor with term = new_term }
   ;;
 
-  (* TODO: refactor move_{next,prev}_{word,paragraph} to fit a Move command instead *)
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
     | Keys.Ctrl_d       -> Move Filebuffer.move_page_down
-    | Keys.Ctrl_j       -> View Filebuffer.move_next_paragraph
-    | Keys.Ctrl_k       -> View Filebuffer.move_prev_paragraph
+    | Keys.Ctrl_j       -> Move Filebuffer.move_next_paragraph
+    | Keys.Ctrl_k       -> Move Filebuffer.move_prev_paragraph
     | Keys.Ctrl_u       -> Move Filebuffer.move_page_up
     | Keys.Ctrl_z       -> View Filebuffer.recenter_view
     | Keys.Alt_k        -> Move Filebuffer.move_file_start
@@ -851,8 +843,8 @@ module Ciseau = struct
     | Keys.Lower_j      -> Move Filebuffer.move_cursor_down
     | Keys.Lower_l      -> Move Filebuffer.move_cursor_right
     | Keys.Lower_h      -> Move Filebuffer.move_cursor_left
-    | Keys.Lower_w      -> View Filebuffer.move_next_word
-    | Keys.Lower_b      -> View Filebuffer.move_prev_word
+    | Keys.Lower_w      -> Move Filebuffer.move_next_word
+    | Keys.Lower_b      -> Move Filebuffer.move_prev_word
     | Keys.Unknown      -> Noop (* ignore for now *)
 
   let process_key = key_to_command >> apply_command
