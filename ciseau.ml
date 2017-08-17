@@ -704,7 +704,11 @@ module Ciseau = struct
     let rec loop acc = function
       | []      -> acc
       | d :: t  -> loop (acc * 10 + d) t
-    in loop 0 ds
+    in loop 0 (List.rev ds)
+
+  let pending_comand_to_string = function
+    | None      -> ""
+    | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
     term : Term.terminal ;
@@ -918,12 +922,16 @@ module Ciseau = struct
 
   let process_key editor = key_to_command >> (process_command editor)
 
+  (* TODO: replace by a proper history of previous inputs *)
   let make_user_input key editor =
     let new_head = key.Keys.repr ^ "(" ^ (string_of_int key.Keys.code) ^ ")" in
-    let new_user_input = new_head ^ " " ^ editor.user_input in
-      { editor with
-        user_input = truncate editor.width new_user_input ;
-      }
+    let new_user_input = (pending_comand_to_string editor.pending_input)
+                       ^  new_head
+                       ^ " " ^ editor.user_input
+    in {
+      editor with
+      user_input = truncate editor.width new_user_input ;
+    }
 
   let process_events editor =
     let before = Sys.time () in
