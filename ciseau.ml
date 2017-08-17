@@ -131,27 +131,36 @@ end
 module Keys = struct
 
   type key_symbol = Unknown
-    | Ctrl_c
-    | Ctrl_d
-    | Ctrl_j
-    | Ctrl_k
-    | Ctrl_u
-    | Ctrl_z
-    | Alt_h
-    | Alt_j
-    | Alt_k
-    | Alt_l
-    | ArrowUp
-    | ArrowDown
-    | ArrowRight
-    | ArrowLeft
-    | Lower_h
-    | Lower_j
-    | Lower_k
-    | Lower_l
-    | Lower_w
-    | Lower_b
-  ;;
+                  | Ctrl_c
+                  | Ctrl_d
+                  | Ctrl_j
+                  | Ctrl_k
+                  | Ctrl_u
+                  | Ctrl_z
+                  | Alt_h
+                  | Alt_j
+                  | Alt_k
+                  | Alt_l
+                  | ArrowUp
+                  | ArrowDown
+                  | ArrowRight
+                  | ArrowLeft
+                  | Lower_h
+                  | Lower_j
+                  | Lower_k
+                  | Lower_l
+                  | Lower_w
+                  | Lower_b
+                  | Digit_0
+                  | Digit_1
+                  | Digit_2
+                  | Digit_3
+                  | Digit_4
+                  | Digit_5
+                  | Digit_6
+                  | Digit_7
+                  | Digit_8
+                  | Digit_9
 
   type key = {
     symbol  : key_symbol ;
@@ -188,6 +197,16 @@ module Keys = struct
   code_to_key_table.(134) <- make_key Alt_j       "Alt_j"         134 ;;
   code_to_key_table.(154) <- make_key Alt_k       "Alt_k"         154 ;;
   code_to_key_table.(172) <- make_key Alt_l       "Alt_l"         172 ;;
+  code_to_key_table.(48)  <- make_key Digit_0     "0"             48 ;;
+  code_to_key_table.(49)  <- make_key Digit_1     "1"             49 ;;
+  code_to_key_table.(50)  <- make_key Digit_2     "2"             50 ;;
+  code_to_key_table.(51)  <- make_key Digit_3     "3"             51 ;;
+  code_to_key_table.(52)  <- make_key Digit_4     "4"             52 ;;
+  code_to_key_table.(53)  <- make_key Digit_5     "5"             53 ;;
+  code_to_key_table.(54)  <- make_key Digit_6     "6"             54 ;;
+  code_to_key_table.(55)  <- make_key Digit_7     "7"             55 ;;
+  code_to_key_table.(56)  <- make_key Digit_8     "8"             56 ;;
+  code_to_key_table.(57)  <- make_key Digit_9     "9"             57 ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
@@ -665,6 +684,28 @@ module Ciseau = struct
 
   open Utils
 
+  type pending_command_atom = Digit of int
+
+  type pending_command = None
+                       | Number of int list
+
+  (* Represents an editor command *)
+  type command = Noop
+               | Stop
+               | Move of (Filebuffer.t -> Vec2.t)
+               | View of (Filebuffer.t -> Filebuffer.t)
+               | Pending of pending_command_atom
+
+  let enqueue_digit d = function
+    | None      -> Number [d]
+    | Number ds -> Number (d :: ds)
+
+  let dequeue_digits ds =
+    let rec loop acc = function
+      | []      -> acc
+      | d :: t  -> loop (acc * 10 + d) t
+    in loop 0 ds
+
   type editor = {
     term : Term.terminal ;
     width : int;
@@ -678,6 +719,8 @@ module Ciseau = struct
     header : string ;
     user_input : string ;
 
+    pending_input : pending_command ;
+
     (* TODO: add every X a full stats collection for printing total footprint *)
     (* TODO: keep a rolling buffer of alloc diff per frame and show quantiles *)
     (* TODO: export stats to some log files for doing more offline statistics *)
@@ -687,7 +730,7 @@ module Ciseau = struct
     timestamp           : float ;
     last_input_duration : float ;
     last_cycle_duration : float ;
-  } ;;
+  }
 
 
   let init file : editor =
@@ -701,10 +744,12 @@ module Ciseau = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;
-      view_offset     = Vec2.make (0, 1);
+      view_offset     = Vec2.make (0, 1) ;
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
+
+      pending_input   = None;
 
       gc_stats = Gc.quick_stat () ;
       gc_stats_diff = (0., 0.) ;
@@ -712,15 +757,10 @@ module Ciseau = struct
       timestamp           = Sys.time() ;
       last_input_duration = 0. ;
       last_cycle_duration = 0. ;
-    } ;;
+    }
 
-
-  (* Represents an editor command *)
-  type command = Noop
-               | Stop
-               | Move of (Filebuffer.t -> Vec2.t)
-               | View of (Filebuffer.t -> Filebuffer.t)
-
+  let queue_pending_command editor = function
+    | Digit n -> { editor with pending_input = enqueue_digit n editor.pending_input }
 
   let apply_command command editor =
     match command with
@@ -728,7 +768,23 @@ module Ciseau = struct
     | Stop    -> { editor with running = false }
     | Move fn -> { editor with filebuffer = Filebuffer.apply_movement fn editor.filebuffer }
     | View fn -> { editor with filebuffer = fn editor.filebuffer }
+      (* cannot happen ?? *)
+    | Pending ((Digit n) as d)  -> queue_pending_command editor d
 
+  let apply_command_with_repetition n command editor =
+    match command with
+    | Noop    -> editor
+    | Stop    -> { editor with running = false }
+    | View fn -> { editor with filebuffer = fn editor.filebuffer }
+    | Move fn ->
+      let rec loop n fb =
+        if (n > 0) then loop (n - 1) (Filebuffer.apply_movement fn fb) else fb
+      in {
+        editor with
+        filebuffer    = loop n editor.filebuffer ;
+        pending_input = None ;
+      }
+    | Pending ((Digit n) as d)  -> queue_pending_command editor d
 
   let update_stats now input_duration editor =
     let open Gc in
@@ -844,40 +900,52 @@ module Ciseau = struct
     | Keys.Lower_w      -> Move Filebuffer.move_next_word
     | Keys.Lower_b      -> Move Filebuffer.move_prev_word
     | Keys.Unknown      -> Noop (* ignore for now *)
+    | Keys.Digit_0      -> Pending (Digit 0)
+    | Keys.Digit_1      -> Pending (Digit 1)
+    | Keys.Digit_2      -> Pending (Digit 2)
+    | Keys.Digit_3      -> Pending (Digit 3)
+    | Keys.Digit_4      -> Pending (Digit 4)
+    | Keys.Digit_5      -> Pending (Digit 5)
+    | Keys.Digit_6      -> Pending (Digit 6)
+    | Keys.Digit_7      -> Pending (Digit 7)
+    | Keys.Digit_8      -> Pending (Digit 8)
+    | Keys.Digit_9      -> Pending (Digit 9)
 
-  let process_key = key_to_command >> apply_command
+  let process_command editor =
+    match editor.pending_input with
+    | None          -> apply_command
+    | Number digits -> apply_command_with_repetition (max 1 (dequeue_digits digits))
+
+  let process_key editor = key_to_command >> (process_command editor)
 
   let make_user_input key editor =
     let new_head = key.Keys.repr ^ "(" ^ (string_of_int key.Keys.code) ^ ")" in
     let new_user_input = new_head ^ " " ^ editor.user_input in
       { editor with
         user_input = truncate editor.width new_user_input ;
-      } ;;
+      }
 
   let process_events editor =
     let before = Sys.time () in
     let key = () |> next_char |> Keys.code_to_key in
     let after = Sys.time () in
-      editor |> process_key key.Keys.symbol
+      editor |> process_key editor key.Keys.symbol
              |> make_user_input key
              |> update_stats (Sys.time ()) (after -. before)
-    ;;
 
   let rec loop editor =
     if editor.running then
       editor |> refresh_screen |> process_events |> loop
-    ;;
 
-  let run_loop editor () = loop editor ;;
+  let run_loop editor () = loop editor
 
   let main () =
     (if alen Sys.argv > 1 then Sys.argv.(1) else __FILE__)
       |> init
       |> run_loop
       |> Term.do_with_raw_mode
-  ;;
 
 end
 
 let () =
-  Ciseau.main () ;;
+  Ciseau.main ()
