@@ -1,3 +1,3 @@
 # ciseau
 
-An experiment making a text editor in clojure, to learn clojure.
+An experiment making a vim-like text editor.
