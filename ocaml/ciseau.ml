@@ -492,7 +492,6 @@ module Filebuffer = struct
   open Vec2
 
   type t = {
-      (* TOOD: refactor this into slice *)
       buffer: string array ; (* the file data, line per line *)
       buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
 
@@ -515,7 +514,7 @@ module Filebuffer = struct
   let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
   let current_line t = t.buffer.(t.cursor.y)
   let current_char t = String.get (current_line t) t.cursor.x ;;
-  let current_cursor t = t.cursor ;;
+  let cursor t = t.cursor ;;
 
   let saturate_up length x = min (max (length - 1) 0) x
 
@@ -620,7 +619,7 @@ module Filebuffer = struct
     t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum >> not)
-      |> current_cursor
+      |> cursor
 
   (* BUG: when starting from an empty line, the first previous word is skipped and the cursor goes to the second previous word *)
   let move_prev_word t =
@@ -635,21 +634,20 @@ module Filebuffer = struct
     t |> cursor_move_while cursor_next_line (current_line >> is_empty)
       |> cursor_move_while cursor_next_line (current_line >> is_empty >> not)
       |> cursor_move_while cursor_next_line (current_line >> is_empty)
-      |> current_cursor
+      |> cursor
 
   let move_prev_paragraph t =
     t |> cursor_move_while cursor_prev_line (current_line >> is_empty)
       |> cursor_move_while cursor_prev_line (current_line >> is_empty >> not)
       |> cursor_move_while cursor_prev_line (current_line >> is_empty)
-      |> current_cursor
+      |> cursor
 
   let move_line_start t = { x = 0 ; y = t.cursor.y } ;;
   let move_line_end t   = { x = max 0 ((slen t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } ;;
   let move_file_start t = { x = t.cursor.x ; y = 0 } ;;
   let move_file_end t   = { x = t.cursor.x ; y = t.buflen - 1 } ;;
 
-  let cursor_position t = Vec2.make (t.cursor.x, t.cursor.y) ;;
-  let cursor_position_relative_to_view t = Vec2.make (t.cursor.x, t.cursor.y - t.view_start) ;;
+  let cursor_relative_to_view t = Vec2.sub t.cursor { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   let apply_view_frustrum t =
@@ -791,7 +789,7 @@ module Ciseau = struct
   let show_header editor term =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
-          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor_position |> Vec2.to_string)
+          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in let
       prettified_s = s |> pad_line editor |> Term.term_with_color Term.black Term.yellow
     in
@@ -818,7 +816,7 @@ module Ciseau = struct
                                |> Term.term_newline
                                |> show_user_input editor
                                |> Term.term_set_cursor
-                                    (editor.filebuffer |> Filebuffer.cursor_position_relative_to_view |> Vec2.add editor.view_offset)
+                                    (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
                                |> Term.term_flush
     in
       { editor with term = new_term }
