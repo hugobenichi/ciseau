@@ -1,5 +1,5 @@
 (* TODOs:
- *  - implement redo command, and do n times
+ *  - implement redo command
  *  - properly append terminal buffer bitblit with end-of-line padding, and end-of-file padding
  *      then fix recenter view to really adjust to middle when at end-of-file
  *  - add selection of current word (with highlight), go to next selection, search function
@@ -696,6 +696,8 @@ module Ciseau = struct
                | View of (Filebuffer.t -> Filebuffer.t)
                | Pending of pending_command_atom
 
+  let max_repetition = 10000
+
   let enqueue_digit d = function
     | None      -> Number [d]
     | Number ds -> Number (d :: ds)
@@ -704,7 +706,7 @@ module Ciseau = struct
     let rec loop acc = function
       | []      -> acc
       | d :: t  -> loop (acc * 10 + d) t
-    in loop 0 (List.rev ds)
+    in min (loop 0 (List.rev ds)) max_repetition
 
   let pending_comand_to_string = function
     | None      -> ""
@@ -792,7 +794,7 @@ module Ciseau = struct
 
   let update_stats now input_duration editor =
     let open Gc in
-    (* let _ = Bytes.make (1024 * 1024) '0' in (* DEBUG uncomment me to pressure the gc *) *)
+    (* let _ = Bytes.make (1024 * 512) '0' in (* DEBUG uncomment me to pressure the gc *) *)
     let new_gc_stats = quick_stat () in
     let minor_diff = new_gc_stats.minor_words -. editor.gc_stats.minor_words in
     let major_diff = new_gc_stats.major_words -. editor.gc_stats.major_words in
@@ -806,7 +808,7 @@ module Ciseau = struct
 
   let word_byte_size = float (Sys.word_size / 8)
 
-  let format_memory_counter word_count = match word_count /. word_byte_size with
+  let format_memory_counter word_count = match word_count *. word_byte_size with
     | x when x < 1024.          -> Printf.sprintf "%.2fB" x
     | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
     | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
