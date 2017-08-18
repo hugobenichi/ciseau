@@ -161,6 +161,7 @@ module Keys = struct
                   | Digit_7
                   | Digit_8
                   | Digit_9
+                  | Backslash
 
   type key = {
     symbol  : key_symbol ;
@@ -207,6 +208,7 @@ module Keys = struct
   code_to_key_table.(55)  <- make_key Digit_7     "7"             55 ;;
   code_to_key_table.(56)  <- make_key Digit_8     "8"             56 ;;
   code_to_key_table.(57)  <- make_key Digit_9     "9"             57 ;;
+  code_to_key_table.(92)  <- make_key Backslash   "\\"            92 ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
@@ -510,6 +512,8 @@ module Filebuffer = struct
   open Utils
   open Vec2
 
+  type numbering_mode = Absolute | CursorRelative
+
   type t = {
       buffer: string array ; (* the file data, line per line *)
       buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
@@ -519,6 +523,8 @@ module Filebuffer = struct
       view_start : int ;     (* index of first row in view *)
       view_diff  : int;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                              (* index of last row in view is view_start + view_diff *)
+
+      line_number_m : numbering_mode ;
   }
 
   let init lines view_h =
@@ -528,6 +534,7 @@ module Filebuffer = struct
       cursor        = Vec2.zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
+      line_number_m = Absolute ;
     }
 
   let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
@@ -552,6 +559,12 @@ module Filebuffer = struct
 
   let apply_movement fn t =
     t |> adjust_cursor (fn t) |> adjust_view
+
+  let swap_line_number_mode t =
+    let new_mode = match t.line_number_m with
+    | Absolute        -> CursorRelative
+    | CursorRelative  -> Absolute
+    in { t with line_number_m = new_mode }
 
   let recenter_view t =
     let new_start = t.cursor.y - t.view_diff / 2 in
@@ -845,7 +858,7 @@ module Ciseau = struct
     Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " (abs line))
 
   (* TODO: this function should fill remaining vertical spaces with newlines *)
-  let print_file_buffer padder pv term =
+  let print_file_buffer padder filebuffer term =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
     let rec loop offset lines term =
       match lines with
@@ -853,7 +866,13 @@ module Ciseau = struct
       | h :: t  ->  term |> Term.term_newline
                          |> ((print_line_number offset) ^ h |> padder |> Term.term_append)
                          |> loop (offset + 1) t
-    in loop pv.Filebuffer.cursor_offset pv.Filebuffer.text term
+    in
+    let open Filebuffer in
+    let { text ; line_offset ; cursor_offset } = apply_view_frustrum filebuffer in
+    let offset = match filebuffer.line_number_m with
+      | Absolute        -> line_offset
+      | CursorRelative  -> cursor_offset
+    in loop offset text term
 
   let pad_line editor = postpad editor.width
 
@@ -885,8 +904,7 @@ module Ciseau = struct
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
                                (* TODO: show line numbers *)
-                               |> print_file_buffer (pad_line editor)
-                                                    (Filebuffer.apply_view_frustrum editor.filebuffer)
+                               |> print_file_buffer (pad_line editor) editor.filebuffer
                                |> show_status editor
                                |> Term.term_newline
                                |> show_user_input editor
@@ -899,11 +917,12 @@ module Ciseau = struct
 
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
+    | Keys.Backslash    -> View Filebuffer.swap_line_number_mode
+    | Keys.Ctrl_z       -> View Filebuffer.recenter_view
     | Keys.Ctrl_d       -> Move Filebuffer.move_page_down
     | Keys.Ctrl_j       -> Move Filebuffer.move_next_paragraph
     | Keys.Ctrl_k       -> Move Filebuffer.move_prev_paragraph
     | Keys.Ctrl_u       -> Move Filebuffer.move_page_up
-    | Keys.Ctrl_z       -> View Filebuffer.recenter_view
     | Keys.Alt_k        -> Move Filebuffer.move_file_start
     | Keys.Alt_j        -> Move Filebuffer.move_file_end
     | Keys.Alt_l        -> Move Filebuffer.move_line_end
@@ -918,7 +937,6 @@ module Ciseau = struct
     | Keys.Lower_h      -> Move Filebuffer.move_cursor_left
     | Keys.Lower_w      -> Move Filebuffer.move_next_word
     | Keys.Lower_b      -> Move Filebuffer.move_prev_word
-    | Keys.Unknown      -> Noop (* ignore for now *)
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
     | Keys.Digit_2      -> Pending (Digit 2)
@@ -929,6 +947,7 @@ module Ciseau = struct
     | Keys.Digit_7      -> Pending (Digit 7)
     | Keys.Digit_8      -> Pending (Digit 8)
     | Keys.Digit_9      -> Pending (Digit 9)
+    | Keys.Unknown      -> Noop (* ignore for now *)
 
   let process_command editor =
     match editor.pending_input with
