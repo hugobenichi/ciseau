@@ -669,14 +669,22 @@ module Filebuffer = struct
   let cursor_relative_to_view t = Vec2.sub t.cursor { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
+  type projected_view = {
+    text          : string list ;
+    line_offset   : int ;
+    cursor_offset : int ;
+  }
+
   let apply_view_frustrum t =
     let rec loop i accum =
       if i < t.view_start
       then accum
       else loop (i - 1) (t.buffer.(i) :: accum)
-    in
-      (* TODO: turn this into well typed record *)
-      (t.view_start + 1, loop (t.view_start + t.view_diff) [])
+    in {
+      text          = loop (t.view_start + t.view_diff) [] ;
+      line_offset   = t.view_start + 1 ;
+      cursor_offset = t.view_start - t.cursor.y;
+    }
 
 end
 
@@ -834,19 +842,20 @@ module Ciseau = struct
   let usage_screen_height editor = editor.height - 3 ;;
 
   let print_line_number line =
-    Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " line)
+    Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " (abs line))
 
   (* TODO: this function should fill remaining vertical spaces with newlines *)
-  let rec print_file_buffer padder max_len (offset, lines) term = match (max_len, lines) with
-  | (0, _)      ->  Term.term_newline term
-  | (_, [])     ->  Term.term_newline term
-  | (n, h :: t) ->  term |> Term.term_newline
-                         (* PERF: instead of string concat, make Term auto add the necessary number of spaces *)
+  let print_file_buffer padder pv term =
+    (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
+    let rec loop offset lines term =
+      match lines with
+      | []      ->  Term.term_newline term
+      | h :: t  ->  term |> Term.term_newline
                          |> ((print_line_number offset) ^ h |> padder |> Term.term_append)
-                         |> print_file_buffer padder (n - 1) (offset + 1, t)
-  ;;
+                         |> loop (offset + 1) t
+    in loop pv.Filebuffer.cursor_offset pv.Filebuffer.text term
 
-  let pad_line editor = postpad editor.width ;;
+  let pad_line editor = postpad editor.width
 
   let window_size editor =
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
@@ -877,7 +886,6 @@ module Ciseau = struct
                                |> show_header editor
                                (* TODO: show line numbers *)
                                |> print_file_buffer (pad_line editor)
-                                                    (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
                                |> show_status editor
                                |> Term.term_newline
