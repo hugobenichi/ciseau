@@ -675,7 +675,8 @@ module Filebuffer = struct
       then accum
       else loop (i - 1) (t.buffer.(i) :: accum)
     in
-      loop (t.view_start + t.view_diff) []
+      (* TODO: turn this into well typed record *)
+      (t.view_start + 1, loop (t.view_start + t.view_diff) [])
 
 end
 
@@ -832,14 +833,17 @@ module Ciseau = struct
   (* one line for header, one line for status, one line for user input *)
   let usage_screen_height editor = editor.height - 3 ;;
 
+  let print_line_number line =
+    Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " line)
+
   (* TODO: this function should fill remaining vertical spaces with newlines *)
-  let rec print_file_buffer padder max_len lines term = match (max_len, lines) with
+  let rec print_file_buffer padder max_len (offset, lines) term = match (max_len, lines) with
   | (0, _)      ->  Term.term_newline term
   | (_, [])     ->  Term.term_newline term
   | (n, h :: t) ->  term |> Term.term_newline
                          (* PERF: instead of string concat, make Term auto add the necessary number of spaces *)
-                         |> Term.term_append (padder h)
-                         |> print_file_buffer padder (n - 1) t
+                         |> ((print_line_number offset) ^ h |> padder |> Term.term_append)
+                         |> print_file_buffer padder (n - 1) (offset + 1, t)
   ;;
 
   let pad_line editor = postpad editor.width ;;
@@ -872,7 +876,8 @@ module Ciseau = struct
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
                                (* TODO: show line numbers *)
-                               |> print_file_buffer (pad_line editor) (usage_screen_height editor)
+                               |> print_file_buffer (pad_line editor)
+                                                    (usage_screen_height editor)
                                                     (Filebuffer.apply_view_frustrum editor.filebuffer)
                                |> show_status editor
                                |> Term.term_newline
