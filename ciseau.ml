@@ -3,8 +3,6 @@
  *  - properly append terminal buffer bitblit with end-of-line padding, and end-of-file padding
  *      then fix recenter view to really adjust to middle when at end-of-file
  *  - add selection of current word (with highlight), go to next selection, search function
- *  - add next/prev number
- *  - color up the cursor and active line
  *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
@@ -334,13 +332,16 @@ module Term = struct
   ;;
 
   let term_with_color fg bg s =
-    term_make_string [0 ; term_fg fg ; term_bg bg] s ;;
+    term_make_string [0 ; term_fg fg ; term_bg bg] s
 
   let term_print_color fg bg s =
-    term_print [0 ; term_fg fg ; term_bg bg] s ;;
+    term_print [0 ; term_fg fg ; term_bg bg] s
+
+  let term_with_color256 fg bg s =
+    term_make_string [38 ; 5 ; fg ; 48 ; 5 ; bg] s
 
   let term_print_color256 fg bg s =
-    term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s ;;
+    term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s
 
   (* TODO: support hex string like specifications like #ffee44 *)
   let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
@@ -521,7 +522,7 @@ module Filebuffer = struct
       cursor : Vec2.t ;      (* current position string array: y = index array (rows), x = string array (cols) *)
 
       view_start : int ;     (* index of first row in view *)
-      view_diff  : int;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
+      view_diff  : int ;     (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                              (* index of last row in view is view_start + view_diff *)
 
       line_number_m : numbering_mode ;
@@ -534,7 +535,7 @@ module Filebuffer = struct
       cursor        = Vec2.zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
-      line_number_m = Absolute ;
+      line_number_m = CursorRelative ;
     }
 
   let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
@@ -692,11 +693,14 @@ module Filebuffer = struct
     let rec loop i accum =
       if i < t.view_start
       then accum
-      else loop (i - 1) (t.buffer.(i) :: accum)
+      else
+        let bg = if (i = t.cursor.y) then 236 else Term.black in
+        let line = Term.term_with_color256 Term.white bg t.buffer.(i) in
+        loop (i - 1) (line :: accum)
     in {
       text          = loop (t.view_start + t.view_diff) [] ;
       line_offset   = t.view_start + 1 ;
-      cursor_offset = t.view_start - t.cursor.y;
+      cursor_offset = t.view_start - t.cursor.y ;
     }
 
 end
@@ -771,7 +775,7 @@ module Ciseau = struct
       running         = true ;
 
       file            = file ;
-      filebuffer      = Filebuffer.init lines (term_rows - 3) ;
+      filebuffer      = Filebuffer.init lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
       view_offset     = Vec2.make (5, 1) ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
@@ -851,9 +855,6 @@ module Ciseau = struct
   let format_time_stats editor =
     Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
 
-  (* one line for header, one line for status, one line for user input *)
-  let usage_screen_height editor = editor.height - 3 ;;
-
   let print_line_number line =
     Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " (abs line))
 
@@ -903,7 +904,6 @@ module Ciseau = struct
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
-                               (* TODO: show line numbers *)
                                |> print_file_buffer (pad_line editor) editor.filebuffer
                                |> show_status editor
                                |> Term.term_newline
