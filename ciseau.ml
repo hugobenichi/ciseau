@@ -759,7 +759,7 @@ module Ciseau = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;
-      view_offset     = Vec2.make (0, 1) ;
+      view_offset     = Vec2.make (5, 1) ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
