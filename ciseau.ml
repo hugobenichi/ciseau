@@ -1,12 +1,11 @@
 (* TODOs:
  *  - implement redo command
- *  - properly append terminal buffer bitblit with end-of-line padding, and end-of-file padding
- *      then fix recenter view to really adjust to middle when at end-of-file
  *  - add selection of current word (with highlight), go to next selection, search function
  *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
 (* BUGS: - on files smaller than one page, header is not showing and cursor position is incorrect
+ *       - cursor adjustment on the bottom is one line down too much
  *)
 
 (* remappings *)
@@ -571,9 +570,7 @@ module Filebuffer = struct
 
   let recenter_view t =
     let new_start = t.cursor.y - t.view_diff / 2 in
-    let adjusted_bottom = max new_start 0 in
-    let adjusted_top = (saturate_up t.buflen (adjusted_bottom + t.view_diff) - t.view_diff) in
-    { t with view_start = adjusted_top }
+    { t with view_start = max new_start 0 }
 
   (* TODO: regroup movement functions that fit the Ciseau.command type into a specific submodule. *)
   (* move_* commands saturates at 0 and end of line *)
@@ -712,6 +709,7 @@ module Filebuffer = struct
           bg_color    = bg ;
         }
       else
+        (* TODO: properly signal to print_file_buffer the end of the file to avoid line numbering *)
         {
           text        = "" ;
           number      = 666 ;
@@ -877,7 +875,6 @@ module Ciseau = struct
   let print_line_number line =
     Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " (abs line))
 
-  (* TODO: this function should fill remaining vertical spaces with newlines *)
   let print_file_buffer width filebuffer term =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
     let open Filebuffer in
