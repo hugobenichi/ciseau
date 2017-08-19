@@ -693,27 +693,26 @@ module Filebuffer = struct
 
   type projected_view = {
     lines         : line_info list ;
-    line_offset   : int ;
-    cursor_offset : int ;
   }
 
   let apply_view_frustrum t =
-    let rec loop i accum =
+    let offset = match t.line_number_m with
+    | Absolute        -> 1 ;
+    | CursorRelative  -> -t.cursor.y
+    in let rec loop i accum =
       if i < t.view_start
       then accum
       else
         let bg = if (i = t.cursor.y) then 236 else Term.black in
         let line = {
           text        = t.buffer.(i) ;
-          number      = i ; (* FIXME *)
+          number      = i + offset ;
           fg_color    = Term.white ;
           bg_color    = bg ;
         } in
         loop (i - 1) (line :: accum)
     in {
-      lines         = loop (t.view_start + t.view_diff) [] ;
-      line_offset   = t.view_start + 1 ;
-      cursor_offset = t.view_start - t.cursor.y ;
+      lines = loop (t.view_start + t.view_diff) [] ;
     }
 
 end
@@ -875,19 +874,15 @@ module Ciseau = struct
   let print_file_buffer width filebuffer term =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
     let open Filebuffer in
-    let rec loop offset lines term =
+    let rec loop lines term =
       match lines with
       | []      ->  Term.term_newline term
       | h :: t  ->  let line = Term.term_with_color256 h.fg_color h.bg_color (postpad width h.text) in
                     term |> Term.term_newline
-                         |> Term.term_append ((print_line_number offset) ^ line)
-                         |> loop (offset + 1) t
+                         |> Term.term_append ((print_line_number h.number) ^ line)
+                         |> loop t
     in
-    let { lines ; line_offset ; cursor_offset } = apply_view_frustrum filebuffer in
-    let offset = match filebuffer.line_number_m with
-      | Absolute        -> line_offset
-      | CursorRelative  -> cursor_offset
-    in loop offset lines term
+    loop (apply_view_frustrum filebuffer).lines term
 
   let pad_line editor = postpad editor.width
 
