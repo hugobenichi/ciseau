@@ -683,7 +683,7 @@ module Filebuffer = struct
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
-  type line_info = {
+  type line_info = End | Line of {
     text        : string ;
     number      : int ;
     fg_color    : int ;
@@ -700,22 +700,15 @@ module Filebuffer = struct
     | CursorRelative  -> -t.cursor.y
     in let get_line idx =
       let i = idx + t.view_start in
-      let bg = if (i = t.cursor.y) then 236 else Term.black
-      in if i < t.buflen then
-        {
-          text        = t.buffer.(i) ;
-          number      = i + offset ;
-          fg_color    = Term.white ;
-          bg_color    = bg ;
-        }
-      else
-        (* TODO: properly signal to print_file_buffer the end of the file to avoid line numbering *)
-        {
-          text        = "" ;
-          number      = 666 ;
-          fg_color    = Term.white ;
-          bg_color    = Term.black ;
-        }
+      let bg = if (i = t.cursor.y) then 236 else Term.black in
+      if i < t.buflen
+      then Line {
+        text        = t.buffer.(i) ;
+        number      = i + offset ;
+        fg_color    = Term.white ;
+        bg_color    = bg ;
+      }
+      else End
     in {
       lines = Array.init t.view_diff get_line ;
     }
@@ -860,7 +853,6 @@ module Ciseau = struct
     Printf.sprintf "%s/%s" (format_memory_counter major)
                            (format_memory_counter minor)
 
-  (* TODO: add number of gc collections *)
   let format_memory_stats editor =
     let open Gc in
     Printf.sprintf "  mem total = (%s)  mem delta = (%s)  gc = (%d,%d)"
@@ -878,10 +870,11 @@ module Ciseau = struct
   let print_file_buffer width filebuffer term =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
     let open Filebuffer in
-    let print_line term info =
-      let line = Term.term_with_color256 info.fg_color info.bg_color (postpad width info.text)
-      in term |> Term.term_newline
-              |> Term.term_append ((print_line_number info.number) ^ line)
+    let print_line term = function
+      | Line info -> let line = Term.term_with_color256 info.fg_color info.bg_color (postpad width info.text)
+                     in term |> Term.term_newline
+                             |> Term.term_append ((print_line_number info.number) ^ line)
+      | End       -> Term.term_append (postpad (width + 5) "~") term
     in
     (apply_view_frustrum filebuffer).lines |> Array.fold_left print_line term |> Term.term_newline
 
@@ -907,7 +900,6 @@ module Ciseau = struct
           |> Term.term_with_color Term.black Term.white in
     Term.term_append s term ;;
 
-  (* TODO HUD show current mode and pending command *)
   let show_user_input editor term =
     Term.term_append (pad_line editor editor.user_input) term ;;
 
