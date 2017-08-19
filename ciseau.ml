@@ -6,6 +6,8 @@
  *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
+(* BUGS: - on files smaller than one page, header is not showing and cursor position is incorrect
+ *)
 
 (* remappings *)
 
@@ -702,12 +704,20 @@ module Filebuffer = struct
     in let get_line idx =
       let i = idx + t.view_start in
       let bg = if (i = t.cursor.y) then 236 else Term.black
-      in {
-        text        = t.buffer.(i) ;
-        number      = i + offset ;
-        fg_color    = Term.white ;
-        bg_color    = bg ;
-      }
+      in if i < t.buflen then
+        {
+          text        = t.buffer.(i) ;
+          number      = i + offset ;
+          fg_color    = Term.white ;
+          bg_color    = bg ;
+        }
+      else
+        {
+          text        = "" ;
+          number      = 666 ;
+          fg_color    = Term.white ;
+          bg_color    = Term.black ;
+        }
     in {
       lines = Array.init t.view_diff get_line ;
     }
