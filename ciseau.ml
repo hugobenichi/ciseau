@@ -873,7 +873,8 @@ module Ciseau = struct
     let print_line term = function
       | Line info -> let line = Term.term_with_color256 info.fg_color info.bg_color (postpad width info.text)
                      in term |> Term.term_newline
-                             |> Term.term_append ((print_line_number info.number) ^ line)
+                             |> Term.term_append (print_line_number info.number)
+                             |> Term.term_append line
       | End       -> Term.term_append (postpad (width + 5) "~") term
     in
     (apply_view_frustrum filebuffer).lines |> Array.fold_left print_line term |> Term.term_newline
