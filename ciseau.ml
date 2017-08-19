@@ -683,8 +683,16 @@ module Filebuffer = struct
   let cursor_relative_to_view t = Vec2.sub t.cursor { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
+  (* Represents the result of projecting a line of text inside a drawing view rectangle *)
+  type line_info = {
+    text        : string ;
+    number      : int ;
+    fg_color    : int ;
+    bg_color    : int ;
+  }
+
   type projected_view = {
-    text          : string list ;
+    lines         : line_info list ;
     line_offset   : int ;
     cursor_offset : int ;
   }
@@ -695,10 +703,15 @@ module Filebuffer = struct
       then accum
       else
         let bg = if (i = t.cursor.y) then 236 else Term.black in
-        let line = Term.term_with_color256 Term.white bg t.buffer.(i) in
+        let line = {
+          text        = t.buffer.(i) ;
+          number      = i ; (* FIXME *)
+          fg_color    = Term.white ;
+          bg_color    = bg ;
+        } in
         loop (i - 1) (line :: accum)
     in {
-      text          = loop (t.view_start + t.view_diff) [] ;
+      lines         = loop (t.view_start + t.view_diff) [] ;
       line_offset   = t.view_start + 1 ;
       cursor_offset = t.view_start - t.cursor.y ;
     }
@@ -859,21 +872,22 @@ module Ciseau = struct
     Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " (abs line))
 
   (* TODO: this function should fill remaining vertical spaces with newlines *)
-  let print_file_buffer padder filebuffer term =
+  let print_file_buffer width filebuffer term =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
+    let open Filebuffer in
     let rec loop offset lines term =
       match lines with
       | []      ->  Term.term_newline term
-      | h :: t  ->  term |> Term.term_newline
-                         |> ((print_line_number offset) ^ h |> padder |> Term.term_append)
+      | h :: t  ->  let line = Term.term_with_color256 h.fg_color h.bg_color (postpad width h.text) in
+                    term |> Term.term_newline
+                         |> Term.term_append ((print_line_number offset) ^ line)
                          |> loop (offset + 1) t
     in
-    let open Filebuffer in
-    let { text ; line_offset ; cursor_offset } = apply_view_frustrum filebuffer in
+    let { lines ; line_offset ; cursor_offset } = apply_view_frustrum filebuffer in
     let offset = match filebuffer.line_number_m with
       | Absolute        -> line_offset
       | CursorRelative  -> cursor_offset
-    in loop offset text term
+    in loop offset lines term
 
   let pad_line editor = postpad editor.width
 
@@ -904,7 +918,7 @@ module Ciseau = struct
   let refresh_screen editor =
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
-                               |> print_file_buffer (pad_line editor) editor.filebuffer
+                               |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer
                                |> show_status editor
                                |> Term.term_newline
                                |> show_user_input editor
