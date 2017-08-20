@@ -5,7 +5,6 @@
  *)
 
 (* BUGS: - on files smaller than one page, header is not showing and cursor position is incorrect
- *       - cursor adjustment on the bottom is one line down too much
  *)
 
 (* remappings *)
@@ -710,7 +709,7 @@ module Filebuffer = struct
       }
       else End
     in {
-      lines = Array.init t.view_diff get_line ;
+      lines = Array.init (t.view_diff + 1) get_line ;
     }
 
 end
@@ -877,7 +876,7 @@ module Ciseau = struct
                              |> Term.term_append line
       | End       -> Term.term_append (postpad (width + 5) "~") term
     in
-    (apply_view_frustrum filebuffer).lines |> Array.fold_left print_line term |> Term.term_newline
+    Array.fold_left print_line term (apply_view_frustrum filebuffer).lines
 
   let pad_line editor = postpad editor.width
 
@@ -908,6 +907,7 @@ module Ciseau = struct
     let new_term = editor.term |> Term.term_clear
                                |> show_header editor
                                |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer
+                               |> Term.term_newline
                                |> show_status editor
                                |> Term.term_newline
                                |> show_user_input editor
