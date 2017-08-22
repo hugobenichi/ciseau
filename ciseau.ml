@@ -342,20 +342,6 @@ module Term = struct
 
   (* bypass buffered output to the stdout *FILE, use direct write() instead *)
   let print_string = write_string Unix.stdout ;;
-  let print_int = string_of_int >> print_string ;;
-  let print_char = string_of_char >> print_string ;;
-
-  (* TODO turn these into proper variant and put inside module *)
-  (* TODO variant should look like term_color = Basic of ?? | RGB6 of ?? | Gray of ?? | RGB24b of ?? *)
-  let black = 0 ;;
-  let red = 1 ;;
-  let green = 2 ;;
-  let yellow = 3 ;;
-  let blue = 4 ;;
-  let magenta = 5 ;;
-  let cyan = 6 ;;
-  let white = 7 ;;
-
 
   (* TODO: put in Control Sequences module *)
   let control_sequence_introducer = 27 |> Char.chr |> string_of_char ;;
@@ -372,37 +358,8 @@ module Term = struct
 
   let ctrl_gohome = ctrl_start ^ "H" ;;
 
-  let term_fg c = 30 + c ;;
-  let term_bg c = 40 + c ;;
-  let term_rgb (r, g, b) = 16 + (36 * r) + (6 * g) + b ;;
-
-  let rec term_print_code_seq = function
-  | []      -> ""
-  | i :: [] -> (string_of_int i ^ "m" )
-  | i :: t  -> (string_of_int i ^ ";" ^ term_print_code_seq t)
-  ;;
-
-  let term_make_string codes s =
-    ctrl_start ^ (term_print_code_seq codes) ^ s ^ ctrl_end ;;
-
-  let term_print codes s =
-    print_string (term_make_string codes s) ;;
-  ;;
-
-  let term_with_color fg bg s =
-    term_make_string [0 ; term_fg fg ; term_bg bg] s
-
-  let term_print_color fg bg s =
-    term_print [0 ; term_fg fg ; term_bg bg] s
-
-  let term_with_color256 fg bg s =
-    term_make_string [38 ; 5 ; fg ; 48 ; 5 ; bg] s
-
   let with_color256 fg bg s =
     ctrl_start ^ (Color.color_control_string fg bg) ^ s ^ ctrl_end
-
-  let term_print_color256 fg bg s =
-    term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s
 
   type terminal = {
     buffer : Bytevector.t ;
@@ -887,7 +844,7 @@ module Ciseau = struct
     Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
 
   let print_line_number line =
-    Term.term_with_color Term.green Term.black (Printf.sprintf "%4d " (abs line))
+    Term.with_color256 Term.Color.green Term.Color.black (Printf.sprintf "%4d " (abs line))
 
   let print_file_buffer width filebuffer term =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
@@ -912,7 +869,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in let
-      prettified_s = s |> pad_line editor |> Term.term_with_color Term.black Term.yellow
+      prettified_s = s |> pad_line editor |> Term.with_color256 Term.Color.black Term.Color.yellow
     in
       Term.term_append prettified_s term
     ;;
@@ -920,7 +877,7 @@ module Ciseau = struct
   let show_status editor term =
     let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
           |> pad_line editor
-          |> Term.term_with_color Term.black Term.white in
+          |> Term.with_color256 Term.Color.black Term.Color.white in
     Term.term_append s term ;;
 
   let show_user_input editor term =
@@ -1016,5 +973,5 @@ module Ciseau = struct
 end
 
 let () =
-  ColorTableDemo.main ()
-  (* Ciseau.main () *)
+  (* ColorTableDemo.main () *)
+  Ciseau.main ()
