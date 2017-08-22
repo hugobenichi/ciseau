@@ -278,6 +278,63 @@ end
 (* main module for interacting with the terminal *)
 module Term = struct
 
+  module Color = struct
+
+    type base = Black
+              | Red
+              | Green
+              | Yellow
+              | Blue
+              | Magenta
+              | Cyan
+              | White
+
+    let base_code = function
+      | Black   -> 0
+      | Red     -> 1
+      | Green   -> 2
+      | Yellow  -> 3
+      | Blue    -> 4
+      | Magenta -> 5
+      | Cyan    -> 6
+      | White   -> 7
+
+    let bold_code = function
+      | Black   -> 8
+      | Red     -> 9
+      | Green   -> 10
+      | Yellow  -> 11
+      | Blue    -> 12
+      | Magenta -> 13
+      | Cyan    -> 14
+      | White   -> 15
+
+    type t = Normal of base
+           | Bold of base
+           | Gray of int
+           | RGB216 of int * int * int
+           (* | RGB24b of int * int * int *) (* TODO: support 24b colors *)
+
+    let color_control_code = function
+      | Normal c        -> base_code c
+      | Bold c          -> bold_code c
+      | Gray g          -> 232 + g                  (* TODO: clamp to [0,23] *)
+      | RGB216 (r,g,b)  -> 16 + 36 * r + 6 * g + b  (* TODO: clamp to [0, 5] ^ 3 *)
+
+    let color_control_string fg bg =
+      Printf.sprintf "38;5;%d;48;5;%dm" (color_control_code fg) (color_control_code bg)
+
+    let black   = Normal Black ;;
+    let red     = Normal Red ;;
+    let green   = Normal Green ;;
+    let yellow  = Normal Yellow ;;
+    let blue    = Normal Blue ;;
+    let magenta = Normal Magenta ;;
+    let cyan    = Normal Cyan ;;
+    let white   = Normal White ;;
+
+  end
+
   external get_terminal_size : unit -> (int * int) = "get_terminal_size" ;;
 
   open Utils
@@ -339,6 +396,9 @@ module Term = struct
 
   let term_with_color256 fg bg s =
     term_make_string [38 ; 5 ; fg ; 48 ; 5 ; bg] s
+
+  let with_color256 fg bg s =
+    ctrl_start ^ (Color.color_control_string fg bg) ^ s ^ ctrl_end
 
   let term_print_color256 fg bg s =
     term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s
@@ -685,8 +745,8 @@ module Filebuffer = struct
   type line_info = End | Line of {
     text        : string ;
     number      : int ;
-    fg_color    : int ;
-    bg_color    : int ;
+    fg_color    : Term.Color.t ;
+    bg_color    : Term.Color.t ;
   }
 
   type projected_view = {
@@ -699,12 +759,12 @@ module Filebuffer = struct
     | CursorRelative  -> -t.cursor.y
     in let get_line idx =
       let i = idx + t.view_start in
-      let bg = if (i = t.cursor.y) then 236 else Term.black in
+      let bg = if (i = t.cursor.y) then (Term.Color.Gray 4) else Term.Color.black in
       if i < t.buflen
       then Line {
         text        = t.buffer.(i) ;
         number      = i + offset ;
-        fg_color    = Term.white ;
+        fg_color    = Term.Color.white ;
         bg_color    = bg ;
       }
       else End
@@ -870,7 +930,7 @@ module Ciseau = struct
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
     let open Filebuffer in
     let print_line term = function
-      | Line info -> let line = Term.term_with_color256 info.fg_color info.bg_color (postpad width info.text)
+      | Line info -> let line = Term.with_color256 info.fg_color info.bg_color (postpad width info.text)
                      in term |> Term.term_newline
                              |> Term.term_append (print_line_number info.number)
                              |> Term.term_append line
