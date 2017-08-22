@@ -313,7 +313,7 @@ module Term = struct
            | Bold of base
            | Gray of int
            | RGB216 of int * int * int
-           (* | RGB24b of int * int * int *) (* TODO: support 24b colors *)
+           (* | RGB24b of int * int * int *) (* TODO: support 24b colors, support rgb hex string *)
 
     let color_control_code = function
       | Normal c        -> base_code c
@@ -332,6 +332,7 @@ module Term = struct
     let magenta = Normal Magenta ;;
     let cyan    = Normal Cyan ;;
     let white   = Normal White ;;
+
 
   end
 
@@ -403,10 +404,6 @@ module Term = struct
   let term_print_color256 fg bg s =
     term_print [38 ; 5 ; fg ; 48 ; 5 ; bg] s
 
-  (* TODO: support hex string like specifications like #ffee44 *)
-  let term_print_color24b (fg_r, fg_g, fg_b) (bg_r, bg_g, bg_b) s =
-    term_print [38 ; 2 ; fg_r; fg_g; fg_b ; 48 ; 2 ; bg_r; bg_g; bg_b] s ;;
-
   type terminal = {
     buffer : Bytevector.t ;
   } ;;
@@ -477,79 +474,45 @@ module Term = struct
 end
 
 
-(* demo for printing color tables *)
-(* TODO: move to separate file *)
-module ColorTable = struct
+module ColorTableDemo = struct
 
   open Term
+  open Color
 
-  let color_table = [|
-    ("black", black, white) ;
-    ("red", red, white) ;
-    ("green", green, white) ;
-    ("yellow", yellow, black) ;
-    ("blue", blue, white) ;
-    ("magenta", magenta, white) ;
-    ("cyan", cyan, white) ;
-    ("white", white, black) ;
-  |] ;;
+  let colors = [| Black ; Red ; Green ; Yellow ; Blue ; Magenta ; Cyan ; White |]
 
-  let print_base_color_table () =
-    let print_one_color (name, bg, fg) =
-      term_print_color bg black name ;
-      print_string " -- " ;
-      term_print [1 ; term_fg bg ; term_bg black] name ;
-      print_string " -- " ;
-      term_print_color fg bg name ;
-      print_string " -- " ;
-      term_print [1 ; term_fg fg ; term_bg bg] name ;
-      print_newline ()
-    in
-    let maxlen = color_table
-                  |> Array.map (fun (x, _, _) -> slen x)
-                  |> Array.fold_left max 0
-    in
-    let padded_color_table = Array.map (fun (s, a, b) -> (Utils.postpad maxlen s, a, b)) color_table
-    in
-    Array.iter print_one_color padded_color_table
-  ;;
+  let print_base_color c =
+    let code = base_code c in
+    print_string (with_color256 white (Normal c) ("  " ^ (string_of_int code) ^ "  "))
 
-  let print_256_color_table () =
-    (* base colors *)
-    for c = 0 to 6 do
-      term_print_color256 white c ("  " ^ (string_of_int c) ^ "  ")
-    done ;
-    term_print_color256 black 7 " 7 " ;
-    (* base colors *)
-    for c = 8 to 15 do
-      term_print_color256 white c (" " ^ (string_of_int c) ^ " ")
-    done ;
-    print_newline () ;
-
-    for c = 16 to 231 do
-      if (c - 16) mod 36 = 0 then print_newline () ;
-      term_print_color256 white c (" " ^ (Utils.prepad 3 (string_of_int c)) ^ " ")
-    done ;
-
-    (* gray scale *)
-    print_newline () ;
-    print_newline () ;
-    for c = 232 to 255 do
-      if c = 244 then print_newline () ;
-      term_print_color256 white c (" " ^ (string_of_int c) ^ " ")
-    done ;
-    print_newline ()
-  ;;
+  let print_bold_color c =
+    let code = 8 + (base_code c) in
+    print_string (with_color256 white (Bold c) ("  " ^ (string_of_int code) ^ "  "))
 
   let main () =
     clear () ;
-    print_base_color_table () ;
+
+    Array.iter print_base_color colors ;
+    Array.iter print_bold_color colors ;
     print_newline () ;
-    print_256_color_table () ;
+
+    for r = 0 to 5 do
+      print_newline () ;
+      for g = 0 to 5 do
+        for b = 0 to 5 do
+          let c = 16 + 36 * r + 6 * g + b in
+          let s = (" " ^ (Utils.prepad 3 (string_of_int c)) ^ " ") in
+          print_string (with_color256 white (RGB216 (r, g, b)) s)
+        done
+      done
+    done ;
+
     print_newline () ;
-    term_print_color24b (0, 204, 153) (242, 230, 255) " something in 24b colors " ;
+    print_newline () ;
+    for c = 0 to 23 do
+      print_string (with_color256 white (Gray c) (" " ^ (string_of_int c) ^ " "))
+    done ;
     print_newline ()
-  ;;
 
 end
 
@@ -1053,4 +1016,5 @@ module Ciseau = struct
 end
 
 let () =
-  Ciseau.main ()
+  ColorTableDemo.main ()
+  (* Ciseau.main () *)
