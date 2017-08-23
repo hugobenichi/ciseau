@@ -222,30 +222,29 @@ module Bytevector = struct
   type t = {
     bytes : bytes ;
     len : int ;
-  } ;;
+  }
 
-  let zero = Char.chr 0 ;;
+  let zero = Char.chr 0
 
   let init len = {
     bytes = Bytes.make len zero ;
     len   = 0 ;
-  } ;;
+  }
 
-  let reset bytevec = { bytevec with len = 0 } ;;
+  let reset bytevec = { bytevec with len = 0 }
 
-  let scale size = size |> float |> ( *. ) 1.45 |> ceil |> truncate ;;
+  let scale size = size |> float |> ( *. ) 1.45 |> ceil |> truncate
 
   let rec next_size needed_size size =
-    if needed_size <= size then size else next_size needed_size (scale size) ;;
+    if needed_size <= size then size else next_size needed_size (scale size)
 
-  let grow new_size bytes = Bytes.extend bytes 0 (new_size - (blen bytes)) ;;
+  let grow new_size bytes = Bytes.extend bytes 0 (new_size - (blen bytes))
 
   let ensure_size needed_size bytes =
     let current_size = (blen bytes) in
     if (needed_size <= current_size)
       then bytes
       else grow (next_size needed_size current_size) bytes
-  ;;
 
   let append s t =
     let new_length = (slen s) + t.len in
@@ -255,7 +254,6 @@ module Bytevector = struct
         bytes = new_bytes ;
         len   = new_length ;
       }
-  ;;
 
   let cat t bvec =
     let new_length = t.len + bvec.len in
@@ -265,13 +263,12 @@ module Bytevector = struct
         bytes = new_bytes ;
         len   = new_length ;
       }
-  ;;
 
   let to_string bvec =
-    Bytes.sub_string bvec.bytes 0 bvec.len ;;
+    Bytes.sub_string bvec.bytes 0 bvec.len
 
   let write fd bytev =
-    Utils.write fd bytev.bytes bytev.len ;;
+    Utils.write fd bytev.bytes bytev.len
 
 end
 
@@ -358,38 +355,37 @@ module Term = struct
   let with_color256 fg bg s =
     Control.start ^ (Color.color_control_string fg bg) ^ s ^ Control.finish
 
-  type terminal = {
+  type t = {
     buffer : Bytevector.t ;
   }
 
-  let term_init len = {
+  let init len = {
     buffer = Bytevector.init len ;
   }
 
-  let term_reset term = {
+  let reset term = {
     buffer = Bytevector.reset term.buffer ;
   }
 
-  let term_append s term = {
+  let append s term = {
     buffer = Bytevector.append s term.buffer;
   }
 
-  let term_clear term =
-    term |> term_reset |> term_append Control.cursor_hide |> term_append Control.gohome
+  let newline = append Control.newline
 
-  open Vec2
+  let clear =
+    reset >> append Control.cursor_hide >> append Control.gohome
 
-  let term_set_cursor {x ; y} term =
+  let set_cursor { Vec2.x ; Vec2.y} term =
     (* cursor positions are 1 based in the terminal referential *)
     let (y_pos, x_pos) = (y |> inc |> string_of_int, x |> inc |> string_of_int) in
     let cursor_ctrl_string = Control.start ^ y_pos ^ ";" ^ x_pos ^ "H" in
-    term_append cursor_ctrl_string term
+    append cursor_ctrl_string term
 
-  let term_newline term = term_append Control.newline term
-
-  let term_flush term =
-    term |> term_append Control.cursor_show |> (fun bvec -> bvec.buffer) |> Bytevector.write Unix.stdout ;
-    term
+  let flush term =
+    let term' = append Control.cursor_show term in
+      Bytevector.write Unix.stdout term'.buffer ;
+      term'
 
   let do_with_raw_mode action =
     let open Unix in
@@ -723,7 +719,7 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
-    term : Term.terminal ;
+    term : Term.t ;
     width : int;
     height : int;
     running : bool ;
@@ -753,7 +749,7 @@ module Ciseau = struct
     let (term_rows, term_cols) = Term.get_terminal_size () in
     let lines = slurp file in
     {
-      term            = Term.term_init 0x1000 ;
+      term            = Term.init 0x1000 ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
@@ -846,10 +842,10 @@ module Ciseau = struct
     let open Filebuffer in
     let print_line term = function
       | Line info -> let line = Term.with_color256 info.fg_color info.bg_color (postpad width info.text)
-                     in term |> Term.term_newline
-                             |> Term.term_append (print_line_number info.number)
-                             |> Term.term_append line
-      | End       -> Term.term_append (postpad (width + 5) "~") term
+                     in term |> Term.newline
+                             |> Term.append (print_line_number info.number)
+                             |> Term.append line
+      | End       -> Term.append (postpad (width + 5) "~") term
     in
     Array.fold_left print_line term (apply_view_frustrum filebuffer).lines
 
@@ -866,29 +862,29 @@ module Ciseau = struct
     in let
       prettified_s = s |> pad_line editor |> Term.with_color256 Term.Color.black Term.Color.yellow
     in
-      Term.term_append prettified_s term
+      Term.append prettified_s term
     ;;
 
   let show_status editor term =
     let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
           |> pad_line editor
           |> Term.with_color256 Term.Color.black Term.Color.white in
-    Term.term_append s term ;;
+    Term.append s term ;;
 
   let show_user_input editor term =
-    Term.term_append (pad_line editor editor.user_input) term ;;
+    Term.append (pad_line editor editor.user_input) term ;;
 
   let refresh_screen editor =
-    let new_term = editor.term |> Term.term_clear
+    let new_term = editor.term |> Term.clear
                                |> show_header editor
                                |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer
-                               |> Term.term_newline
+                               |> Term.newline
                                |> show_status editor
-                               |> Term.term_newline
+                               |> Term.newline
                                |> show_user_input editor
-                               |> Term.term_set_cursor
+                               |> Term.set_cursor
                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
-                               |> Term.term_flush
+                               |> Term.flush
     in
       { editor with term = new_term }
   ;;
