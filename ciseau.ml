@@ -333,7 +333,19 @@ module Term = struct
     let cyan    = Normal Cyan ;;
     let white   = Normal White ;;
 
+  end
 
+  module Control = struct
+    let escape                = 27 |> Char.chr |> Utils.string_of_char ;;
+    let start                 = escape ^ "[" ;;
+    let finish                = escape ^ "[0m" ;;
+    let clear                 = escape ^ "c" ;;
+    let newline               = "\r\n"  ;;
+    let cursor_hide           = start ^ "?25l" ;;
+    let cursor_show           = start ^ "?25h" ;;
+    let switch_offscreen      = start ^ "?47h" ;;
+    let switch_mainscreen     = start ^ "?47l" ;;
+    let gohome                = start ^ "H" ;;
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size" ;;
@@ -343,31 +355,16 @@ module Term = struct
   (* bypass buffered output to the stdout *FILE, use direct write() instead *)
   let print_string = write_string Unix.stdout ;;
 
-  (* TODO: put in Control Sequences module *)
-  let control_sequence_introducer = 27 |> Char.chr |> string_of_char ;;
-  let ctrl_start = control_sequence_introducer ^ "[" ;;
-  let ctrl_end = control_sequence_introducer ^ "[0m" ;;
-  let ctrl_clear = control_sequence_introducer ^ "c" ;;
-  let clear () = print_string ctrl_clear ;;
-  let newline () = print_string "\r\n" ;;
-  let ctrl_cursor_hide = ctrl_start ^ "?25l" ;;
-  let ctrl_cursor_show = ctrl_start ^ "?25h" ;;
-
-  let ctrl_switch_offscreen = ctrl_start ^ "?47h" ;;
-  let ctrl_switch_mainscreen = ctrl_start ^ "?47l" ;;
-
-  let ctrl_gohome = ctrl_start ^ "H" ;;
-
   let with_color256 fg bg s =
-    ctrl_start ^ (Color.color_control_string fg bg) ^ s ^ ctrl_end
+    Control.start ^ (Color.color_control_string fg bg) ^ s ^ Control.finish
 
   type terminal = {
     buffer : Bytevector.t ;
-  } ;;
+  }
 
   let term_init len = {
     buffer = Bytevector.init len ;
-  } ;;
+  }
 
   let term_reset term = {
     buffer = Bytevector.reset term.buffer ;
@@ -375,26 +372,24 @@ module Term = struct
 
   let term_append s term = {
     buffer = Bytevector.append s term.buffer;
-  } ;;
+  }
 
   let term_clear term =
-    term |> term_reset |> term_append ctrl_cursor_hide |> term_append ctrl_gohome ;;
+    term |> term_reset |> term_append Control.cursor_hide |> term_append Control.gohome
 
   open Vec2
 
   let term_set_cursor {x ; y} term =
     (* cursor positions are 1 based in the terminal referential *)
     let (y_pos, x_pos) = (y |> inc |> string_of_int, x |> inc |> string_of_int) in
-    let cursor_ctrl_string = ctrl_start ^ y_pos ^ ";" ^ x_pos ^ "H" in
+    let cursor_ctrl_string = Control.start ^ y_pos ^ ";" ^ x_pos ^ "H" in
     term_append cursor_ctrl_string term
-  ;;
 
-  let term_newline term = term_append "\r\n" term ;;
+  let term_newline term = term_append Control.newline term
 
   let term_flush term =
-    term |> term_append ctrl_cursor_show |> (fun bvec -> bvec.buffer) |> Bytevector.write Unix.stdout ;
-    term ;;
-
+    term |> term_append Control.cursor_show |> (fun bvec -> bvec.buffer) |> Bytevector.write Unix.stdout ;
+    term
 
   let do_with_raw_mode action =
     let open Unix in
@@ -419,14 +414,14 @@ module Term = struct
       want.c_csize   <- 8;        (* 8 bit chars *)
 
       (* TODO: save cursor position *)
-      print_string ctrl_switch_offscreen ;
+      print_string Control.switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
       try_finally action (fun () ->
         tcsetattr stdin TCSAFLUSH initial ;
-        print_string ctrl_switch_mainscreen
+        print_string Control.switch_mainscreen
         (* TODO: restore cursor position *)
       )
-    ) ;;
+    )
 
 end
 
@@ -447,7 +442,7 @@ module ColorTableDemo = struct
     print_string (with_color256 white (Bold c) ("  " ^ (string_of_int code) ^ "  "))
 
   let main () =
-    clear () ;
+    print_string Control.clear ;
 
     Array.iter print_base_color colors ;
     Array.iter print_bold_color colors ;
