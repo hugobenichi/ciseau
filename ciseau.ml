@@ -465,6 +465,37 @@ module ColorTableDemo = struct
 end
 
 
+module CompositionBuffer = struct
+
+  type t = {
+    text        : Bytes.t ;
+    fg_colors   : Term.Color.t array ;
+    bg_colors   : Term.Color.t array ;
+    zindex      : int array ;
+    len         : int ;
+    window      : Vec2.t ;
+  }
+
+  let init vec2 =
+    let len = vec2.Vec2.x * vec2.Vec2.y in {
+      text        = Bytes.make len '0' ;
+      fg_colors   = Array.make len Term.Color.white ;
+      bg_colors   = Array.make len Term.Color.black ;
+      zindex      = Array.make len 0 ;
+      len         = len ;
+      window      = vec2 ;
+    }
+
+  let resize t = "TODO: change length and ensure buffers have the right size"
+
+  let clear t = "TODO: clear content of buffer and use default values"
+
+  let render buffer t = "TODO: iterate through buffers and render the output"
+
+  (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
+end
+
+
 (* This represents a file currently edited
  * It contains both file information, and windowing information
  * TODO: to properly support multiple editing views into the same file, I need to split these into two
