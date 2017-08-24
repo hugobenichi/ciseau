@@ -255,7 +255,16 @@ module Bytevector = struct
         len   = new_length ;
       }
 
-  let cat t bvec =
+  let append_bytes bytes srcoffset len t =
+    let new_length = t.len + len in
+    let new_bytes = ensure_size new_length t.bytes in
+      Bytes.blit bytes srcoffset new_bytes t.len len ;
+      {
+        bytes = new_bytes ;
+        len   = new_length ;
+      }
+
+  let cat bvec t =
     let new_length = t.len + bvec.len in
     let new_bytes = ensure_size new_length t.bytes in
       Bytes.blit bvec.bytes 0 new_bytes t.len bvec.len ;
@@ -263,9 +272,6 @@ module Bytevector = struct
         bytes = new_bytes ;
         len   = new_length ;
       }
-
-  let to_string bvec =
-    Bytes.sub_string bvec.bytes 0 bvec.len
 
   let write fd bytev =
     Utils.write fd bytev.bytes bytev.len
@@ -467,30 +473,59 @@ end
 
 module CompositionBuffer = struct
 
+  let default_fg    = Term.Color.white ;;
+  let default_bg    = Term.Color.black ;;
+  let default_z     = 0 ;;
+  let default_text  = ' ' ;;
+
+  let size_for vec2 = vec2.Vec2.x * vec2.Vec2.y
+
   type t = {
     text        : Bytes.t ;
     fg_colors   : Term.Color.t array ;
     bg_colors   : Term.Color.t array ;
-    zindex      : int array ;
+    z_index     : int array ;
     len         : int ;
     window      : Vec2.t ;
   }
 
   let init vec2 =
-    let len = vec2.Vec2.x * vec2.Vec2.y in {
-      text        = Bytes.make len '0' ;
-      fg_colors   = Array.make len Term.Color.white ;
-      bg_colors   = Array.make len Term.Color.black ;
-      zindex      = Array.make len 0 ;
+    let len = size_for vec2 in {
+      text        = Bytes.make len default_text ;
+      fg_colors   = Array.make len default_fg ;
+      bg_colors   = Array.make len default_bg ;
+      z_index     = Array.make len default_z ;
       len         = len ;
       window      = vec2 ;
     }
 
-  let resize t = "TODO: change length and ensure buffers have the right size"
+  let resize vec2 t =
+    let new_len = size_for vec2 in
+    if new_len <= blen t.text
+    then {
+      t with len = new_len
+    }
+    else init vec2
 
-  let clear t = "TODO: clear content of buffer and use default values"
+  let clear t =
+    Bytes.fill t.text 0 t.len default_text ;
+    Array.fill t.fg_colors 0 t.len default_fg ;
+    Array.fill t.bg_colors 0 t.len default_bg ;
+    Array.fill t.z_index 0 t.len default_z
 
-  let render buffer t = "TODO: iterate through buffers and render the output"
+  (* VERIFYME *)
+  (* Add color information *)
+  let render bvec t =
+    let open Vec2 in
+    let rec loop lineindex bvec =
+      if lineindex < t.window.y
+      then
+        let srcoffset = lineindex * t.window.x in
+        bvec |> Bytevector.append_bytes t.text srcoffset t.window.x
+             |> Bytevector.append Term.Control.newline (* TODO: only append newline if needed *)
+             |> loop (lineindex + 1)
+    in
+      loop 0 bvec
 
   (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
 end
