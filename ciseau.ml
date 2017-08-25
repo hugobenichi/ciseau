@@ -513,19 +513,40 @@ module CompositionBuffer = struct
     Array.fill t.bg_colors 0 t.len default_bg ;
     Array.fill t.z_index 0 t.len default_z
 
-  (* VERIFYME *)
-  (* Add color information *)
-  let render bvec t =
+  let colors_at t offset = (t.fg_colors.(offset), t.bg_colors.(offset))
+
+  let next_contiguous_color_section t start =
+    let colors_to_match = colors_at t start in
+    let rec loop stop =
+      if stop < t.len && (colors_at t stop) = colors_to_match
+      then loop (stop + 1)
+      else stop
+    in loop (start + 1)
+
+  let next_line_len t start stop =
+    min (stop - start) t.window.Vec2.x
+
+  let render_section bvec (fg_color, bg_color) start stop t =
+    (* append lines one at a time starting from start offset, ending at stop offset *)
     let open Vec2 in
-    let rec loop lineindex bvec =
-      if lineindex < t.window.y
-      then
-        let srcoffset = lineindex * t.window.x in
-        bvec |> Bytevector.append_bytes t.text srcoffset t.window.x
+    let rec loop start stop bvec =
+      if start < stop then
+        let len = next_line_len t start stop in
+        bvec |> Bytevector.append Term.Control.start
+             |> Bytevector.append (Term.Color.color_control_string fg_color bg_color)
+             |> Bytevector.append_bytes t.text start len
+             |> Bytevector.append Term.Control.finish
              |> Bytevector.append Term.Control.newline (* TODO: only append newline if needed *)
-             |> loop (lineindex + 1)
+             |> loop (start + len) stop
     in
       loop 0 bvec
+
+  let render bvec t =
+    let rec loop start =
+      let stop = next_contiguous_color_section t start in
+      render_section bvec (colors_at t start) start stop t
+    in
+      loop 0
 
   (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
 end
