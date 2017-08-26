@@ -115,7 +115,7 @@ module Vec2 = struct
 
   let zero = { x = 0; y = 0 } ;;
 
-  let make (x, y) = { x = x ; y = y } ;;
+  let make x y = { x = x ; y = y } ;;
   let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
   let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
   let to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
@@ -246,32 +246,29 @@ module Bytevector = struct
       then bytes
       else grow (next_size needed_size current_size) bytes
 
-  let append s t =
-    let new_length = (slen s) + t.len in
-    let new_bytes = ensure_size new_length t.bytes in
-      Bytes.blit_string s 0 new_bytes t.len (slen s) ;
-      {
-        bytes = new_bytes ;
-        len   = new_length ;
-      }
+  let grow added_length t =
+    let new_length = added_length + t.len in
+    let new_bytes = ensure_size new_length t.bytes
+    in {
+      bytes = new_bytes ;
+      len   = new_length ;
+    }
 
-  let append_bytes bytes srcoffset len t =
-    let new_length = t.len + len in
-    let new_bytes = ensure_size new_length t.bytes in
-      Bytes.blit bytes srcoffset new_bytes t.len len ;
-      {
-        bytes = new_bytes ;
-        len   = new_length ;
-      }
+  let append s t =
+    let l = slen s in
+    let t' = grow l t in
+      Bytes.blit_string s 0 t'.bytes t.len l ;
+      t'
+
+  let append_bytes srcbytes srcoffset len t =
+    let t' = grow len t in
+      Bytes.blit srcbytes srcoffset t'.bytes t.len len ;
+      t'
 
   let cat bvec t =
-    let new_length = t.len + bvec.len in
-    let new_bytes = ensure_size new_length t.bytes in
-      Bytes.blit bvec.bytes 0 new_bytes t.len bvec.len ;
-      {
-        bytes = new_bytes ;
-        len   = new_length ;
-      }
+    let t' = grow bvec.len t in
+      Bytes.blit bvec.bytes 0 t'.bytes t.len bvec.len ;
+      t'
 
   let write fd bytev =
     Utils.write fd bytev.bytes bytev.len
@@ -351,7 +348,7 @@ module Term = struct
     let gohome                = start ^ "H" ;;
   end
 
-  external get_terminal_size : unit -> (int * int) = "get_terminal_size" ;;
+  external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
   open Utils
 
@@ -474,7 +471,7 @@ end
 module CompositionBuffer = struct
 
   let default_fg    = Term.Color.white ;;
-  let default_bg    = Term.Color.black ;;
+  let default_bg    = Term.Color.green ;;
   let default_z     = 0 ;;
   let default_text  = ' ' ;;
 
@@ -530,7 +527,8 @@ module CompositionBuffer = struct
     (* append lines one at a time starting from start offset, ending at stop offset *)
     let open Vec2 in
     let rec loop start stop bvec =
-      if start < stop then
+      if start < stop
+      then
         let len = next_line_len t start stop in
         bvec |> Bytevector.append Term.Control.start
              |> Bytevector.append (Term.Color.color_control_string fg_color bg_color)
@@ -538,15 +536,24 @@ module CompositionBuffer = struct
              |> Bytevector.append Term.Control.finish
              |> Bytevector.append Term.Control.newline (* TODO: only append newline if needed *)
              |> loop (start + len) stop
+      else
+        bvec
     in
-      loop 0 bvec
+      loop 0 stop bvec
 
-  let render bvec t =
+  let render t bvec =
     let rec loop start =
       let stop = next_contiguous_color_section t start in
       render_section bvec (colors_at t start) start stop t
     in
       loop 0
+
+  let draw vec2 s t =
+    let open Vec2 in
+    let offset = vec2.y * t.window.x + vec2.x in
+    if offset < t.len then
+      let stoplen = (min (offset + (slen s)) t.len) - offset in
+      Bytes.blit_string s 0 t.text offset stoplen
 
   (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
 end
@@ -843,7 +850,7 @@ module Ciseau = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
-      view_offset     = Vec2.make (5, 1) ; (* +5 for line numbers, +1 for header *)
+      view_offset     = Vec2.make 5 1 ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
@@ -1050,6 +1057,15 @@ module Ciseau = struct
 
 end
 
+let test_composition_buffer () =
+  let cb = CompositionBuffer.init (Vec2.make 11 4) in
+  let _ = CompositionBuffer.draw (Vec2.make 3 0) "hello world blablabalblabalbalbalablalabalbal" cb in
+  let bvec = (Bytevector.init 1000) |> CompositionBuffer.render cb
+                           (* |> Bytevector.write Unix.stdout *)
+  in
+    print_string (Bytes.sub_string bvec.Bytevector.bytes 0 100)
+
 let () =
   (* ColorTableDemo.main () *)
-  Ciseau.main ()
+  (* Ciseau.main () *)
+  test_composition_buffer ()
