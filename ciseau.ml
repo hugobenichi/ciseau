@@ -520,34 +520,46 @@ module CompositionBuffer = struct
     let rec loop stop =
       if stop < t.len && (colors_at t stop) = colors_to_match
       then loop (stop + 1)
-      else ( print_string (Printf.sprintf "found stop %d from start %d\r\n" stop start) ; stop )
+      else ( print_string (Printf.sprintf "  next_contiguous_color_section: start %d, stop %d \r\n" start stop) ; stop )
     in loop (start + 1)
-
-  let next_line_len t start stop =
-    min (stop - start) t.window.Vec2.x
 
   let render_section (fg_color, bg_color) start stop t bvec =
     (* append lines one at a time starting from start offset, ending at stop offset *)
     let open Vec2 in
+    let next_line_len t start stop =
+      min (t.window.Vec2.x - (start mod t.window.Vec2.x)) (stop - start)
+    in
+    let append_newline_if_needed t position bvec =
+      if (position mod t.window.x) = 0
+      then (print_string (Printf.sprintf "    newline at %d\r\n" position); Bytevector.append Term.Control.newline bvec )
+      else bvec
+    in
     let rec loop start stop bvec =
-      let _ = print_string (Printf.sprintf "render section (%d, %d) \r\n" start stop) in
+      let _ = print_string (Printf.sprintf "  render section (%d, %d) \r\n" start stop) in
       if start < stop
       then
         let len = next_line_len t start stop in
-        let _ = print_string (Printf.sprintf "next line = %d\r\n" len) in
-        bvec |> Bytevector.append Term.Control.start
+        let _ = print_string (Printf.sprintf "    next line = %d\r\n" len) in
+        bvec
+             |> Bytevector.append Term.Control.start
              |> Bytevector.append (Term.Color.color_control_string fg_color bg_color)
              |> Bytevector.append_bytes t.text start len
              |> Bytevector.append Term.Control.finish
-             |> Bytevector.append Term.Control.newline (* TODO: only append newline if needed *)
+             (* Last newline need to be appened *after* the terminating control command for colors *)
+             |> append_newline_if_needed t (start + len)
              |> loop (start + len) stop
       else
         bvec
     in
-      loop 0 stop bvec
+     bvec
+          (* |> Bytevector.append Term.Control.start *)
+          (* |> Bytevector.append (Term.Color.color_control_string fg_color bg_color) *)
+          |> loop start stop
+          (* |> Bytevector.append Term.Control.finish *)
 
   let render t bvec =
     let rec loop start bvec =
+      print_string (Printf.sprintf "render loop: start %d\r\n" start) ;
       if start < t.len
       then
         let stop = next_contiguous_color_section t start in
@@ -561,22 +573,24 @@ module CompositionBuffer = struct
   let offset vec2 t =
     vec2.Vec2.y * t.window.Vec2.x + vec2.Vec2.x
 
+  (* TODO: define an Area type and use Area instead of vec2 *)
   let draw vec2 s t =
     let open Vec2 in
     let start = offset vec2 t in
     if start < t.len then
-      let stop = start + (slen s) in
-      let stoplen = (min stop t.len) - start in
+      let len = slen s in
+      let maxlen = t.len - start in
+      let stoplen = min len maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
+  (* TODO: define an Area type and use Area instead of vec2 + len *)
   let set_color vec2 len fg bg t =
     let start = offset vec2 t in
     if start < t.len then
-      let stop = start + len in
-      let stoplen = (min stop t.len) - start in
+      let maxlen = t.len - start in
+      let stoplen = min len maxlen in
       Array.fill t.fg_colors start stoplen fg ;
       Array.fill t.bg_colors start stoplen bg
-
 
   (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
 end
@@ -1082,8 +1096,18 @@ end
 
 let test_composition_buffer () =
   let cb = CompositionBuffer.init (Vec2.make 20 10) in
-  let _ = CompositionBuffer.draw (Vec2.make 3 0) "hello world blablabalblabalbalbalablalabalbal" cb in
-  let _ = CompositionBuffer.set_color (Vec2.make 4 5) 8 Term.Color.white Term.Color.white cb in
+  let _ = CompositionBuffer.draw (Vec2.make 0 0) "hello world" cb in
+  let _ = CompositionBuffer.draw (Vec2.make 14 1) "foobar" cb in
+  let _ = CompositionBuffer.draw (Vec2.make 0 2) "this is 20 char long" cb in
+  let _ = CompositionBuffer.draw (Vec2.make 3 3) "hello world blablabalblabalbalbalablalabalbal" cb in
+  let _ = CompositionBuffer.draw (Vec2.make 0 9) "left" cb in
+  let _ = CompositionBuffer.draw (Vec2.make 15 9) "right" cb in
+  let _ = CompositionBuffer.set_color (Vec2.make 4 0) 8 Term.Color.black Term.Color.white cb in
+  let _ = CompositionBuffer.set_color (Vec2.make 0 1) 2 Term.Color.white Term.Color.red cb in
+  let _ = CompositionBuffer.set_color (Vec2.make 16 2) 3 Term.Color.white Term.Color.red cb in
+  let _ = CompositionBuffer.set_color (Vec2.make 0 3) 20 Term.Color.white Term.Color.red cb in
+  let _ = CompositionBuffer.set_color (Vec2.make 12 4) 8 Term.Color.white Term.Color.red cb in
+  let _ = CompositionBuffer.set_color (Vec2.make 16 5) 8 Term.Color.white Term.Color.red cb in
   let bvec = (Bytevector.init 1000) |> CompositionBuffer.render cb
                            (* |> Bytevector.write Unix.stdout *)
   in
