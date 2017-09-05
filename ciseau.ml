@@ -349,6 +349,9 @@ module Term = struct
     let switch_offscreen      = start ^ "?47h" ;;
     let switch_mainscreen     = start ^ "?47l" ;;
     let gohome                = start ^ "H" ;;
+
+    let cursor_set y_pos x_pos =
+      start ^ (Printf.sprintf "%d;%dH" y_pos x_pos)
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
@@ -360,38 +363,6 @@ module Term = struct
 
   let with_color256 fg bg s =
     Control.start ^ (Color.color_control_string fg bg) ^ s ^ Control.finish
-
-  type t = {
-    buffer : Bytevector.t ;
-  }
-
-  let init len = {
-    buffer = Bytevector.init len ;
-  }
-
-  let reset term = {
-    buffer = Bytevector.reset term.buffer ;
-  }
-
-  let append s term = {
-    buffer = Bytevector.append s term.buffer;
-  }
-
-  let newline = append Control.newline
-
-  let clear =
-    reset >> append Control.cursor_hide >> append Control.gohome
-
-  let set_cursor { Vec2.x ; Vec2.y} term =
-    (* cursor positions are 1 based in the terminal referential *)
-    let (y_pos, x_pos) = (y |> inc |> string_of_int, x |> inc |> string_of_int) in
-    let cursor_ctrl_string = Control.start ^ y_pos ^ ";" ^ x_pos ^ "H" in
-    append cursor_ctrl_string term
-
-  let flush term =
-    let term' = append Control.cursor_show term in
-      Bytevector.write Unix.stdout term'.buffer ;
-      term'
 
   let do_with_raw_mode action =
     let open Unix in
@@ -609,6 +580,50 @@ module CompositionBuffer = struct
 end
 
 
+module Screen = struct
+
+  open Utils
+
+  type t = {
+    render_buffer       : Bytevector.t ;
+    composition_buffer  : CompositionBuffer.t ;
+  }
+
+  let init vec2 = {
+    render_buffer       = Bytevector.init 0x1000 ;
+    composition_buffer  = CompositionBuffer.init vec2 ;
+  }
+
+  (* TODO: fold into clear *)
+  let reset screen =
+    CompositionBuffer.clear screen.composition_buffer ;
+    {
+      render_buffer       = Bytevector.reset screen.render_buffer ;
+      composition_buffer  = screen.composition_buffer ;
+    }
+
+  let append s screen = {
+    render_buffer = Bytevector.append s screen.render_buffer;
+    composition_buffer  = screen.composition_buffer ;
+  }
+
+  let newline =
+    append Term.Control.newline
+
+  (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
+  let set_cursor { Vec2.x ; Vec2.y} =
+    append (Term.Control.cursor_set (inc y) (inc x))
+
+  let clear =
+    reset >> append Term.Control.cursor_hide >> append Term.Control.gohome
+
+  let flush screen =
+    let screen' = append Term.Control.cursor_show screen in
+      Bytevector.write Unix.stdout screen'.render_buffer ;
+      screen'
+end
+
+
 (* This represents a file currently edited
  * It contains both file information, and windowing information
  * TODO: to properly support multiple editing views into the same file, I need to split these into two
@@ -761,6 +776,7 @@ module Filebuffer = struct
     then t |> adjust_cursor (u t) |> cursor_move_while u f
     else t
 
+  (* BUG ? '_' is considered to be a word separation *)
   let move_next_word t =
     t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
       |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
@@ -863,7 +879,8 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
-    term : Term.t ;
+    screen : Screen.t ;
+    (* Fold width and height into Screen.t *)
     width : int;
     height : int;
     running : bool ;
@@ -891,9 +908,10 @@ module Ciseau = struct
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
+    let term_dim = Vec2.make term_rows term_cols in
     let lines = slurp file in
     {
-      term            = Term.init 0x1000 ;
+      screen          = Screen.init term_dim ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
@@ -981,17 +999,17 @@ module Ciseau = struct
   let print_line_number line =
     Term.with_color256 Term.Color.green Term.Color.black (Printf.sprintf "%4d " (abs line))
 
-  let print_file_buffer width filebuffer term =
+  let print_file_buffer width filebuffer screen =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
     let open Filebuffer in
-    let print_line term = function
+    let print_line screen = function
       | Line info -> let line = Term.with_color256 info.fg_color info.bg_color (postpad width info.text)
-                     in term |> Term.newline
-                             |> Term.append (print_line_number info.number)
-                             |> Term.append line
-      | End       -> Term.append (postpad (width + 5) "~") term
+                     in screen |> Screen.newline
+                               |> Screen.append (print_line_number info.number)
+                               |> Screen.append line
+      | End       -> Screen.append (postpad (width + 5) "~") screen
     in
-    Array.fold_left print_line term (apply_view_frustrum filebuffer).lines
+    Array.fold_left print_line screen (apply_view_frustrum filebuffer).lines
 
   let pad_line editor = postpad editor.width
 
@@ -999,38 +1017,38 @@ module Ciseau = struct
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
 
   (* TODO HUD other metadata: file dirty bit, other tabs *)
-  let show_header editor term =
+  let show_header editor screen =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in let
       prettified_s = s |> pad_line editor |> Term.with_color256 Term.Color.black Term.Color.yellow
     in
-      Term.append prettified_s term
+      Screen.append prettified_s screen
     ;;
 
-  let show_status editor term =
+  let show_status editor screen =
     let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
           |> pad_line editor
           |> Term.with_color256 Term.Color.black Term.Color.white in
-    Term.append s term ;;
+    Screen.append s screen ;;
 
-  let show_user_input editor term =
-    Term.append (pad_line editor editor.user_input) term ;;
+  let show_user_input editor screen =
+    Screen.append (pad_line editor editor.user_input) screen ;;
 
   let refresh_screen editor =
-    let new_term = editor.term |> Term.clear
-                               |> show_header editor
-                               |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer
-                               |> Term.newline
-                               |> show_status editor
-                               |> Term.newline
-                               |> show_user_input editor
-                               |> Term.set_cursor
-                                    (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
-                               |> Term.flush
+    let screen' = editor.screen |> Screen.clear
+                                |> show_header editor
+                                |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer
+                                |> Screen.newline
+                                |> show_status editor
+                                |> Screen.newline
+                                |> show_user_input editor
+                                |> Screen.set_cursor
+                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
+                                |> Screen.flush
     in
-      { editor with term = new_term }
+      { editor with screen = screen' }
   ;;
 
   let key_to_command = function
@@ -1109,5 +1127,5 @@ end
 
 let () =
   (* ColorTableDemo.main () *)
-  (* Ciseau.main () *)
-  CompositionBuffer.test ()
+  Ciseau.main ()
+  (* CompositionBuffer.test () *)
