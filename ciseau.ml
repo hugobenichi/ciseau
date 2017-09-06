@@ -1033,7 +1033,7 @@ module Ciseau = struct
       timestamp           = now ;
       last_input_duration = input_duration ;
       last_cycle_duration = now -. editor.timestamp ;
-    } ;;
+    }
 
   let word_byte_size = float (Sys.word_size / 8)
 
@@ -1062,6 +1062,13 @@ module Ciseau = struct
 
   let print_file_buffer width filebuffer screen =
     (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
+    (* MIGRATION to Screen:
+     *  - get padding
+     *  - from top to end of file or end of screen
+     *    - write current line number
+     *    - write line
+     *  - set colors of all line numbers
+     *  - set other colors *)
     let open Filebuffer in
     let print_line screen = function
       | Line info -> let line = Term.with_color256 info.fg_color info.bg_color (postpad width info.text)
@@ -1079,6 +1086,10 @@ module Ciseau = struct
 
   (* TODO HUD other metadata: file dirty bit, other tabs *)
   let show_header editor screen =
+    (* MIGRATION to Screen:
+     *  - assemble the header line,
+     *  - write the line to the top of the screen
+     *  - set the line color *)
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
@@ -1086,16 +1097,23 @@ module Ciseau = struct
       prettified_s = s |> pad_line editor |> Term.with_color256 Term.Color.black Term.Color.yellow
     in
       Screen.append prettified_s screen
-    ;;
 
   let show_status editor screen =
+    (* MIGRATION to Screen:
+     *  - assemble the status line,
+     *  - write the line to the second last row of the screen
+     *  - set the line color *)
     let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
           |> pad_line editor
           |> Term.with_color256 Term.Color.black Term.Color.white in
-    Screen.append s screen ;;
+    Screen.append s screen
 
   let show_user_input editor screen =
-    Screen.append (pad_line editor editor.user_input) screen ;;
+    (* MIGRATION to Screen:
+     *  - assemble the status line,
+     *  - write the line to the last row of the screen
+     *  - set the line color *)
+    Screen.append (pad_line editor editor.user_input) screen
 
   let refresh_screen editor =
     let screen' = editor.screen |> Screen.clear
@@ -1110,7 +1128,6 @@ module Ciseau = struct
                                 |> Screen.flush
     in
       { editor with screen = screen' }
-  ;;
 
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
