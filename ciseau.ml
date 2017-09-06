@@ -535,13 +535,16 @@ module CompositionBuffer = struct
     in
       loop 0 bvec
 
-  let offset vec2 t =
+  let vec2_to_offset t vec2 =
     vec2.Vec2.y * t.window.Vec2.x + vec2.Vec2.x
+
+  let offset_to_vec2 t offset =
+    Vec2.make (offset mod t.window.Vec2.x) (offset / t.window.Vec2.x)
 
   (* TODO: define an Area type and use Area instead of vec2 *)
   let draw vec2 s t =
     let open Vec2 in
-    let start = offset vec2 t in
+    let start = vec2_to_offset t vec2 in
     if start < t.len then
       let len = slen s in
       let maxlen = t.len - start in
@@ -549,8 +552,9 @@ module CompositionBuffer = struct
       Bytes.blit_string s 0 t.text start stoplen
 
   (* TODO: define an Area type and use Area instead of vec2 + len *)
+  (* TODO: consider changing this api to take start : vec2 + stop : vec2 as a first step towards teh Area type *)
   let set_color vec2 len fg bg t =
-    let start = offset vec2 t in
+    let start = vec2_to_offset t vec2 in
     if start < t.len then
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
@@ -585,25 +589,50 @@ module Screen = struct
   open Utils
 
   type t = {
+    size                : Vec2.t ;
     render_buffer       : Bytevector.t ;
     composition_buffer  : CompositionBuffer.t ;
+
+    (* In the future, this will have several composition_buffers linked to different file buffer.
+     * Composition buffer overlap, tiling and rendering will be managed here *)
   }
 
   let init vec2 = {
+    size                = vec2 ;
     render_buffer       = Bytevector.init 0x1000 ;
     composition_buffer  = CompositionBuffer.init vec2 ;
   }
+
+  let line_size_vec screen =
+    Vec2.make screen.size.Vec2.x 0
+
+  let shift_left vec2 =
+    Vec2.make 0 vec2.Vec2.y
+
+  let line_offset =
+    Vec2.make 0 1
+
+  let line_up vec2 =
+    Vec2.sub vec2 line_offset
+
+  let line_down vec2 =
+    Vec2.add vec2 line_offset
+
+  let last_line screen =
+    line_up screen.size
 
   (* TODO: fold into clear *)
   let reset screen =
     CompositionBuffer.clear screen.composition_buffer ;
     {
+      size                = screen.size;
       render_buffer       = Bytevector.reset screen.render_buffer ;
       composition_buffer  = screen.composition_buffer ;
     }
 
   let append s screen = {
-    render_buffer = Bytevector.append s screen.render_buffer;
+    size                = screen.size;
+    render_buffer       = Bytevector.append s screen.render_buffer;
     composition_buffer  = screen.composition_buffer ;
   }
 
@@ -621,6 +650,38 @@ module Screen = struct
     let screen' = append Term.Control.cursor_show screen in
       Bytevector.write Unix.stdout screen'.render_buffer ;
       screen'
+
+  (* Write a string to the screen starting at the given position.
+   * If the string is longer then the remaining space on the line, then wraps the string to the next line.
+   * Returns a position at the end of the string written, including wrapping *)
+  let write_string screen s vec2 =
+    let cb = screen.composition_buffer  in
+    CompositionBuffer.draw vec2 s cb ;
+    s |> slen |> CompositionBuffer.offset_to_vec2 cb
+
+  (* Set the foreground and background colors of a given segment of the screen delimited by the given start
+   * and end positions. *)
+  let color_segment fg bg start stop screen =
+    let cb = screen.composition_buffer  in
+    let start_p = CompositionBuffer.vec2_to_offset cb start in
+    let stop_p  = CompositionBuffer.vec2_to_offset cb stop in
+    let len = stop_p - start_p in
+    if len > 0 then
+      CompositionBuffer.set_color start len fg bg cb
+
+  (* Set the foreground and background colors of the line pointed to by the current position. *)
+  (* TODO: is this really useful ? I probably might not need it *)
+  let color_line fg bg vec2 screen =
+    let start = shift_left vec2 in
+    let stop = Vec2.add start (line_size_vec screen) in
+    color_segment fg bg start stop screen
+
+  (* Render the screen to the backing terminal device *)
+  let render screen =
+    screen.render_buffer |> CompositionBuffer.render screen.composition_buffer
+                         |> Bytevector.append Term.Control.cursor_show
+                         |> Bytevector.write Unix.stdout
+
 end
 
 
