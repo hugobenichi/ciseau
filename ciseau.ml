@@ -1129,6 +1129,33 @@ module Ciseau = struct
     in
       { editor with screen = screen' }
 
+  let new_show_header editor screen =
+    let start = Vec2.zero in
+    let stop = Screen.line_size_vec screen in
+    let s = editor.header
+          ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
+          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
+    in
+      Screen.write_string screen s start |> ignore ;
+      Screen.color_segment Term.Color.black Term.Color.yellow start stop screen ;
+      screen
+
+  (* VERY BUGGY:  - background color is wrong
+   *              - screen dimensions are wrong
+   *              - header is not there
+   *)
+  let new_refresh_screen editor =
+    editor.screen |> Screen.clear
+                  |> new_show_header editor
+                  (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
+                  (* |> show_status editor *)
+                  (* |> show_user_input editor *)
+                  |> Screen.set_cursor
+                       (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
+                  |> Screen.render
+    ; editor
+
+
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Filebuffer.swap_line_number_mode
@@ -1191,7 +1218,8 @@ module Ciseau = struct
 
   let rec loop editor =
     if editor.running then
-      editor |> refresh_screen |> process_events |> loop
+      editor |> new_refresh_screen |> process_events |> loop
+      (* editor |> refresh_screen |> process_events |> loop *)
 
   let run_loop editor () = loop editor
 
