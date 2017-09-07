@@ -443,7 +443,7 @@ end
 module CompositionBuffer = struct
 
   let default_fg    = Term.Color.white ;;
-  let default_bg    = Term.Color.green ;;
+  let default_bg    = Term.Color.black ;;
   let default_z     = 0 ;;
   let default_text  = ' ' ;;
 
@@ -967,7 +967,7 @@ module Ciseau = struct
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let term_dim = Vec2.make term_rows term_cols in
+    let term_dim = Vec2.make term_cols term_rows in
     let lines = slurp file in
     {
       screen          = Screen.init term_dim ;
@@ -984,8 +984,8 @@ module Ciseau = struct
 
       pending_input   = None;
 
-      gc_stats = Gc.quick_stat () ;
-      gc_stats_diff = (0., 0.) ;
+      gc_stats        = Gc.quick_stat () ;
+      gc_stats_diff   = (0., 0.) ;
 
       timestamp           = Sys.time() ;
       last_input_duration = 0. ;
