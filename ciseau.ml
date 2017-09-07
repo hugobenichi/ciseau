@@ -628,7 +628,7 @@ module Screen = struct
   let last_line screen =
     line_up screen.size
 
-  (* TODO: fold into clear *)
+  (* TODO: turn into screen -> () once clear is deleted *)
   let reset screen =
     CompositionBuffer.clear screen.composition_buffer ;
     {
@@ -694,10 +694,13 @@ module Screen = struct
 
   (* Render the screen to the backing terminal device *)
   let render screen =
-    screen.render_buffer |> CompositionBuffer.render screen.composition_buffer
-                         |> Bytevector.append (Term.Control.cursor_set screen.cursor_position)
-                         |> Bytevector.append Term.Control.cursor_show
-                         |> Bytevector.write Unix.stdout
+    screen.render_buffer  |> Bytevector.reset
+                          |> Bytevector.append Term.Control.cursor_hide
+                          |> Bytevector.append Term.Control.gohome
+                          |> CompositionBuffer.render screen.composition_buffer
+                          |> Bytevector.append (Term.Control.cursor_set screen.cursor_position)
+                          |> Bytevector.append Term.Control.cursor_show
+                          |> Bytevector.write Unix.stdout
 
 end
 
@@ -1164,7 +1167,7 @@ module Ciseau = struct
    *              - header is not there
    *)
   let new_refresh_screen editor =
-    editor.screen |> Screen.clear
+    editor.screen |> Screen.reset
                   |> new_show_header editor
                   (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
                   (* |> show_status editor *)
