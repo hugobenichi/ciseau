@@ -626,7 +626,10 @@ module Screen = struct
     Vec2.add vec2 line_offset
 
   let last_line screen =
-    line_up screen.size
+    screen.size |> line_up
+
+  let last_last_line screen =
+    screen.size |> line_up |> line_up
 
   (* TODO: turn into screen -> () once clear is deleted *)
   let reset screen =
@@ -1162,16 +1165,33 @@ module Ciseau = struct
       Screen.color_segment Term.Color.black Term.Color.yellow start stop screen ;
       screen
 
-  (* VERY BUGGY:  - background color is wrong
-   *              - screen dimensions are wrong
-   *              - header is not there
-   *)
+  let new_show_status editor screen =
+    let start = screen |> Screen.last_last_line in
+    let stop = Screen.line_size_vec screen in
+    let s = "Ciseau stats: win = "
+          ^ (window_size editor)
+          ^ (format_memory_stats editor)
+          ^ (format_time_stats editor)
+    in
+      Screen.write_string screen s start |> ignore ;
+      Screen.color_segment Term.Color.red Term.Color.blue start stop screen ;
+      screen
+
+  let new_show_user_input editor screen =
+    let start = screen |> Screen.last_line in
+    let s =  editor.user_input
+    in
+      Screen.write_string screen s start |> ignore ;
+      screen
+
+  (* BUGS:  - coloring only works on the first line !!
+   *        - the last line is not visible !! *)
   let new_refresh_screen editor =
     editor.screen |> Screen.reset
                   |> new_show_header editor
                   (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
-                  (* |> show_status editor *)
-                  (* |> show_user_input editor *)
+                  |> new_show_status editor
+                  |> new_show_user_input editor
                   |> Screen.set_cursor
                        (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                           |> Vec2.add editor.view_offset)
