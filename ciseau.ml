@@ -697,13 +697,16 @@ module Screen = struct
 
   (* Render the screen to the backing terminal device *)
   let render screen =
-    screen.render_buffer  |> Bytevector.reset
-                          |> Bytevector.append Term.Control.cursor_hide
-                          |> Bytevector.append Term.Control.gohome
-                          |> CompositionBuffer.render screen.composition_buffer
-                          |> Bytevector.append (Term.Control.cursor_set screen.cursor_position)
-                          |> Bytevector.append Term.Control.cursor_show
-                          |> Bytevector.write Unix.stdout
+    let buffer' =
+      screen.render_buffer  |> Bytevector.reset
+                            |> Bytevector.append Term.Control.cursor_hide
+                            |> Bytevector.append Term.Control.gohome
+                            |> CompositionBuffer.render screen.composition_buffer
+                            |> Bytevector.append (Term.Control.cursor_set screen.cursor_position)
+                            |> Bytevector.append Term.Control.cursor_show
+    in
+      Bytevector.write Unix.stdout buffer' ;
+      { screen with render_buffer = buffer' }
 
 end
 
@@ -1187,16 +1190,16 @@ module Ciseau = struct
   (* BUGS:  - coloring only works on the first line !!
    *        - the last line is not visible !! *)
   let new_refresh_screen editor =
-    editor.screen |> Screen.reset
-                  |> new_show_header editor
-                  (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
-                  |> new_show_status editor
-                  |> new_show_user_input editor
-                  |> Screen.set_cursor
-                       (editor.filebuffer |> Filebuffer.cursor_relative_to_view
-                                          |> Vec2.add editor.view_offset)
-                  |> Screen.render
-    ; editor
+    let screen' = editor.screen |> Screen.reset
+                                |> new_show_header editor
+                                (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
+                                |> new_show_status editor
+                                |> new_show_user_input editor
+                                |> Screen.set_cursor
+                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view
+                                                        |> Vec2.add editor.view_offset)
+                                |> Screen.render
+    in { editor with screen = screen' }
 
 
   let key_to_command = function
