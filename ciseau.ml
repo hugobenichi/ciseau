@@ -19,19 +19,17 @@ module Utils = struct
   let inc x = x + 1 ;;
   let dec x = x - 1 ;;
 
-  type 'a either = Left of 'a | Right of exn ;;
-
   let try_to action =
-    try let x = action () in Left x
-    with e -> Right e
+    try let x = action () in Ok x
+    with e -> Error e
   ;;
 
   let try_finally action cleanup =
     let rez = try_to action in
     cleanup () ;
     match rez with
-    | Left success  -> success
-    | Right error   -> raise error
+    | Ok success  -> success
+    | Error error   -> raise error
   ;;
 
   (* fp utils *)
