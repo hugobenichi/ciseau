@@ -353,8 +353,8 @@ module Term = struct
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
     let cursor_set vec2 =
       let open Vec2 in
-      let {x = x ; y = y} = vec2 in (* Vec2.add cursor_offset vec2 in *)
-      start ^ (Printf.sprintf "%d;%dH" x y)
+      let {x = x ; y = y} = Vec2.add cursor_offset vec2 in
+      start ^ (Printf.sprintf "%d;%dH" y x)
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
