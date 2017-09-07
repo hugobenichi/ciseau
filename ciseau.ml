@@ -348,8 +348,13 @@ module Term = struct
     let switch_mainscreen     = start ^ "?47l" ;;
     let gohome                = start ^ "H" ;;
 
-    let cursor_set y_pos x_pos =
-      start ^ (Printf.sprintf "%d;%dH" y_pos x_pos)
+    let cursor_offset = Vec2.make 1 1
+
+    (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
+    let cursor_set vec2 =
+      let open Vec2 in
+      let {x = x ; y = y} = vec2 in (* Vec2.add cursor_offset vec2 in *)
+      start ^ (Printf.sprintf "%d;%dH" x y)
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
@@ -499,7 +504,9 @@ module CompositionBuffer = struct
       min (t.window.Vec2.x - (start mod t.window.Vec2.x)) (stop - start)
     in
     let append_newline_if_needed t position bvec =
-      if (position mod t.window.x) = 0
+      let is_end_of_line        = (position mod t.window.x) = 0 in
+      let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
+      if is_end_of_line && is_not_end_of_buffer
       then Bytevector.append Term.Control.newline bvec
       else bvec
     in
@@ -588,6 +595,7 @@ module Screen = struct
 
   type t = {
     size                : Vec2.t ;
+    cursor_position     : Vec2.t ;
     render_buffer       : Bytevector.t ;
     composition_buffer  : CompositionBuffer.t ;
 
@@ -597,6 +605,7 @@ module Screen = struct
 
   let init vec2 = {
     size                = vec2 ;
+    cursor_position     = Vec2.zero ;
     render_buffer       = Bytevector.init 0x1000 ;
     composition_buffer  = CompositionBuffer.init vec2 ;
   }
@@ -623,23 +632,24 @@ module Screen = struct
   let reset screen =
     CompositionBuffer.clear screen.composition_buffer ;
     {
-      size                = screen.size;
+      size                = screen.size ;
+      cursor_position     = screen.cursor_position ;
       render_buffer       = Bytevector.reset screen.render_buffer ;
       composition_buffer  = screen.composition_buffer ;
     }
 
   let append s screen = {
-    size                = screen.size;
-    render_buffer       = Bytevector.append s screen.render_buffer;
+    size                = screen.size ;
+    cursor_position     = Vec2.zero ;
+    render_buffer       = Bytevector.append s screen.render_buffer ;
     composition_buffer  = screen.composition_buffer ;
   }
 
   let newline =
     append Term.Control.newline
 
-  (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
-  let set_cursor { Vec2.x ; Vec2.y} =
-    append (Term.Control.cursor_set (inc y) (inc x))
+  let set_cursor vec2 =
+    append (Term.Control.cursor_set vec2)
 
   let clear =
     reset >> append Term.Control.cursor_hide >> append Term.Control.gohome
@@ -674,9 +684,18 @@ module Screen = struct
     let stop = Vec2.add start (line_size_vec screen) in
     color_segment fg bg start stop screen
 
+(* to set the cursor, I need to save the position and then add it after ! *)
+  let cursor_set vec2 screen = {
+    size                = screen.size ;
+    cursor_position     = vec2 ;
+    render_buffer       = screen.render_buffer ;
+    composition_buffer  = screen.composition_buffer ;
+  }
+
   (* Render the screen to the backing terminal device *)
   let render screen =
     screen.render_buffer |> CompositionBuffer.render screen.composition_buffer
+                         |> Bytevector.append (Term.Control.cursor_set screen.cursor_position)
                          |> Bytevector.append Term.Control.cursor_show
                          |> Bytevector.write Unix.stdout
 
@@ -970,7 +989,8 @@ module Ciseau = struct
     let term_dim = Vec2.make term_cols term_rows in
     let lines = slurp file in
     {
-      screen          = Screen.init term_dim ;
+      (* screen          = Screen.init term_dim ; *)
+      screen          = Screen.init (Vec2.sub term_dim (Vec2.make 0 1)) ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
@@ -1122,7 +1142,8 @@ module Ciseau = struct
                                 |> Screen.newline
                                 |> show_user_input editor
                                 |> Screen.set_cursor
-                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
+                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view
+                                                        |> Vec2.add editor.view_offset)
                                 |> Screen.flush
     in
       { editor with screen = screen' }
@@ -1149,7 +1170,8 @@ module Ciseau = struct
                   (* |> show_status editor *)
                   (* |> show_user_input editor *)
                   |> Screen.set_cursor
-                       (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> Vec2.add editor.view_offset)
+                       (editor.filebuffer |> Filebuffer.cursor_relative_to_view
+                                          |> Vec2.add editor.view_offset)
                   |> Screen.render
     ; editor
 
