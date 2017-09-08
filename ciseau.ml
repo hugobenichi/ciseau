@@ -998,8 +998,7 @@ module Ciseau = struct
     let term_dim = Vec2.make term_cols term_rows in
     let lines = slurp file in
     {
-      (* screen          = Screen.init term_dim ; *)
-      screen          = Screen.init (Vec2.sub term_dim (Vec2.make 0 1)) ;
+      screen          = Screen.init term_dim ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
@@ -1113,10 +1112,6 @@ module Ciseau = struct
 
   (* TODO HUD other metadata: file dirty bit, other tabs *)
   let show_header editor screen =
-    (* MIGRATION to Screen:
-     *  - assemble the header line,
-     *  - write the line to the top of the screen
-     *  - set the line color *)
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
@@ -1126,20 +1121,12 @@ module Ciseau = struct
       Screen.append prettified_s screen
 
   let show_status editor screen =
-    (* MIGRATION to Screen:
-     *  - assemble the status line,
-     *  - write the line to the second last row of the screen
-     *  - set the line color *)
     let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
           |> pad_line editor
           |> Term.with_color256 Term.Color.black Term.Color.white in
     Screen.append s screen
 
   let show_user_input editor screen =
-    (* MIGRATION to Screen:
-     *  - assemble the status line,
-     *  - write the line to the last row of the screen
-     *  - set the line color *)
     Screen.append (pad_line editor editor.user_input) screen
 
   let refresh_screen editor =
@@ -1159,25 +1146,23 @@ module Ciseau = struct
 
   let new_show_header editor screen =
     let start = Vec2.zero in
-    let stop = Screen.line_size_vec screen in
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in
       Screen.write_string screen s start |> ignore ;
-      Screen.color_segment Term.Color.black Term.Color.yellow start stop screen ;
+      Screen.color_line Term.Color.black Term.Color.yellow start screen ;
       screen
 
   let new_show_status editor screen =
     let start = screen |> Screen.last_last_line in
-    let stop = Screen.line_size_vec screen in
     let s = "Ciseau stats: win = "
           ^ (window_size editor)
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
       Screen.write_string screen s start |> ignore ;
-      Screen.color_segment Term.Color.red Term.Color.blue start stop screen ;
+      Screen.color_line Term.Color.black Term.Color.white start screen ;
       screen
 
   let new_show_user_input editor screen =
@@ -1187,14 +1172,29 @@ module Ciseau = struct
       Screen.write_string screen s start |> ignore ;
       screen
 
-  (* BUGS:  - coloring only works on the first line !!
-   *        - the last line is not visible !! *)
+  let print_line_number screen =
+    let rec loop start stop =
+      if start < stop then
+        let p = Vec2.make 0 start in (
+          Screen.write_string screen (string_of_int start) p |> ignore ;
+          if start mod 2 = 0 then
+            Screen.color_line Term.Color.black Term.Color.yellow p screen ;
+          loop (start + 1) stop
+
+        )
+    in
+      loop 0 screen.Screen.size.Vec2.y ;
+      screen
+
+  (* BUGS:  - color_line and write_string are offsetted by 1, except on the first line !
+   *        - the last line is not visible *)
   let new_refresh_screen editor =
     let screen' = editor.screen |> Screen.reset
-                                |> new_show_header editor
+                                |> print_line_number
+                                (* |> new_show_header editor *)
+                                (* |> new_show_status editor *)
+                                (* |> new_show_user_input editor *)
                                 (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
-                                |> new_show_status editor
-                                |> new_show_user_input editor
                                 |> Screen.set_cursor
                                      (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> Vec2.add editor.view_offset)
