@@ -1196,6 +1196,14 @@ module Ciseau = struct
     in
     Array.iteri print_line (apply_view_frustrum filebuffer).lines
 
+  let default_fill_screen y_start y_stop screen =
+    for y = y_start to y_stop do
+      let start = Vec2.make 0 y in
+      let stop  = Vec2.make 1 y in
+      Screen.write_string screen "~" start |> ignore ;
+      Screen.color_segment Term.Color.blue Term.Color.black start stop screen
+    done
+
   let print_line_number screen =
     let rec loop start stop =
       if start < stop then
@@ -1216,7 +1224,7 @@ module Ciseau = struct
       new_show_header editor screen' Vec2.zero ;
       new_show_status editor screen' (Screen.last_last_line screen') ;
       new_show_user_input editor screen' (Screen.last_line screen') ;
-      (* TODO: print a default ~ on the first column *)
+      default_fill_screen 1 (editor.height - 3) screen' ;
       new_print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
       (* print_line_number screen' ; *)
       let screen'' =
