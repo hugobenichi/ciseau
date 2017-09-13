@@ -1,10 +1,12 @@
 (* TODOs:
+ *  - clean up old rendering code
+ *  - clean up dead or unused code
+ *  - refactor some of the new rendering code, especially the return values
+ *  - handle line wrapping
+ *
  *  - implement redo command
  *  - add selection of current word (with highlight), go to next selection, search function
  *  - finish implementing terminal save and restore by restoring cursor position
- *)
-
-(* BUGS: - on files smaller than one page, header is not showing and cursor position is incorrect
  *)
 
 (* remappings *)
@@ -547,6 +549,7 @@ module CompositionBuffer = struct
     Vec2.make (offset mod t.window.Vec2.x) (offset / t.window.Vec2.x)
 
   (* TODO: define an Area type and use Area instead of vec2 *)
+  (* TODO: strip the string from \r\n, do tab expansion *)
   let draw vec2 s t =
     let open Vec2 in
     let start = vec2_to_offset t vec2 in
@@ -1144,30 +1147,31 @@ module Ciseau = struct
     in
       { editor with screen = screen' }
 
-  let new_show_header editor screen =
-    let start = Vec2.zero in
+  let new_show_header editor screen vec2 =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in
-      Screen.write_string screen s start |> ignore ;
-      Screen.color_line Term.Color.black Term.Color.yellow start screen
+      Screen.write_string screen s vec2 |> ignore ;
+      Screen.color_line Term.Color.black Term.Color.yellow vec2 screen
 
-  let new_show_status editor screen =
-    let start = screen |> Screen.last_last_line in
+  let new_show_status editor screen vec2 =
+    (* BUG: fix this -1 offset issue *)
+    let vec2' = Screen.line_up vec2 in
     let s = "Ciseau stats: win = "
           ^ (window_size editor)
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.write_string screen s start |> ignore ;
-      Screen.color_line Term.Color.black Term.Color.white start screen
+      Screen.write_string screen s vec2' |> ignore ;
+      Screen.color_line Term.Color.black Term.Color.white vec2 screen
 
-  let new_show_user_input editor screen =
-    let start = screen |> Screen.last_line in
+  let new_show_user_input editor screen vec2 =
+    (* BUG: fix this -1 offset issue *)
+    let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
-      Screen.write_string screen s start |> ignore
+      Screen.write_string screen s vec2' |> ignore
 
   let new_print_file_buffer line_length filebuffer screen =
     (* TODO: colors *)
@@ -1209,13 +1213,14 @@ module Ciseau = struct
    *        - the last line is not visible *)
   let new_refresh_screen editor =
     let screen' = Screen.reset editor.screen in (
-      new_show_header editor screen' ;
-      new_show_status editor screen' ;
-      new_show_user_input editor screen' ;
+      new_show_header editor screen' Vec2.zero ;
+      new_show_status editor screen' (Screen.last_last_line screen') ;
+      new_show_user_input editor screen' (Screen.last_line screen') ;
+      (* TODO: print a default ~ on the first column *)
       new_print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
       (* print_line_number screen' ; *)
       let screen'' =
-        screen' |> Screen.set_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
+        screen' |> Screen.cursor_set (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> Vec2.add editor.view_offset)
                 |> Screen.render
       in { editor with screen = screen'' }
