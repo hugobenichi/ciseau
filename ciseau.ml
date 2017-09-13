@@ -961,7 +961,7 @@ module Ciseau = struct
       | d :: t  -> loop (acc * 10 + d) t
     in min (loop 0 (List.rev ds)) max_repetition
 
-  let pending_comand_to_string = function
+  let pending_command_to_string = function
     | None      -> ""
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
@@ -1151,8 +1151,7 @@ module Ciseau = struct
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in
       Screen.write_string screen s start |> ignore ;
-      Screen.color_line Term.Color.black Term.Color.yellow start screen ;
-      screen
+      Screen.color_line Term.Color.black Term.Color.yellow start screen
 
   let new_show_status editor screen =
     let start = screen |> Screen.last_last_line in
@@ -1162,15 +1161,33 @@ module Ciseau = struct
           ^ (format_time_stats editor)
     in
       Screen.write_string screen s start |> ignore ;
-      Screen.color_line Term.Color.black Term.Color.white start screen ;
-      screen
+      Screen.color_line Term.Color.black Term.Color.white start screen
 
   let new_show_user_input editor screen =
     let start = screen |> Screen.last_line in
     let s =  editor.user_input
     in
-      Screen.write_string screen s start |> ignore ;
-      screen
+      Screen.write_string screen s start |> ignore
+
+  let new_print_file_buffer line_length filebuffer screen =
+    (* TODO: colors *)
+    (* TODO: derive padding, x_offset, y_offset better by simply using a nested screen *)
+    let open Filebuffer in
+    let padding = 4 in
+    let x_offset = padding + 1 in
+    let y_offset = 1 in
+    let print_line y = function
+      | Line info ->  let y' = y + y_offset in
+                      let line = truncate line_length info.text in
+                      let line_number = Printf.sprintf "%4d" info.number in
+                      Screen.write_string screen line_number (Vec2.make 0 y') |> ignore ;
+                      Screen.write_string screen line (Vec2.make x_offset y') |> ignore ;
+                      (* TODO: handle line wrapping by passing down the returned
+                       *       vec2 end point to the next line *)
+                      ()
+      | End       ->  ()
+    in
+    Array.iteri print_line (apply_view_frustrum filebuffer).lines
 
   let print_line_number screen =
     let rec loop start stop =
@@ -1183,23 +1200,23 @@ module Ciseau = struct
 
         )
     in
-      loop 0 screen.Screen.size.Vec2.y ;
-      screen
+      loop 0 screen.Screen.size.Vec2.y
 
   (* BUGS:  - color_line and write_string are offsetted by 1, except on the first line !
    *        - the last line is not visible *)
   let new_refresh_screen editor =
-    let screen' = editor.screen |> Screen.reset
-                                |> print_line_number
-                                (* |> new_show_header editor *)
-                                (* |> new_show_status editor *)
-                                (* |> new_show_user_input editor *)
-                                (* |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer *)
-                                |> Screen.set_cursor
-                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view
+    let screen' = Screen.reset editor.screen in (
+      new_show_header editor screen' ;
+      new_show_status editor screen' ;
+      new_show_user_input editor screen' ;
+      new_print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
+      (* print_line_number screen' ; *)
+      let screen'' =
+        screen' |> Screen.set_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> Vec2.add editor.view_offset)
-                                |> Screen.render
-    in { editor with screen = screen' }
+                |> Screen.render
+      in { editor with screen = screen'' }
+    )
 
 
   let key_to_command = function
@@ -1246,7 +1263,7 @@ module Ciseau = struct
   (* TODO: replace by a proper history of previous inputs *)
   let make_user_input key editor =
     let new_head = key.Keys.repr ^ "(" ^ (string_of_int key.Keys.code) ^ ")" in
-    let new_user_input = (pending_comand_to_string editor.pending_input)
+    let new_user_input = (pending_command_to_string editor.pending_input)
                        ^  new_head
                        ^ " " ^ editor.user_input
     in {
