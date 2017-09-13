@@ -1178,13 +1178,16 @@ module Ciseau = struct
     let y_offset = 1 in
     let print_line y = function
       | Line info ->  let y' = y + y_offset in
+                      let line_start = Vec2.make x_offset y' in
+                      let number_start = Vec2.make 0 y' in
                       let line = truncate line_length info.text in
-                      let line_number = Printf.sprintf "%4d" info.number in
-                      Screen.write_string screen line_number (Vec2.make 0 y') |> ignore ;
-                      Screen.write_string screen line (Vec2.make x_offset y') |> ignore ;
+                      let number = Printf.sprintf "%4d" info.number in
+                      Screen.write_string screen number number_start |> ignore ;
+                      Screen.write_string screen line line_start |> ignore ;
+                      Screen.color_line info.fg_color info.bg_color line_start screen ;
+                      Screen.color_segment Term.Color.green Term.Color.black number_start line_start screen
                       (* TODO: handle line wrapping by passing down the returned
                        *       vec2 end point to the next line *)
-                      ()
       | End       ->  ()
     in
     Array.iteri print_line (apply_view_frustrum filebuffer).lines
