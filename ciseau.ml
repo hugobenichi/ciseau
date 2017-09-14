@@ -24,7 +24,6 @@ module Utils = struct
   let try_to action =
     try let x = action () in Ok x
     with e -> Error e
-  ;;
 
   let try_finally action cleanup =
     let rez = try_to action in
@@ -32,35 +31,24 @@ module Utils = struct
     match rez with
     | Ok success  -> success
     | Error error   -> raise error
-  ;;
 
-  (* fp utils *)
-
-  let (>>) f g x = g (f x) ;;
-  let (<<) g f x = g (f x) ;;
-
-  (* string utils *)
+  let (>>) f g x = g (f x)
 
   let padding l s = (String.make (l - (slen s)) ' ') ;;
-  let postpad l s = s ^ (padding l s) ;;
   let prepad l s = (padding l s) ^ s ;;
 
-  let string_of_char c = String.make 1 c ;;
+  let string_of_char c = String.make 1 c
 
   let truncate l s =
-    if slen s > l then String.sub s 0 l else s ;;
+    if slen s > l then String.sub s 0 l else s
 
-  let is_empty s = (slen s = 0) ;;
-
-  (* char utils *)
+  let is_empty s = (slen s = 0)
 
   let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n') ;;
   let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z')) ;;
   let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
   let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
   let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
-
-  (* IO utils *)
 
   exception IOError ;;
   exception IOUnexpectedByteNumber of int ;;
@@ -75,19 +63,17 @@ module Utils = struct
       | 0   -> one_byte_reader ()     (* timeout *)
       | -1  -> raise IOError          (* TODO: errno *)
       | n   -> raise (IOUnexpectedByteNumber n)  (* cannot happen since we ask for 1 byte only *)
-    in one_byte_reader ;;
+    in one_byte_reader
 
   let write fd buffer len =
     match Unix.write fd buffer 0 len with
     | n when n = len  -> ()
     | -1              -> raise IOError
     | n               -> raise (IOUnexpectedByteNumber n)
-  ;;
 
   let write_string fd s =
     let buffer = (Bytes.of_string s) in
     write fd buffer (blen buffer)
-  ;;
 
   let do_with_input_file chan fn =
     let action () = fn chan in
@@ -99,7 +85,7 @@ module Utils = struct
     | s                     -> loop (s :: lines) ch
     | exception End_of_file -> List.rev lines
     in
-    do_with_input_file (open_in f) (loop []) ;;
+    do_with_input_file (open_in f) (loop [])
 
   let save f lines = "TODO"
 
@@ -111,9 +97,9 @@ module Vec2 = struct
   type t = {
     x : int ;
     y : int ;
-  } ;;
+  }
 
-  let zero = { x = 0; y = 0 } ;;
+  let zero = { x = 0; y = 0 }
 
   let make x y = { x = x ; y = y } ;;
   let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
@@ -212,7 +198,6 @@ module Keys = struct
     match code_to_key_table.(code) with
     | unknown when unknown.symbol = Unknown -> { unknown with code = code }
     | found                                 -> found
-  ;;
 
 end
 
@@ -364,7 +349,7 @@ module Term = struct
   open Utils
 
   (* bypass buffered output to the stdout *FILE, use direct write() instead *)
-  let print_string = write_string Unix.stdout ;;
+  let print_string = write_string Unix.stdout
 
   let with_color256 fg bg s =
     Control.start ^ (Color.color_control_string fg bg) ^ s ^ Control.finish
@@ -643,27 +628,6 @@ module Screen = struct
       render_buffer       = Bytevector.reset screen.render_buffer ;
       composition_buffer  = screen.composition_buffer ;
     }
-
-  let append s screen = {
-    size                = screen.size ;
-    cursor_position     = Vec2.zero ;
-    render_buffer       = Bytevector.append s screen.render_buffer ;
-    composition_buffer  = screen.composition_buffer ;
-  }
-
-  let newline =
-    append Term.Control.newline
-
-  let set_cursor vec2 =
-    append (Term.Control.cursor_set vec2)
-
-  let clear =
-    reset >> append Term.Control.cursor_hide >> append Term.Control.gohome
-
-  let flush screen =
-    let screen' = append Term.Control.cursor_show screen in
-      Bytevector.write Unix.stdout screen'.render_buffer ;
-      screen'
 
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line.
@@ -1086,66 +1050,8 @@ module Ciseau = struct
   let format_time_stats editor =
     Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
 
-  let print_line_number line =
-    Term.with_color256 Term.Color.green Term.Color.black (Printf.sprintf "%4d " (abs line))
-
-  let print_file_buffer width filebuffer screen =
-    (* PERF: to not use string concat and a padder, instead make Term automatically pad the end of line *)
-    (* MIGRATION to Screen:
-     *  - get padding
-     *  - from top to end of file or end of screen
-     *    - write current line number
-     *    - write line
-     *  - set colors of all line numbers
-     *  - set other colors *)
-    let open Filebuffer in
-    let print_line screen = function
-      | Line info -> let line = Term.with_color256 info.fg_color info.bg_color (postpad width info.text)
-                     in screen |> Screen.newline
-                               |> Screen.append (print_line_number info.number)
-                               |> Screen.append line
-      | End       -> Screen.append (postpad (width + 5) "~") screen
-    in
-    Array.fold_left print_line screen (apply_view_frustrum filebuffer).lines
-
-  let pad_line editor = postpad editor.width
-
   let window_size editor =
-    "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")" ;;
-
-  (* TODO HUD other metadata: file dirty bit, other tabs *)
-  let show_header editor screen =
-    let s = editor.header
-          ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
-          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
-    in let
-      prettified_s = s |> pad_line editor |> Term.with_color256 Term.Color.black Term.Color.yellow
-    in
-      Screen.append prettified_s screen
-
-  let show_status editor screen =
-    let s = "Ciseau stats: win = " ^ (window_size editor) ^ (format_memory_stats editor) ^ (format_time_stats editor)
-          |> pad_line editor
-          |> Term.with_color256 Term.Color.black Term.Color.white in
-    Screen.append s screen
-
-  let show_user_input editor screen =
-    Screen.append (pad_line editor editor.user_input) screen
-
-  let refresh_screen editor =
-    let screen' = editor.screen |> Screen.clear
-                                |> show_header editor
-                                |> print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer
-                                |> Screen.newline
-                                |> show_status editor
-                                |> Screen.newline
-                                |> show_user_input editor
-                                |> Screen.set_cursor
-                                     (editor.filebuffer |> Filebuffer.cursor_relative_to_view
-                                                        |> Vec2.add editor.view_offset)
-                                |> Screen.flush
-    in
-      { editor with screen = screen' }
+    "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")"
 
   let new_show_header editor screen vec2 =
     let s = editor.header
@@ -1204,19 +1110,6 @@ module Ciseau = struct
       Screen.color_segment Term.Color.blue Term.Color.black start stop screen
     done
 
-  let print_line_number screen =
-    let rec loop start stop =
-      if start < stop then
-        let p = Vec2.make 0 start in (
-          Screen.write_string screen (string_of_int start) p |> ignore ;
-          if start mod 2 = 0 then
-            Screen.color_line Term.Color.black Term.Color.yellow p screen ;
-          loop (start + 1) stop
-
-        )
-    in
-      loop 0 screen.Screen.size.Vec2.y
-
   (* BUGS:  - color_line and write_string are offsetted by 1, except on the first line !
    *        - the last line is not visible *)
   let new_refresh_screen editor =
@@ -1226,7 +1119,6 @@ module Ciseau = struct
       new_show_user_input editor screen' (Screen.last_line screen') ;
       default_fill_screen 1 (editor.height - 3) screen' ;
       new_print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
-      (* print_line_number screen' ; *)
       let screen'' =
         screen' |> Screen.cursor_set (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> Vec2.add editor.view_offset)
@@ -1298,7 +1190,6 @@ module Ciseau = struct
   let rec loop editor =
     if editor.running then
       editor |> new_refresh_screen |> process_events |> loop
-      (* editor |> refresh_screen |> process_events |> loop *)
 
   let run_loop editor () = loop editor
 
