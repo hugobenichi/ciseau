@@ -6,7 +6,8 @@ builddir:
 	mkdir -p $(OUTDIR)
 
 $(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
-	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
+	ocamlopt $(OUTDIR)/ioctl.o unix.cmxa -o $@ $<
+#	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
 
 $(OUTDIR)/ioctl.o: ioctl.c
 	gcc -c -o $@ $< -I /usr/local/lib/ocaml
