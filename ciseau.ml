@@ -1,6 +1,4 @@
 (* TODOs:
- *  - clean up old rendering code
- *  - clean up dead or unused code
  *  - refactor some of the new rendering code, especially the return values
  *  - handle line wrapping
  *
@@ -34,9 +32,6 @@ module Utils = struct
 
   let (>>) f g x = g (f x)
 
-  let padding l s = (String.make (l - (slen s)) ' ') ;;
-  let prepad l s = (padding l s) ^ s ;;
-
   let string_of_char c = String.make 1 c
 
   let truncate l s =
@@ -50,8 +45,7 @@ module Utils = struct
   let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
   let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
 
-  exception IOError ;;
-  exception IOUnexpectedByteNumber of int ;;
+  exception IOError
 
   (* replacement for input_char which considers 0 as Enf_of_file *)
   let next_char =
@@ -61,15 +55,13 @@ module Utils = struct
       match Unix.read Unix.stdin buffer 0 1 with
       | 1   -> Bytes.get buffer 0 |> Char.code
       | 0   -> one_byte_reader ()     (* timeout *)
-      | -1  -> raise IOError          (* TODO: errno *)
-      | n   -> raise (IOUnexpectedByteNumber n)  (* cannot happen since we ask for 1 byte only *)
+      | _   -> raise IOError
     in one_byte_reader
 
   let write fd buffer len =
     match Unix.write fd buffer 0 len with
     | n when n = len  -> ()
-    | -1              -> raise IOError
-    | n               -> raise (IOUnexpectedByteNumber n)
+    | _               -> raise IOError
 
   let write_string fd s =
     let buffer = (Bytes.of_string s) in
@@ -384,53 +376,6 @@ module Term = struct
 end
 
 
-module ColorTableDemo = struct
-
-  open Term
-  open Color
-
-  let colors = [| Black ; Red ; Green ; Yellow ; Blue ; Magenta ; Cyan ; White |]
-
-  let print_with_color fg bg s =
-    print_string Control.start ;
-    print_string (Color.color_control_string fg bg) ;
-    print_string s ;
-    print_string Control.finish
-
-  let print_base_color c =
-    print_with_color white (Normal c) ("  " ^ (c |> base_code |> string_of_int) ^ "  ")
-
-  let print_bold_color c =
-    print_with_color white (Bold c) ("  " ^ (c |> base_code |> (+) 8 |> string_of_int) ^ "  ")
-
-  let main () =
-    print_string Control.clear ;
-
-    Array.iter print_base_color colors ;
-    Array.iter print_bold_color colors ;
-    print_newline () ;
-
-    for r = 0 to 5 do
-      print_newline () ;
-      for g = 0 to 5 do
-        for b = 0 to 5 do
-          let c = 16 + 36 * r + 6 * g + b in
-          let s = (" " ^ (Utils.prepad 3 (string_of_int c)) ^ " ") in
-          print_with_color white (RGB216 (r, g, b)) s
-        done
-      done
-    done ;
-
-    print_newline () ;
-    print_newline () ;
-    for c = 0 to 23 do
-      print_with_color white (Gray c) (" " ^ (string_of_int c) ^ " ")
-    done ;
-    print_newline ()
-
-end
-
-
 module CompositionBuffer = struct
 
   let default_fg    = Term.Color.white ;;
@@ -555,6 +500,7 @@ module CompositionBuffer = struct
 
   (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
 
+  (* TODO: delete this test once CompositionBuffer is enhanced with Area type based apis *)
   let test () =
     let cb = init (Vec2.make 20 10) in ignore (
       draw (Vec2.make 0 0) "hello world" cb ;
@@ -1052,7 +998,7 @@ module Ciseau = struct
   let window_size editor =
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")"
 
-  let new_show_header editor screen vec2 =
+  let show_header editor screen vec2 =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
@@ -1060,7 +1006,7 @@ module Ciseau = struct
       Screen.write_string screen s vec2 |> ignore ;
       Screen.color_line Term.Color.black Term.Color.yellow vec2 screen
 
-  let new_show_status editor screen vec2 =
+  let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = Screen.line_up vec2 in
     let s = "Ciseau stats: win = "
@@ -1071,14 +1017,14 @@ module Ciseau = struct
       Screen.write_string screen s vec2' |> ignore ;
       Screen.color_line Term.Color.black Term.Color.white vec2 screen
 
-  let new_show_user_input editor screen vec2 =
+  let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
       Screen.write_string screen s vec2' |> ignore
 
-  let new_print_file_buffer line_length filebuffer screen =
+  let print_file_buffer line_length filebuffer screen =
     (* TODO: colors *)
     (* TODO: derive padding, x_offset, y_offset better by simply using a nested screen *)
     let open Filebuffer in
@@ -1111,13 +1057,13 @@ module Ciseau = struct
 
   (* BUGS:  - color_line and write_string are offsetted by 1, except on the first line !
    *        - the last line is not visible *)
-  let new_refresh_screen editor =
+  let refresh_screen editor =
     let screen' = Screen.reset editor.screen in (
-      new_show_header editor screen' Vec2.zero ;
-      new_show_status editor screen' (Screen.last_last_line screen') ;
-      new_show_user_input editor screen' (Screen.last_line screen') ;
+      show_header editor screen' Vec2.zero ;
+      show_status editor screen' (Screen.last_last_line screen') ;
+      show_user_input editor screen' (Screen.last_line screen') ;
       default_fill_screen 1 (editor.height - 3) screen' ;
-      new_print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
+      print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
       let screen'' =
         screen' |> Screen.cursor_set (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> Vec2.add editor.view_offset)
@@ -1188,7 +1134,7 @@ module Ciseau = struct
 
   let rec loop editor =
     if editor.running then
-      editor |> new_refresh_screen |> process_events |> loop
+      editor |> refresh_screen |> process_events |> loop
 
   let run_loop editor () = loop editor
 
@@ -1201,6 +1147,4 @@ module Ciseau = struct
 end
 
 let () =
-  ColorTableDemo.main ()
-  (* Ciseau.main () *)
-  (* CompositionBuffer.test () *)
+  Ciseau.main ()
