@@ -349,11 +349,6 @@ module Term = struct
   open Utils
 
   (* bypass buffered output to the stdout *FILE, use direct write() instead *)
-  let print_string = write_string Unix.stdout
-
-  let with_color256 fg bg s =
-    Control.start ^ (Color.color_control_string fg bg) ^ s ^ Control.finish
-
   let do_with_raw_mode action =
     let open Unix in
     (* because terminal_io is a record of mutable fields, do tcgetattr twice:
@@ -377,11 +372,11 @@ module Term = struct
       want.c_csize   <- 8;        (* 8 bit chars *)
 
       (* TODO: save cursor position *)
-      print_string Control.switch_offscreen ;
+      write_string Unix.stdout Control.switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
       try_finally action (fun () ->
         tcsetattr stdin TCSAFLUSH initial ;
-        print_string Control.switch_mainscreen
+        write_string Unix.stdout Control.switch_mainscreen
         (* TODO: restore cursor position *)
       )
     )
@@ -396,13 +391,17 @@ module ColorTableDemo = struct
 
   let colors = [| Black ; Red ; Green ; Yellow ; Blue ; Magenta ; Cyan ; White |]
 
+  let print_with_color fg bg s =
+    print_string Control.start ;
+    print_string (Color.color_control_string fg bg) ;
+    print_string s ;
+    print_string Control.finish
+
   let print_base_color c =
-    let code = base_code c in
-    print_string (with_color256 white (Normal c) ("  " ^ (string_of_int code) ^ "  "))
+    print_with_color white (Normal c) ("  " ^ (c |> base_code |> string_of_int) ^ "  ")
 
   let print_bold_color c =
-    let code = 8 + (base_code c) in
-    print_string (with_color256 white (Bold c) ("  " ^ (string_of_int code) ^ "  "))
+    print_with_color white (Bold c) ("  " ^ (c |> base_code |> (+) 8 |> string_of_int) ^ "  ")
 
   let main () =
     print_string Control.clear ;
@@ -417,7 +416,7 @@ module ColorTableDemo = struct
         for b = 0 to 5 do
           let c = 16 + 36 * r + 6 * g + b in
           let s = (" " ^ (Utils.prepad 3 (string_of_int c)) ^ " ") in
-          print_string (with_color256 white (RGB216 (r, g, b)) s)
+          print_with_color white (RGB216 (r, g, b)) s
         done
       done
     done ;
@@ -425,7 +424,7 @@ module ColorTableDemo = struct
     print_newline () ;
     print_newline () ;
     for c = 0 to 23 do
-      print_string (with_color256 white (Gray c) (" " ^ (string_of_int c) ^ " "))
+      print_with_color white (Gray c) (" " ^ (string_of_int c) ^ " ")
     done ;
     print_newline ()
 
@@ -1202,6 +1201,6 @@ module Ciseau = struct
 end
 
 let () =
-  (* ColorTableDemo.main () *)
-  Ciseau.main ()
+  ColorTableDemo.main ()
+  (* Ciseau.main () *)
   (* CompositionBuffer.test () *)
