@@ -7,75 +7,68 @@
  *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
-(* remappings *)
-
 let alen = Array.length ;;
 let blen = Bytes.length ;;
 let slen = String.length ;;
 
+let inc x = x + 1 ;;
+let dec x = x - 1 ;;
 
-module Utils = struct
+let try_finally action cleanup =
+  let rez =
+    try Ok (action ()) with e -> Error e
+  in
+    cleanup () ;
+    match rez with
+    | Ok success  -> success
+    | Error error -> raise error
 
-  let inc x = x + 1 ;;
-  let dec x = x - 1 ;;
+let (>>) f g x = g (f x)
 
-  let try_finally action cleanup =
-    let rez =
-      try Ok (action ()) with e -> Error e
-    in
-      cleanup () ;
-      match rez with
-      | Ok success  -> success
-      | Error error -> raise error
+let string_of_char c = String.make 1 c
 
-  let (>>) f g x = g (f x)
+let truncate_string l s =
+  if slen s > l then String.sub s 0 l else s
 
-  let string_of_char c = String.make 1 c
+let is_empty s = (slen s = 0)
 
-  let truncate l s =
-    if slen s > l then String.sub s 0 l else s
+let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n') ;;
+let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z')) ;;
+let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
+let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
+let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
 
-  let is_empty s = (slen s = 0)
+exception IOError
 
-  let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n') ;;
-  let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z')) ;;
-  let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
-  let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
-  let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
+(* replacement for input_char which considers 0 as Enf_of_file *)
+let next_char =
+  (* WARN not thread safe *)
+  let buffer = Bytes.make 1 'z' in
+  let rec one_byte_reader () =
+    match Unix.read Unix.stdin buffer 0 1 with
+    | 1   -> Bytes.get buffer 0 |> Char.code
+    | 0   -> one_byte_reader ()     (* timeout *)
+    | _   -> raise IOError
+  in one_byte_reader
 
-  exception IOError
+let write fd buffer len =
+  let n = Unix.write fd buffer 0 len in
+  if n <> len then raise IOError
 
-  (* replacement for input_char which considers 0 as Enf_of_file *)
-  let next_char =
-    (* WARN not thread safe *)
-    let buffer = Bytes.make 1 'z' in
-    let rec one_byte_reader () =
-      match Unix.read Unix.stdin buffer 0 1 with
-      | 1   -> Bytes.get buffer 0 |> Char.code
-      | 0   -> one_byte_reader ()     (* timeout *)
-      | _   -> raise IOError
-    in one_byte_reader
+let write_string fd s =
+  let n = Unix.write_substring fd s 0 (slen s) in
+  if n <> slen s then raise IOError
 
-  let write fd buffer len =
-    let n = Unix.write fd buffer 0 len in
-    if n <> len then raise IOError
-
-  let write_string fd s =
-    let n = Unix.write_substring fd s 0 (slen s) in
-    if n <> slen s then raise IOError
-
-  let slurp f =
-    let rec loop lines ch =
-      match input_line ch with
-      | s                     -> loop (s :: lines) ch
-      | exception End_of_file -> List.rev lines
-    in
-    let ch = open_in f in
-    let action () = loop [] ch in
-    let cleanup () = close_in ch in
-    try_finally action cleanup
-
-end
+let slurp f =
+  let rec loop lines ch =
+    match input_line ch with
+    | s                     -> loop (s :: lines) ch
+    | exception End_of_file -> List.rev lines
+  in
+  let ch = open_in f in
+  let action () = loop [] ch in
+  let cleanup () = close_in ch in
+  try_finally action cleanup
 
 
 module Vec2 = struct
@@ -242,7 +235,7 @@ module Bytevector = struct
       t'
 
   let write fd t =
-    Utils.write fd t.bytes t.len
+    write fd t.bytes t.len
 
   let to_string t =
     Bytes.sub_string t.bytes 0 t.len
@@ -310,7 +303,7 @@ module Term = struct
   end
 
   module Control = struct
-    let escape                = 27 |> Char.chr |> Utils.string_of_char ;;
+    let escape                = 27 |> Char.chr |> string_of_char ;;
     let start                 = escape ^ "[" ;;
     let finish                = escape ^ "[0m" ;;
     let clear                 = escape ^ "c" ;;
@@ -331,8 +324,6 @@ module Term = struct
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
-
-  open Utils
 
   (* bypass buffered output to the stdout *FILE, use direct write() instead *)
   let do_with_raw_mode action =
@@ -518,8 +509,6 @@ end
 
 module Screen = struct
 
-  open Utils
-
   type t = {
     size                : Vec2.t ;
     cursor_position     : Vec2.t ;
@@ -633,7 +622,6 @@ end
          representation. *)
 module Filebuffer = struct
 
-  open Utils
   open Vec2
 
   type numbering_mode = Absolute | CursorRelative
@@ -841,8 +829,6 @@ end
 
 module Ciseau = struct
 
-  open Utils
-
   type pending_command_atom = Digit of int
 
   type pending_command = None
@@ -1029,7 +1015,7 @@ module Ciseau = struct
       | Line info ->  let y' = y + y_offset in
                       let line_start = Vec2.make x_offset y' in
                       let number_start = Vec2.make 0 y' in
-                      let line = truncate line_length info.text in
+                      let line = truncate_string line_length info.text in
                       let number = Printf.sprintf "%4d" info.number in
                       Screen.write_string screen number number_start |> ignore ;
                       Screen.write_string screen line line_start |> ignore ;
@@ -1115,7 +1101,7 @@ module Ciseau = struct
                        ^ " " ^ editor.user_input
     in {
       editor with
-      user_input = truncate editor.width new_user_input ;
+      user_input = truncate_string editor.width new_user_input ;
     }
 
   let process_events editor =
