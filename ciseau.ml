@@ -317,7 +317,7 @@ module Term = struct
     let cursor_offset = Vec2.make 1 1
 
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
-    let cursor_set vec2 =
+    let cursor_control_string vec2 =
       let open Vec2 in
       let {x = x ; y = y} = Vec2.add cursor_offset vec2 in
       start ^ (Printf.sprintf "%d;%dH" y x)
@@ -464,7 +464,7 @@ module CompositionBuffer = struct
 
   (* TODO: define an Area type and use Area instead of vec2 *)
   (* TODO: strip the string from \r\n, do tab expansion *)
-  let draw vec2 s t =
+  let set_text vec2 s t =
     let open Vec2 in
     let start = vec2_to_offset t vec2 in
     if start < t.len then
@@ -488,12 +488,12 @@ module CompositionBuffer = struct
   (* TODO: delete this test once CompositionBuffer is enhanced with Area type based apis *)
   let test () =
     let cb = init (Vec2.make 20 10) in ignore (
-      draw (Vec2.make 0 0) "hello world" cb ;
-      draw (Vec2.make 14 1) "foobar" cb ;
-      draw (Vec2.make 0 2) "this is 20 char long" cb ;
-      draw (Vec2.make 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
-      draw (Vec2.make 0 9) "left" cb ;
-      draw (Vec2.make 15 9) "right" cb ;
+      set_text (Vec2.make 0 0) "hello world" cb ;
+      set_text (Vec2.make 14 1) "foobar" cb ;
+      set_text (Vec2.make 0 2) "this is 20 char long" cb ;
+      set_text (Vec2.make 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
+      set_text (Vec2.make 0 9) "left" cb ;
+      set_text (Vec2.make 15 9) "right" cb ;
       set_color (Vec2.make 4 0) 8 Term.Color.black Term.Color.white cb ;
       set_color (Vec2.make 0 1) 2 Term.Color.white Term.Color.red cb ;
       set_color (Vec2.make 16 2) 3 Term.Color.white Term.Color.red cb ;
@@ -560,14 +560,16 @@ module Screen = struct
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line.
    * Returns a position at the end of the string written, including wrapping *)
-  let write_string screen s vec2 =
+  let put_string screen s vec2 =
     let cb = screen.composition_buffer  in
-    CompositionBuffer.draw vec2 s cb ;
-    s |> slen |> CompositionBuffer.offset_to_vec2 cb
+    CompositionBuffer.set_text vec2 s cb ;
+    vec2  |> CompositionBuffer.vec2_to_offset cb
+          |> (+) (slen s)
+          |> CompositionBuffer.offset_to_vec2 cb
 
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
-  let color_segment fg bg start stop screen =
+  let put_color_segment fg bg start stop screen =
     let cb = screen.composition_buffer  in
     let start_p = CompositionBuffer.vec2_to_offset cb start in
     let stop_p  = CompositionBuffer.vec2_to_offset cb stop in
@@ -577,13 +579,13 @@ module Screen = struct
 
   (* Set the foreground and background colors of the line pointed to by the current position. *)
   (* TODO: is this really useful ? I probably might not need it *)
-  let color_line fg bg vec2 screen =
+  let put_color_line fg bg vec2 screen =
     let start = shift_left vec2 in
     let stop = Vec2.add start (line_size_vec screen) in
-    color_segment fg bg start stop screen
+    put_color_segment fg bg start stop screen
 
 (* to set the cursor, I need to save the position and then add it after ! *)
-  let cursor_set vec2 screen = {
+  let put_cursor vec2 screen = {
     size                = screen.size ;
     cursor_position     = vec2 ;
     render_buffer       = screen.render_buffer ;
@@ -597,7 +599,7 @@ module Screen = struct
                             |> Bytevector.append Term.Control.cursor_hide
                             |> Bytevector.append Term.Control.gohome
                             |> CompositionBuffer.render screen.composition_buffer
-                            |> Bytevector.append (Term.Control.cursor_set screen.cursor_position)
+                            |> Bytevector.append (Term.Control.cursor_control_string screen.cursor_position)
                             |> Bytevector.append Term.Control.cursor_show
     in
       Bytevector.write Unix.stdout buffer' ;
@@ -983,8 +985,8 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
     in
-      Screen.write_string screen s vec2 |> ignore ;
-      Screen.color_line Term.Color.black Term.Color.yellow vec2 screen
+      Screen.put_string screen s vec2 |> ignore ;
+      Screen.put_color_line Term.Color.black Term.Color.yellow vec2 screen
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
@@ -994,15 +996,15 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.write_string screen s vec2' |> ignore ;
-      Screen.color_line Term.Color.black Term.Color.white vec2 screen
+      Screen.put_string screen s vec2' |> ignore ;
+      Screen.put_color_line Term.Color.black Term.Color.white vec2 screen
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
-      Screen.write_string screen s vec2' |> ignore
+      Screen.put_string screen s vec2' |> ignore
 
   let print_file_buffer line_length filebuffer screen =
     (* TODO: colors *)
@@ -1017,10 +1019,10 @@ module Ciseau = struct
                       let number_start = Vec2.make 0 y' in
                       let line = truncate_string line_length info.text in
                       let number = Printf.sprintf "%4d" info.number in
-                      Screen.write_string screen number number_start |> ignore ;
-                      Screen.write_string screen line line_start |> ignore ;
-                      Screen.color_line info.fg_color info.bg_color line_start screen ;
-                      Screen.color_segment Term.Color.green Term.Color.black number_start line_start screen
+                      Screen.put_string screen number number_start |> ignore ;
+                      Screen.put_string screen line line_start |> ignore ;
+                      Screen.put_color_line info.fg_color info.bg_color line_start screen ;
+                      Screen.put_color_segment Term.Color.green Term.Color.black number_start line_start screen
                       (* TODO: handle line wrapping by passing down the returned
                        *       vec2 end point to the next line *)
       | End       ->  ()
@@ -1031,11 +1033,11 @@ module Ciseau = struct
     for y = y_start to y_stop do
       let start = Vec2.make 0 y in
       let stop  = Vec2.make 1 y in
-      Screen.write_string screen "~" start |> ignore ;
-      Screen.color_segment Term.Color.blue Term.Color.black start stop screen
+      Screen.put_string screen "~" start |> ignore ;
+      Screen.put_color_segment Term.Color.blue Term.Color.black start stop screen
     done
 
-  (* BUGS:  - color_line and write_string are offsetted by 1, except on the first line !
+  (* BUGS:  - put_color_line and put_string are offsetted by 1, except on the first line !
    *        - the last line is not visible *)
   let refresh_screen editor =
     let screen' = Screen.reset editor.screen in (
@@ -1045,7 +1047,7 @@ module Ciseau = struct
       default_fill_screen 1 (editor.height - 3) screen' ;
       print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
       let screen'' =
-        screen' |> Screen.cursor_set (editor.filebuffer |> Filebuffer.cursor_relative_to_view
+        screen' |> Screen.put_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> Vec2.add editor.view_offset)
                 |> Screen.render
       in { editor with screen = screen'' }
