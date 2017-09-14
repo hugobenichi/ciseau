@@ -19,16 +19,14 @@ module Utils = struct
   let inc x = x + 1 ;;
   let dec x = x - 1 ;;
 
-  let try_to action =
-    try let x = action () in Ok x
-    with e -> Error e
-
   let try_finally action cleanup =
-    let rez = try_to action in
-    cleanup () ;
-    match rez with
-    | Ok success  -> success
-    | Error error   -> raise error
+    let rez =
+      try Ok (action ()) with e -> Error e
+    in
+      cleanup () ;
+      match rez with
+      | Ok success  -> success
+      | Error error -> raise error
 
   let (>>) f g x = g (f x)
 
@@ -58,29 +56,24 @@ module Utils = struct
       | _   -> raise IOError
     in one_byte_reader
 
-  let check_write expected got =
-    if expected <> got then raise IOError
-
   let write fd buffer len =
-    Unix.write fd buffer 0 len |> check_write len
+    let n = Unix.write fd buffer 0 len in
+    if n <> len then raise IOError
 
   let write_string fd s =
-    let len = slen s in
-    Unix.write_substring fd s 0 len |> check_write len
-
-  let do_with_input_file chan fn =
-    let action () = fn chan in
-    let cleanup () = close_in chan in
-    try_finally action cleanup
+    let n = Unix.write_substring fd s 0 (slen s) in
+    if n <> slen s then raise IOError
 
   let slurp f =
-    let rec loop lines ch = match input_line ch with
-    | s                     -> loop (s :: lines) ch
-    | exception End_of_file -> List.rev lines
+    let rec loop lines ch =
+      match input_line ch with
+      | s                     -> loop (s :: lines) ch
+      | exception End_of_file -> List.rev lines
     in
-    do_with_input_file (open_in f) (loop [])
-
-  let save f lines = "TODO"
+    let ch = open_in f in
+    let action () = loop [] ch in
+    let cleanup () = close_in ch in
+    try_finally action cleanup
 
 end
 
