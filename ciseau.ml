@@ -58,14 +58,15 @@ module Utils = struct
       | _   -> raise IOError
     in one_byte_reader
 
+  let check_write expected got =
+    if expected <> got then raise IOError
+
   let write fd buffer len =
-    match Unix.write fd buffer 0 len with
-    | n when n = len  -> ()
-    | _               -> raise IOError
+    Unix.write fd buffer 0 len |> check_write len
 
   let write_string fd s =
-    let buffer = (Bytes.of_string s) in
-    write fd buffer (blen buffer)
+    let len = slen s in
+    Unix.write_substring fd s 0 len |> check_write len
 
   let do_with_input_file chan fn =
     let action () = fn chan in
