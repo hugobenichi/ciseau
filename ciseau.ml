@@ -112,8 +112,10 @@ module Keys = struct
                   | Lower_j
                   | Lower_k
                   | Lower_l
-                  | Lower_w
                   | Lower_b
+                  | Lower_w
+                  | Upper_b
+                  | Upper_w
                   | Digit_0
                   | Digit_1
                   | Digit_2
@@ -151,6 +153,8 @@ module Keys = struct
   code_to_key_table.(66)  <- make_key ArrowDown   "ArrowDown"     66 ;;
   code_to_key_table.(67)  <- make_key ArrowRight  "ArrowRight"    67 ;;
   code_to_key_table.(68)  <- make_key ArrowLeft   "ArrowLeft"     68 ;;
+  code_to_key_table.(66)  <- make_key Upper_b     "W"             66 ;;
+  code_to_key_table.(87)  <- make_key Upper_w     "B"             87 ;;
   code_to_key_table.(98)  <- make_key Lower_b     "w"             98 ;;
   code_to_key_table.(104) <- make_key Lower_h     "h"             104 ;;
   code_to_key_table.(106) <- make_key Lower_j     "j"             106 ;;
@@ -716,7 +720,7 @@ module Filebuffer = struct
   let move_page_up   t = move_n_up (t.view_diff + 1) t ;;
   let move_page_down t = move_n_down (t.view_diff + 1) t ;;
 
-  let cursor_next_char t =
+  let cursor_next_char_proto t vec2 =
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec first_non_empty y =
       match y with
@@ -724,9 +728,12 @@ module Filebuffer = struct
       | _ when 0 = slen t.buffer.(y)  -> first_non_empty (y + 1)
       | _                             -> y
     in
-      if t.cursor.x + 1 < slen (current_line t)
-      then { x = t.cursor.x + 1; y = t.cursor.y}
-      else { x = 0; y = first_non_empty (t.cursor.y + 1) } (* skip empty lines *)
+      if vec2.x + 1 < slen (current_line t)
+      then { x = vec2.x + 1; y = vec2.y}
+      else { x = 0; y = first_non_empty (vec2.y + 1) } (* skip empty lines *)
+
+  let cursor_next_char t =
+    cursor_next_char_proto t t.cursor
 
   let cursor_prev_char t =
     (* BUG: infinite loop on file where the matcher never return true *)
@@ -774,6 +781,19 @@ module Filebuffer = struct
       |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
       |> cursor_next_char
 
+  let move_next_space t =
+    t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
+      |> cursor_move_while cursor_next_char (current_char >> is_space)
+      |> cursor_move_while cursor_next_char (current_char >> is_space >> not)
+      |> cursor
+
+  (* BUG: this always skips leading spaces at beginning of a line *)
+  let move_prev_space t =
+    t |> cursor_move_while cursor_prev_char (is_current_char_valid >> not)
+      |> cursor_move_while cursor_prev_char (current_char >> is_space)
+      |> cursor_move_while cursor_prev_char (current_char >> is_space >> not)
+      |> cursor
+
   (* BUG when wrapping over the end of a file, last paragraph and first paragraph are see as one paragraph only *)
   let move_next_paragraph t =
     t |> cursor_move_while cursor_next_line (current_line >> is_empty)
@@ -795,6 +815,9 @@ module Filebuffer = struct
   let cursor_relative_to_view t = Vec2.sub t.cursor { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
+  let select_current_block t =
+    (t |> move_prev_space |> cursor_next_char_proto t, t |> move_next_space)
+
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
   type line_info = End | Line of {
     text        : string ;
@@ -805,6 +828,7 @@ module Filebuffer = struct
 
   type projected_view = {
     lines         : line_info array ;
+    current_block : Vec2.t * Vec2.t ;
   }
 
   let apply_view_frustrum t =
@@ -823,7 +847,8 @@ module Filebuffer = struct
       }
       else End
     in {
-      lines = Array.init (t.view_diff + 1) get_line ;
+      lines         = Array.init (t.view_diff + 1) get_line ;
+      current_block = select_current_block t ;
     }
 
 end
@@ -1027,7 +1052,8 @@ module Ciseau = struct
                        *       vec2 end point to the next line *)
       | End       ->  ()
     in
-    Array.iteri print_line (apply_view_frustrum filebuffer).lines
+    let { lines ; current_block } = apply_view_frustrum filebuffer in
+    Array.iteri print_line lines
 
   let default_fill_screen y_start y_stop screen =
     for y = y_start to y_stop do
@@ -1076,6 +1102,8 @@ module Ciseau = struct
     | Keys.Lower_h      -> Move Filebuffer.move_cursor_left
     | Keys.Lower_w      -> Move Filebuffer.move_next_word
     | Keys.Lower_b      -> Move Filebuffer.move_prev_word
+    | Keys.Upper_w      -> Move Filebuffer.move_next_space
+    | Keys.Upper_b      -> Move Filebuffer.move_prev_space
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
     | Keys.Digit_2      -> Pending (Digit 2)
