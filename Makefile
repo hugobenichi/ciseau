@@ -20,5 +20,6 @@ run: build
 clean:
 	rm -f *\.cmi
 	rm -f *\.cmo
+	rm -f *\.cmx
 	rm -f *\.o
 	rm -rf $(OUTDIR)
