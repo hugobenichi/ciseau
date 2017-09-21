@@ -1053,7 +1053,12 @@ module Ciseau = struct
       | End       ->  ()
     in
     let { lines ; current_block } = apply_view_frustrum filebuffer in
-    Array.iteri print_line lines
+    let (current_block_start, current_block_end) = current_block in
+    let view_offset = Vec2.make 5 1 in (* TODO: un-hack me and properly manage view offset with nested screen *)
+    let block_start = Vec2.add current_block_start view_offset in
+    let block_stop = Vec2.add current_block_end view_offset in
+    Array.iteri print_line lines ;
+    Screen.put_color_segment Term.Color.red Term.Color.black block_start block_stop screen
 
   let default_fill_screen y_start y_stop screen =
     for y = y_start to y_stop do
