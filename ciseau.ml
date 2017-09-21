@@ -815,9 +815,6 @@ module Filebuffer = struct
   let cursor_relative_to_view t = Vec2.sub t.cursor { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
-  let select_current_block t =
-    (t |> move_prev_space |> cursor_next_char_proto t, t |> move_next_space)
-
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
   type line_info = End | Line of {
     text        : string ;
@@ -828,7 +825,6 @@ module Filebuffer = struct
 
   type projected_view = {
     lines         : line_info array ;
-    current_block : Vec2.t * Vec2.t ;
   }
 
   let apply_view_frustrum t =
@@ -848,7 +844,6 @@ module Filebuffer = struct
       else End
     in {
       lines         = Array.init (t.view_diff + 1) get_line ;
-      current_block = select_current_block t ;
     }
 
 end
@@ -1052,13 +1047,8 @@ module Ciseau = struct
                        *       vec2 end point to the next line *)
       | End       ->  ()
     in
-    let { lines ; current_block } = apply_view_frustrum filebuffer in
-    let (current_block_start, current_block_end) = current_block in
-    let view_offset = Vec2.make 5 1 in (* TODO: un-hack me and properly manage view offset with nested screen *)
-    let block_start = Vec2.add current_block_start view_offset in
-    let block_stop = Vec2.add current_block_end view_offset in
-    Array.iteri print_line lines ;
-    Screen.put_color_segment Term.Color.red Term.Color.black block_start block_stop screen
+    let { lines } = apply_view_frustrum filebuffer in
+    Array.iteri print_line lines
 
   let default_fill_screen y_start y_stop screen =
     for y = y_start to y_stop do
