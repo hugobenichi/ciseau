@@ -38,8 +38,6 @@ let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
 let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
 let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
 
-exception IOError
-
 (* replacement for input_char which considers 0 as Enf_of_file *)
 let next_char =
   (* WARN not thread safe *)
@@ -48,16 +46,11 @@ let next_char =
     match Unix.read Unix.stdin buffer 0 1 with
     | 1   -> Bytes.get buffer 0 |> Char.code
     | 0   -> one_byte_reader ()     (* timeout *)
-    | _   -> raise IOError
+    | _   -> raise (Failure "next_char failed")
   in one_byte_reader
 
 let write fd buffer len =
-  let n = Unix.write fd buffer 0 len in
-  if n <> len then raise IOError
-
-let write_string fd s =
-  let n = Unix.write_substring fd s 0 (slen s) in
-  if n <> slen s then raise IOError
+  if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
 
 let slurp f =
   let rec loop lines ch =
@@ -251,18 +244,10 @@ module Bytevector = struct
       Bytes.blit srcbytes srcoffset t'.bytes t.len len ;
       t'
 
-  let cat bvec t =
-    let t' = grow bvec.len t in
-      Bytes.blit bvec.bytes 0 t'.bytes t.len bvec.len ;
-      t'
-
   let write fd t =
     write fd t.bytes t.len
-
-  let to_string t =
-    Bytes.sub_string t.bytes 0 t.len
-
 end
+
 
 (* main module for interacting with the terminal *)
 module Term = struct
@@ -340,15 +325,17 @@ module Term = struct
 
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
     let cursor_control_string vec2 =
-      let {x = x ; y = y} = cursor_offset <+> vec2 in
-      start ^ (Printf.sprintf "%d;%dH" y x)
+      let {x ; y } = cursor_offset <+> vec2 in
+      Printf.sprintf "%s%d;%dH" start y x
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
-  (* bypass buffered output to the stdout *FILE, use direct write() instead *)
   let do_with_raw_mode action =
     let open Unix in
+    let stdout_write_string s =
+      if (write_substring stdout s 0 (slen s)) <> slen s then raise (Failure "sdtout write failed")
+    in
     (* because terminal_io is a record of mutable fields, do tcgetattr twice:
        once for restoring later, once for setting the terminal to raw mode *)
     let initial = tcgetattr stdin in
@@ -369,13 +356,13 @@ module Term = struct
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
 
-      (* TODO: save cursor position *)
-      write_string Unix.stdout Control.switch_offscreen ;
+      (* TODO: save cursor position and screen state *)
+      stdout_write_string Control.switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
       try_finally action (fun () ->
         tcsetattr stdin TCSAFLUSH initial ;
-        write_string Unix.stdout Control.switch_mainscreen
-        (* TODO: restore cursor position *)
+        stdout_write_string Control.switch_mainscreen
+        (* TODO: restore cursor position and screen state *)
       )
     )
 
@@ -384,10 +371,12 @@ end
 
 module CompositionBuffer = struct
 
-  let default_fg    = Term.Color.white ;;
-  let default_bg    = Term.Color.black ;;
-  let default_z     = 0 ;;
-  let default_text  = ' ' ;;
+  module Default = struct
+    let fg    = Term.Color.white ;;
+    let bg    = Term.Color.black ;;
+    let z     = 0 ;;
+    let text  = ' ' ;;
+  end
 
   let size_for vec2 = vec2.x * vec2.y
 
@@ -402,10 +391,10 @@ module CompositionBuffer = struct
 
   let init vec2 =
     let len = size_for vec2 in {
-      text        = Bytes.make len default_text ;
-      fg_colors   = Array.make len default_fg ;
-      bg_colors   = Array.make len default_bg ;
-      z_index     = Array.make len default_z ;
+      text        = Bytes.make len Default.text ;
+      fg_colors   = Array.make len Default.fg ;
+      bg_colors   = Array.make len Default.bg ;
+      z_index     = Array.make len Default.z ;
       len         = len ;
       window      = vec2 ;
     }
@@ -419,10 +408,10 @@ module CompositionBuffer = struct
     else init vec2
 
   let clear t =
-    Bytes.fill t.text 0 t.len default_text ;
-    Array.fill t.fg_colors 0 t.len default_fg ;
-    Array.fill t.bg_colors 0 t.len default_bg ;
-    Array.fill t.z_index 0 t.len default_z
+    Bytes.fill t.text 0 t.len Default.text ;
+    Array.fill t.fg_colors 0 t.len Default.fg ;
+    Array.fill t.bg_colors 0 t.len Default.bg ;
+    Array.fill t.z_index 0 t.len Default.z
 
   let colors_at t offset = (t.fg_colors.(offset), t.bg_colors.(offset))
 
@@ -800,7 +789,7 @@ module Filebuffer = struct
       |> cursor_move_while cursor_next_char (current_char >> is_space >> not)
       |> cursor
 
-  (* BUG: this always skips leading spaces at beginning of a line *)
+  (* BUG: this always skips a single leading space at beginning of a line, but does not skip more than one leading space *)
   let move_prev_space t =
     t |> cursor_move_while cursor_prev_char (is_current_char_valid >> not)
       |> cursor_move_while cursor_prev_char (current_char >> is_space)
