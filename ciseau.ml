@@ -92,6 +92,11 @@ module Vec2 = struct
   }
 
   let v2_to_string t = Printf.sprintf "%d,%d" t.y t.x
+
+  let v2_to_offset stride vec2 = vec2.y * stride + vec2.x
+
+  let offset_to_v2 stride offset = v2_of_xy (offset mod stride) (offset / stride)
+
 end
 
 
@@ -203,44 +208,51 @@ module Bytevector = struct
     len : int ;
   }
 
-  let chr_zero = Char.chr 0
+  module Priv = struct
+
+    let scale size =
+      size |> float |> ( *. ) 1.45 |> ceil |> truncate
+
+    let rec next_size needed_size size =
+      if needed_size <= size then size else next_size needed_size (scale size)
+
+    let grow new_size bytes =
+      Bytes.extend bytes 0 (new_size - (blen bytes))
+
+    let ensure_size needed_size bytes =
+      let current_size = (blen bytes) in
+      if (needed_size <= current_size)
+        then bytes
+        else grow (next_size needed_size current_size) bytes
+
+    let grow added_length t =
+      let new_length = added_length + t.len in
+      let new_bytes = ensure_size new_length t.bytes
+      in {
+        bytes = new_bytes ;
+        len   = new_length ;
+      }
+
+  end
 
   let init len = {
-    bytes = Bytes.make len chr_zero ;
+    bytes = Bytes.make len (Char.chr 0) ;
     len   = 0 ;
   }
 
-  let reset bytevec = { bytevec with len = 0 }
-
-  let scale size = size |> float |> ( *. ) 1.45 |> ceil |> truncate
-
-  let rec next_size needed_size size =
-    if needed_size <= size then size else next_size needed_size (scale size)
-
-  let grow new_size bytes = Bytes.extend bytes 0 (new_size - (blen bytes))
-
-  let ensure_size needed_size bytes =
-    let current_size = (blen bytes) in
-    if (needed_size <= current_size)
-      then bytes
-      else grow (next_size needed_size current_size) bytes
-
-  let grow added_length t =
-    let new_length = added_length + t.len in
-    let new_bytes = ensure_size new_length t.bytes
-    in {
-      bytes = new_bytes ;
-      len   = new_length ;
-    }
+  let reset bytevec = {
+    bytes = bytevec.bytes ;
+    len   = 0 ;
+  }
 
   let append s t =
     let sl = slen s in
-    let t' = grow sl t in
+    let t' = Priv.grow sl t in
       Bytes.blit_string s 0 t'.bytes t.len sl ;
       t'
 
   let append_bytes srcbytes srcoffset len t =
-    let t' = grow len t in
+    let t' = Priv.grow len t in
       Bytes.blit srcbytes srcoffset t'.bytes t.len len ;
       t'
 
@@ -378,8 +390,6 @@ module CompositionBuffer = struct
     let text  = ' ' ;;
   end
 
-  let size_for vec2 = vec2.x * vec2.y
-
   type t = {
     text        : Bytes.t ;
     fg_colors   : Term.Color.t array ;
@@ -389,8 +399,52 @@ module CompositionBuffer = struct
     window      : v2 ;
   }
 
+  module Priv = struct
+    let colors_at t offset = (t.fg_colors.(offset), t.bg_colors.(offset))
+
+    let next_contiguous_color_section t start =
+      let colors_to_match = colors_at t start in
+      let rec loop stop =
+        if stop < t.len && (colors_at t stop) = colors_to_match
+        then loop (stop + 1)
+        else stop
+      in loop (start + 1)
+
+    let render_section (fg_color, bg_color) start stop t bvec =
+      (* append lines one at a time starting from start offset, ending at stop offset *)
+      let next_line_len t start stop =
+        min (t.window.x - (start mod t.window.x)) (stop - start)
+      in
+      let append_newline_if_needed t position bvec =
+        let is_end_of_line        = (position mod t.window.x) = 0 in
+        let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
+        if is_end_of_line && is_not_end_of_buffer
+        then Bytevector.append Term.Control.newline bvec
+        else bvec
+      in
+      let rec loop start stop bvec =
+        if start < stop
+        then
+          let len = next_line_len t start stop in
+          bvec
+               |> Bytevector.append Term.Control.start
+               |> Bytevector.append (Term.Color.color_control_string fg_color bg_color)
+               |> Bytevector.append_bytes t.text start len
+               |> Bytevector.append Term.Control.finish
+               (* Last newline need to be appened *after* the terminating control command for colors *)
+               |> append_newline_if_needed t (start + len)
+               |> loop (start + len) stop
+        else
+          bvec
+      in
+       bvec
+            |> loop start stop
+
+  end
+
   let init vec2 =
-    let len = size_for vec2 in {
+    let len = vec2.x * vec2.y
+    in {
       text        = Bytes.make len Default.text ;
       fg_colors   = Array.make len Default.fg ;
       bg_colors   = Array.make len Default.bg ;
@@ -399,61 +453,14 @@ module CompositionBuffer = struct
       window      = vec2 ;
     }
 
-  let resize vec2 t =
-    let new_len = size_for vec2 in
-    if new_len <= blen t.text
-    then {
-      t with len = new_len
-    }
-    else init vec2
-
   let clear t =
     Bytes.fill t.text 0 t.len Default.text ;
     Array.fill t.fg_colors 0 t.len Default.fg ;
     Array.fill t.bg_colors 0 t.len Default.bg ;
     Array.fill t.z_index 0 t.len Default.z
 
-  let colors_at t offset = (t.fg_colors.(offset), t.bg_colors.(offset))
-
-  let next_contiguous_color_section t start =
-    let colors_to_match = colors_at t start in
-    let rec loop stop =
-      if stop < t.len && (colors_at t stop) = colors_to_match
-      then loop (stop + 1)
-      else stop
-    in loop (start + 1)
-
-  let render_section (fg_color, bg_color) start stop t bvec =
-    (* append lines one at a time starting from start offset, ending at stop offset *)
-    let next_line_len t start stop =
-      min (t.window.x - (start mod t.window.x)) (stop - start)
-    in
-    let append_newline_if_needed t position bvec =
-      let is_end_of_line        = (position mod t.window.x) = 0 in
-      let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
-      if is_end_of_line && is_not_end_of_buffer
-      then Bytevector.append Term.Control.newline bvec
-      else bvec
-    in
-    let rec loop start stop bvec =
-      if start < stop
-      then
-        let len = next_line_len t start stop in
-        bvec
-             |> Bytevector.append Term.Control.start
-             |> Bytevector.append (Term.Color.color_control_string fg_color bg_color)
-             |> Bytevector.append_bytes t.text start len
-             |> Bytevector.append Term.Control.finish
-             (* Last newline need to be appened *after* the terminating control command for colors *)
-             |> append_newline_if_needed t (start + len)
-             |> loop (start + len) stop
-      else
-        bvec
-    in
-     bvec
-          |> loop start stop
-
   let render t bvec =
+    let open Priv in
     let rec loop start bvec =
       if start < t.len
       then
@@ -465,16 +472,10 @@ module CompositionBuffer = struct
     in
       loop 0 bvec
 
-  let vec2_to_offset t vec2 =
-    vec2.y * t.window.x + vec2.x
-
-  let offset_to_vec2 t offset =
-    v2_of_xy (offset mod t.window.x) (offset / t.window.x)
-
   (* TODO: define an Area type and use Area instead of vec2 *)
   (* TODO: strip the string from \r\n, do tab expansion *)
   let set_text vec2 s t =
-    let start = vec2_to_offset t vec2 in
+    let start = v2_to_offset t.window.x vec2 in
     if start < t.len then
       let len = slen s in
       let maxlen = t.len - start in
@@ -484,7 +485,7 @@ module CompositionBuffer = struct
   (* TODO: define an Area type and use Area instead of vec2 + len *)
   (* TODO: consider changing this api to take start : vec2 + stop : vec2 as a first step towards teh Area type *)
   let set_color vec2 len fg bg t =
-    let start = vec2_to_offset t vec2 in
+    let start = v2_to_offset t.window.x vec2 in
     if start < t.len then
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
@@ -570,17 +571,19 @@ module Screen = struct
    * Returns a position at the end of the string written, including wrapping *)
   let put_string screen s vec2 =
     let cb = screen.composition_buffer  in
+    let stride = cb.CompositionBuffer.window.x in
     CompositionBuffer.set_text vec2 s cb ;
-    vec2  |> CompositionBuffer.vec2_to_offset cb
+    vec2  |> v2_to_offset stride
           |> (+) (slen s)
-          |> CompositionBuffer.offset_to_vec2 cb
+          |> offset_to_v2 stride
 
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
   let put_color_segment fg bg start stop screen =
     let cb = screen.composition_buffer  in
-    let start_p = CompositionBuffer.vec2_to_offset cb start in
-    let stop_p  = CompositionBuffer.vec2_to_offset cb stop in
+    let stride = cb.CompositionBuffer.window.x in
+    let start_p = v2_to_offset stride start in
+    let stop_p  = v2_to_offset stride stop in
     let len = stop_p - start_p in
     if len > 0 then
       CompositionBuffer.set_color start len fg bg cb
