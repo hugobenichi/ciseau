@@ -78,16 +78,31 @@ module Vec2 = struct
     y : int ;
   }
 
-  let zero = { x = 0; y = 0 }
+  let v2_zero = {
+    x = 0 ;
+    y = 0 ;
+  }
 
-  let v2_of_xy x y = { x = x ; y = y } ;;
-  let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
-  let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
-  let v2_to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
+  let v2_of_xy x y = {
+    x = x ;
+    y = y ;
+  }
 
-  let (<+>) t1 t2 = add t1 t2 ;;
-  let (<->) t1 t2 = sub t1 t2 ;;
+  let (<+>) t1 t2 = {
+    x = t1.x + t2.x ;
+    y = t1.y + t2.y ;
+  }
+
+  let (<->) t1 t2 = {
+    x = t1.x - t2.x ;
+    y = t1.y - t2.y ;
+  }
+
+  let v2_to_string t = Printf.sprintf "%d,%d" t.y t.x
 end
+
+
+open Vec2
 
 
 (* Mappings of character codes
@@ -195,10 +210,10 @@ module Bytevector = struct
     len : int ;
   }
 
-  let zero = Char.chr 0
+  let chr_zero = Char.chr 0
 
   let init len = {
-    bytes = Bytes.make len zero ;
+    bytes = Bytes.make len chr_zero ;
     len   = 0 ;
   }
 
@@ -321,11 +336,10 @@ module Term = struct
     let switch_mainscreen     = start ^ "?47l" ;;
     let gohome                = start ^ "H" ;;
 
-    let cursor_offset = Vec2.v2_of_xy 1 1
+    let cursor_offset = v2_of_xy 1 1
 
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
     let cursor_control_string vec2 =
-      let open Vec2 in
       let {x = x ; y = y} = cursor_offset <+> vec2 in
       start ^ (Printf.sprintf "%d;%dH" y x)
   end
@@ -375,7 +389,7 @@ module CompositionBuffer = struct
   let default_z     = 0 ;;
   let default_text  = ' ' ;;
 
-  let size_for vec2 = vec2.Vec2.x * vec2.Vec2.y
+  let size_for vec2 = vec2.x * vec2.y
 
   type t = {
     text        : Bytes.t ;
@@ -383,7 +397,7 @@ module CompositionBuffer = struct
     bg_colors   : Term.Color.t array ;
     z_index     : int array ;
     len         : int ;
-    window      : Vec2.v2 ;
+    window      : v2 ;
   }
 
   let init vec2 =
@@ -422,9 +436,8 @@ module CompositionBuffer = struct
 
   let render_section (fg_color, bg_color) start stop t bvec =
     (* append lines one at a time starting from start offset, ending at stop offset *)
-    let open Vec2 in
     let next_line_len t start stop =
-      min (t.window.Vec2.x - (start mod t.window.Vec2.x)) (stop - start)
+      min (t.window.x - (start mod t.window.x)) (stop - start)
     in
     let append_newline_if_needed t position bvec =
       let is_end_of_line        = (position mod t.window.x) = 0 in
@@ -464,15 +477,14 @@ module CompositionBuffer = struct
       loop 0 bvec
 
   let vec2_to_offset t vec2 =
-    vec2.Vec2.y * t.window.Vec2.x + vec2.Vec2.x
+    vec2.y * t.window.x + vec2.x
 
   let offset_to_vec2 t offset =
-    Vec2.v2_of_xy (offset mod t.window.Vec2.x) (offset / t.window.Vec2.x)
+    v2_of_xy (offset mod t.window.x) (offset / t.window.x)
 
   (* TODO: define an Area type and use Area instead of vec2 *)
   (* TODO: strip the string from \r\n, do tab expansion *)
   let set_text vec2 s t =
-    let open Vec2 in
     let start = vec2_to_offset t vec2 in
     if start < t.len then
       let len = slen s in
@@ -494,19 +506,19 @@ module CompositionBuffer = struct
 
   (* TODO: delete this test once CompositionBuffer is enhanced with Area type based apis *)
   let test () =
-    let cb = init (Vec2.v2_of_xy 20 10) in ignore (
-      set_text (Vec2.v2_of_xy 0 0) "hello world" cb ;
-      set_text (Vec2.v2_of_xy 14 1) "foobar" cb ;
-      set_text (Vec2.v2_of_xy 0 2) "this is 20 char long" cb ;
-      set_text (Vec2.v2_of_xy 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
-      set_text (Vec2.v2_of_xy 0 9) "left" cb ;
-      set_text (Vec2.v2_of_xy 15 9) "right" cb ;
-      set_color (Vec2.v2_of_xy 4 0) 8 Term.Color.black Term.Color.white cb ;
-      set_color (Vec2.v2_of_xy 0 1) 2 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.v2_of_xy 16 2) 3 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.v2_of_xy 0 3) 20 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.v2_of_xy 12 4) 8 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.v2_of_xy 16 5) 8 Term.Color.white Term.Color.red cb ;
+    let cb = init (v2_of_xy 20 10) in ignore (
+      set_text (v2_of_xy 0 0) "hello world" cb ;
+      set_text (v2_of_xy 14 1) "foobar" cb ;
+      set_text (v2_of_xy 0 2) "this is 20 char long" cb ;
+      set_text (v2_of_xy 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
+      set_text (v2_of_xy 0 9) "left" cb ;
+      set_text (v2_of_xy 15 9) "right" cb ;
+      set_color (v2_of_xy 4 0) 8 Term.Color.black Term.Color.white cb ;
+      set_color (v2_of_xy 0 1) 2 Term.Color.white Term.Color.red cb ;
+      set_color (v2_of_xy 16 2) 3 Term.Color.white Term.Color.red cb ;
+      set_color (v2_of_xy 0 3) 20 Term.Color.white Term.Color.red cb ;
+      set_color (v2_of_xy 12 4) 8 Term.Color.white Term.Color.red cb ;
+      set_color (v2_of_xy 16 5) 8 Term.Color.white Term.Color.red cb ;
 
       Bytevector.init 1000 |> render cb
                            |> Bytevector.write Unix.stdout
@@ -517,8 +529,8 @@ end
 module Screen = struct
 
   type t = {
-    size                : Vec2.v2 ;
-    cursor_position     : Vec2.v2 ;
+    size                : v2 ;
+    cursor_position     : v2 ;
     render_buffer       : Bytevector.t ;
     composition_buffer  : CompositionBuffer.t ;
 
@@ -528,25 +540,24 @@ module Screen = struct
 
   let init vec2 = {
     size                = vec2 ;
-    cursor_position     = Vec2.zero ;
+    cursor_position     = v2_zero ;
     render_buffer       = Bytevector.init 0x1000 ;
     composition_buffer  = CompositionBuffer.init vec2 ;
   }
 
   let line_size_vec screen =
-    Vec2.v2_of_xy screen.size.Vec2.x 0
+    v2_of_xy screen.size.x 0
 
   let shift_left vec2 =
-    Vec2.v2_of_xy 0 vec2.Vec2.y
+    v2_of_xy 0 vec2.y
 
   let line_offset =
-    Vec2.v2_of_xy 0 1
+    v2_of_xy 0 1
 
   let line_up vec2 =
-    Vec2.sub vec2 line_offset
+    vec2 <-> line_offset
 
   let line_down vec2 =
-    let open Vec2 in
     vec2 <+> line_offset
 
   let last_line screen =
@@ -589,7 +600,6 @@ module Screen = struct
   (* TODO: is this really useful ? I probably might not need it *)
   let put_color_line fg bg vec2 screen =
     let start = shift_left vec2 in
-    let open Vec2 in
     let stop = start <+> (line_size_vec screen) in
     put_color_segment fg bg start stop screen
 
@@ -633,15 +643,13 @@ end
          representation. *)
 module Filebuffer = struct
 
-  open Vec2
-
   type numbering_mode = Absolute | CursorRelative
 
   type t = {
       buffer: string array ; (* the file data, line per line *)
       buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
 
-      cursor : Vec2.v2 ;      (* current position string array: y = index array (rows), x = string array (cols) *)
+      cursor : v2 ;      (* current position string array: y = index array (rows), x = string array (cols) *)
 
       view_start : int ;     (* index of first row in view *)
       view_diff  : int ;     (* additional rows in the view after the first row = total_rows_in_view - 1 *)
@@ -654,7 +662,7 @@ module Filebuffer = struct
     let buffer = Array.of_list lines in {
       buffer        = buffer ;
       buflen        = alen buffer ;
-      cursor        = Vec2.zero ;
+      cursor        = v2_zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
       line_number_m = CursorRelative ;
@@ -817,7 +825,7 @@ module Filebuffer = struct
   let move_file_start t = { x = t.cursor.x ; y = 0 } ;;
   let move_file_end t   = { x = t.cursor.x ; y = t.buflen - 1 } ;;
 
-  let cursor_relative_to_view t = Vec2.sub t.cursor { x = 0; y = t.view_start } ;;
+  let cursor_relative_to_view t = t.cursor <-> { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
@@ -864,7 +872,7 @@ module Ciseau = struct
   (* Represents an editor command *)
   type command = Noop
                | Stop
-               | Move of (Filebuffer.t -> Vec2.v2)
+               | Move of (Filebuffer.t -> v2)
                | View of (Filebuffer.t -> Filebuffer.t)
                | Pending of pending_command_atom
 
@@ -893,7 +901,7 @@ module Ciseau = struct
 
     file : string ;
     filebuffer : Filebuffer.t ;
-    view_offset : Vec2.v2 ;
+    view_offset : v2 ;
 
     header : string ;
     user_input : string ;
@@ -914,7 +922,7 @@ module Ciseau = struct
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let term_dim = Vec2.v2_of_xy term_cols term_rows in
+    let term_dim = v2_of_xy term_cols term_rows in
     let lines = slurp file in
     {
       screen          = Screen.init term_dim ;
@@ -924,7 +932,7 @@ module Ciseau = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
-      view_offset     = Vec2.v2_of_xy 5 1 ; (* +5 for line numbers, +1 for header *)
+      view_offset     = v2_of_xy 5 1 ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
@@ -1008,7 +1016,7 @@ module Ciseau = struct
   let show_header editor screen vec2 =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
-          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.v2_to_string)
+          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
       Screen.put_string screen s vec2 |> ignore ;
       Screen.put_color_line Term.Color.black Term.Color.yellow vec2 screen
@@ -1040,8 +1048,8 @@ module Ciseau = struct
     let y_offset = 1 in
     let print_line y = function
       | Line info ->  let y' = y + y_offset in
-                      let line_start = Vec2.v2_of_xy x_offset y' in
-                      let number_start = Vec2.v2_of_xy 0 y' in
+                      let line_start = v2_of_xy x_offset y' in
+                      let number_start = v2_of_xy 0 y' in
                       let line = truncate_string line_length info.text in
                       let number = Printf.sprintf "%4d" info.number in
                       Screen.put_string screen number number_start |> ignore ;
@@ -1057,8 +1065,8 @@ module Ciseau = struct
 
   let default_fill_screen y_start y_stop screen =
     for y = y_start to y_stop do
-      let start = Vec2.v2_of_xy 0 y in
-      let stop  = Vec2.v2_of_xy 1 y in
+      let start = v2_of_xy 0 y in
+      let stop  = v2_of_xy 1 y in
       Screen.put_string screen "~" start |> ignore ;
       Screen.put_color_segment Term.Color.blue Term.Color.black start stop screen
     done
@@ -1067,14 +1075,14 @@ module Ciseau = struct
    *        - the last line is not visible *)
   let refresh_screen editor =
     let screen' = Screen.reset editor.screen in (
-      show_header editor screen' Vec2.zero ;
+      show_header editor screen' v2_zero ;
       show_status editor screen' (Screen.last_last_line screen') ;
       show_user_input editor screen' (Screen.last_line screen') ;
       default_fill_screen 1 (editor.height - 3) screen' ;
-      print_file_buffer (editor.width - editor.view_offset.Vec2.x) editor.filebuffer screen' ;
+      print_file_buffer (editor.width - editor.view_offset.x) editor.filebuffer screen' ;
       let screen'' =
         screen' |> Screen.put_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
-                                                        |> Vec2.add editor.view_offset)
+                                                        |> (<+>) editor.view_offset)
                 |> Screen.render
       in { editor with screen = screen'' }
     )
