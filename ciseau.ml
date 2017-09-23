@@ -73,17 +73,20 @@ let slurp f =
 
 module Vec2 = struct
 
-  type t = {
+  type v2 = {
     x : int ;
     y : int ;
   }
 
   let zero = { x = 0; y = 0 }
 
-  let make x y = { x = x ; y = y } ;;
+  let v2_of_xy x y = { x = x ; y = y } ;;
   let add t1 t2 = { x = t1.x + t2.x ; y = t1.y + t2.y } ;;
   let sub t1 t2 = { x = t1.x - t2.x ; y = t1.y - t2.y } ;;
-  let to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
+  let v2_to_string t = (string_of_int t.y) ^ "," ^ (string_of_int t.x) ;;
+
+  let (<+>) t1 t2 = add t1 t2 ;;
+  let (<->) t1 t2 = sub t1 t2 ;;
 end
 
 
@@ -318,12 +321,12 @@ module Term = struct
     let switch_mainscreen     = start ^ "?47l" ;;
     let gohome                = start ^ "H" ;;
 
-    let cursor_offset = Vec2.make 1 1
+    let cursor_offset = Vec2.v2_of_xy 1 1
 
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
     let cursor_control_string vec2 =
       let open Vec2 in
-      let {x = x ; y = y} = Vec2.add cursor_offset vec2 in
+      let {x = x ; y = y} = cursor_offset <+> vec2 in
       start ^ (Printf.sprintf "%d;%dH" y x)
   end
 
@@ -380,7 +383,7 @@ module CompositionBuffer = struct
     bg_colors   : Term.Color.t array ;
     z_index     : int array ;
     len         : int ;
-    window      : Vec2.t ;
+    window      : Vec2.v2 ;
   }
 
   let init vec2 =
@@ -464,7 +467,7 @@ module CompositionBuffer = struct
     vec2.Vec2.y * t.window.Vec2.x + vec2.Vec2.x
 
   let offset_to_vec2 t offset =
-    Vec2.make (offset mod t.window.Vec2.x) (offset / t.window.Vec2.x)
+    Vec2.v2_of_xy (offset mod t.window.Vec2.x) (offset / t.window.Vec2.x)
 
   (* TODO: define an Area type and use Area instead of vec2 *)
   (* TODO: strip the string from \r\n, do tab expansion *)
@@ -491,19 +494,19 @@ module CompositionBuffer = struct
 
   (* TODO: delete this test once CompositionBuffer is enhanced with Area type based apis *)
   let test () =
-    let cb = init (Vec2.make 20 10) in ignore (
-      set_text (Vec2.make 0 0) "hello world" cb ;
-      set_text (Vec2.make 14 1) "foobar" cb ;
-      set_text (Vec2.make 0 2) "this is 20 char long" cb ;
-      set_text (Vec2.make 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
-      set_text (Vec2.make 0 9) "left" cb ;
-      set_text (Vec2.make 15 9) "right" cb ;
-      set_color (Vec2.make 4 0) 8 Term.Color.black Term.Color.white cb ;
-      set_color (Vec2.make 0 1) 2 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.make 16 2) 3 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.make 0 3) 20 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.make 12 4) 8 Term.Color.white Term.Color.red cb ;
-      set_color (Vec2.make 16 5) 8 Term.Color.white Term.Color.red cb ;
+    let cb = init (Vec2.v2_of_xy 20 10) in ignore (
+      set_text (Vec2.v2_of_xy 0 0) "hello world" cb ;
+      set_text (Vec2.v2_of_xy 14 1) "foobar" cb ;
+      set_text (Vec2.v2_of_xy 0 2) "this is 20 char long" cb ;
+      set_text (Vec2.v2_of_xy 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
+      set_text (Vec2.v2_of_xy 0 9) "left" cb ;
+      set_text (Vec2.v2_of_xy 15 9) "right" cb ;
+      set_color (Vec2.v2_of_xy 4 0) 8 Term.Color.black Term.Color.white cb ;
+      set_color (Vec2.v2_of_xy 0 1) 2 Term.Color.white Term.Color.red cb ;
+      set_color (Vec2.v2_of_xy 16 2) 3 Term.Color.white Term.Color.red cb ;
+      set_color (Vec2.v2_of_xy 0 3) 20 Term.Color.white Term.Color.red cb ;
+      set_color (Vec2.v2_of_xy 12 4) 8 Term.Color.white Term.Color.red cb ;
+      set_color (Vec2.v2_of_xy 16 5) 8 Term.Color.white Term.Color.red cb ;
 
       Bytevector.init 1000 |> render cb
                            |> Bytevector.write Unix.stdout
@@ -514,8 +517,8 @@ end
 module Screen = struct
 
   type t = {
-    size                : Vec2.t ;
-    cursor_position     : Vec2.t ;
+    size                : Vec2.v2 ;
+    cursor_position     : Vec2.v2 ;
     render_buffer       : Bytevector.t ;
     composition_buffer  : CompositionBuffer.t ;
 
@@ -531,19 +534,20 @@ module Screen = struct
   }
 
   let line_size_vec screen =
-    Vec2.make screen.size.Vec2.x 0
+    Vec2.v2_of_xy screen.size.Vec2.x 0
 
   let shift_left vec2 =
-    Vec2.make 0 vec2.Vec2.y
+    Vec2.v2_of_xy 0 vec2.Vec2.y
 
   let line_offset =
-    Vec2.make 0 1
+    Vec2.v2_of_xy 0 1
 
   let line_up vec2 =
     Vec2.sub vec2 line_offset
 
   let line_down vec2 =
-    Vec2.add vec2 line_offset
+    let open Vec2 in
+    vec2 <+> line_offset
 
   let last_line screen =
     screen.size |> line_up
@@ -585,7 +589,8 @@ module Screen = struct
   (* TODO: is this really useful ? I probably might not need it *)
   let put_color_line fg bg vec2 screen =
     let start = shift_left vec2 in
-    let stop = Vec2.add start (line_size_vec screen) in
+    let open Vec2 in
+    let stop = start <+> (line_size_vec screen) in
     put_color_segment fg bg start stop screen
 
 (* to set the cursor, I need to save the position and then add it after ! *)
@@ -636,7 +641,7 @@ module Filebuffer = struct
       buffer: string array ; (* the file data, line per line *)
       buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
 
-      cursor : Vec2.t ;      (* current position string array: y = index array (rows), x = string array (cols) *)
+      cursor : Vec2.v2 ;      (* current position string array: y = index array (rows), x = string array (cols) *)
 
       view_start : int ;     (* index of first row in view *)
       view_diff  : int ;     (* additional rows in the view after the first row = total_rows_in_view - 1 *)
@@ -859,7 +864,7 @@ module Ciseau = struct
   (* Represents an editor command *)
   type command = Noop
                | Stop
-               | Move of (Filebuffer.t -> Vec2.t)
+               | Move of (Filebuffer.t -> Vec2.v2)
                | View of (Filebuffer.t -> Filebuffer.t)
                | Pending of pending_command_atom
 
@@ -888,7 +893,7 @@ module Ciseau = struct
 
     file : string ;
     filebuffer : Filebuffer.t ;
-    view_offset : Vec2.t ;
+    view_offset : Vec2.v2 ;
 
     header : string ;
     user_input : string ;
@@ -909,7 +914,7 @@ module Ciseau = struct
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let term_dim = Vec2.make term_cols term_rows in
+    let term_dim = Vec2.v2_of_xy term_cols term_rows in
     let lines = slurp file in
     {
       screen          = Screen.init term_dim ;
@@ -919,7 +924,7 @@ module Ciseau = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
-      view_offset     = Vec2.make 5 1 ; (* +5 for line numbers, +1 for header *)
+      view_offset     = Vec2.v2_of_xy 5 1 ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
@@ -1003,7 +1008,7 @@ module Ciseau = struct
   let show_header editor screen vec2 =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
-          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.to_string)
+          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> Vec2.v2_to_string)
     in
       Screen.put_string screen s vec2 |> ignore ;
       Screen.put_color_line Term.Color.black Term.Color.yellow vec2 screen
@@ -1035,8 +1040,8 @@ module Ciseau = struct
     let y_offset = 1 in
     let print_line y = function
       | Line info ->  let y' = y + y_offset in
-                      let line_start = Vec2.make x_offset y' in
-                      let number_start = Vec2.make 0 y' in
+                      let line_start = Vec2.v2_of_xy x_offset y' in
+                      let number_start = Vec2.v2_of_xy 0 y' in
                       let line = truncate_string line_length info.text in
                       let number = Printf.sprintf "%4d" info.number in
                       Screen.put_string screen number number_start |> ignore ;
@@ -1052,8 +1057,8 @@ module Ciseau = struct
 
   let default_fill_screen y_start y_stop screen =
     for y = y_start to y_stop do
-      let start = Vec2.make 0 y in
-      let stop  = Vec2.make 1 y in
+      let start = Vec2.v2_of_xy 0 y in
+      let stop  = Vec2.v2_of_xy 1 y in
       Screen.put_string screen "~" start |> ignore ;
       Screen.put_color_segment Term.Color.blue Term.Color.black start stop screen
     done
