@@ -1,6 +1,5 @@
 (* TODOs:
- *  - refactor some of the new rendering code, especially the return values
- *  - handle line wrapping
+ *  - handle line wrapping: print_file_buffer should be able to handle long line and line wrapping by orrectly using the return value of Screen.put_string
  *
  *  - implement redo command
  *  - add selection of current word (with highlight), go to next selection, search function
@@ -569,11 +568,11 @@ module Screen = struct
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line.
    * Returns a position at the end of the string written, including wrapping *)
-  let put_string screen s vec2 =
+  let put_string start s screen =
     let cb = screen.composition_buffer  in
     let stride = cb.CompositionBuffer.window.x in
-    CompositionBuffer.set_text vec2 s cb ;
-    vec2  |> v2_to_offset stride
+    CompositionBuffer.set_text start s cb ;
+    start |> v2_to_offset stride
           |> (+) (slen s)
           |> offset_to_v2 stride
 
@@ -638,14 +637,14 @@ module Filebuffer = struct
   type numbering_mode = Absolute | CursorRelative
 
   type t = {
-      buffer: string array ; (* the file data, line per line *)
-      buflen: int ;          (* number of lines in the buffer, maybe less than buffer array length *)
+      buffer: string array ;  (* the file data, line per line *)
+      buflen: int ;           (* number of lines in the buffer, may be less than buffer array length *)
 
-      cursor : v2 ;      (* current position string array: y = index array (rows), x = string array (cols) *)
+      cursor : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
 
-      view_start : int ;     (* index of first row in view *)
-      view_diff  : int ;     (* additional rows in the view after the first row = total_rows_in_view - 1 *)
-                             (* index of last row in view is view_start + view_diff *)
+      view_start : int ;      (* index of first row in view *)
+      view_diff  : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
+                              (* index of last row in view is view_start + view_diff *)
 
       line_number_m : numbering_mode ;
   }
@@ -829,7 +828,7 @@ module Filebuffer = struct
   }
 
   type projected_view = {
-    lines         : line_info array ;
+    lines       : line_info array ;
   }
 
   let apply_view_frustrum t =
@@ -1010,7 +1009,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      Screen.put_string screen s vec2 |> ignore ;
+      Screen.put_string vec2 s screen |> ignore ;
       Screen.put_color_line Term.Color.black Term.Color.yellow vec2 screen
 
   let show_status editor screen vec2 =
@@ -1021,7 +1020,7 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.put_string screen s vec2' |> ignore ;
+      Screen.put_string vec2' s screen |> ignore ;
       Screen.put_color_line Term.Color.black Term.Color.white vec2 screen
 
   let show_user_input editor screen vec2 =
@@ -1029,24 +1028,19 @@ module Ciseau = struct
     let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
-      Screen.put_string screen s vec2' |> ignore
+      Screen.put_string vec2' s screen |> ignore
 
-  let print_file_buffer line_length filebuffer screen =
-    (* TODO: colors *)
-    (* TODO: derive padding, x_offset, y_offset better by simply using a nested screen *)
+  let print_file_buffer view_offset line_length filebuffer screen =
     let open Filebuffer in
-    let padding = 4 in
-    let x_offset = padding + 1 in
-    let y_offset = 1 in
     let print_line y = function
-      | Line info ->  let y' = y + y_offset in
-                      let line_start = v2_of_xy x_offset y' in
+      | Line info ->  let y' = y + view_offset.y in
                       let number_start = v2_of_xy 0 y' in
                       let line = truncate_string line_length info.text in
-                      let number = Printf.sprintf "%4d" info.number in
-                      Screen.put_string screen number number_start |> ignore ;
-                      Screen.put_string screen line line_start |> ignore ;
-                      Screen.put_color_line info.fg_color info.bg_color line_start screen ;
+                      let number = Printf.sprintf "%4d " info.number in
+                      let line_start = Screen.put_string number_start number screen in
+                      let line_end = Screen.put_string line_start line screen in
+                      (* TODO: move line_end to end of line for correctly highlightning current line *)
+                      Screen.put_color_segment info.fg_color info.bg_color line_start line_end screen ;
                       Screen.put_color_segment Term.Color.green Term.Color.black number_start line_start screen
                       (* TODO: handle line wrapping by passing down the returned
                        *       vec2 end point to the next line *)
@@ -1059,7 +1053,7 @@ module Ciseau = struct
     for y = y_start to y_stop do
       let start = v2_of_xy 0 y in
       let stop  = v2_of_xy 1 y in
-      Screen.put_string screen "~" start |> ignore ;
+      Screen.put_string start "~" screen |> ignore ;
       Screen.put_color_segment Term.Color.blue Term.Color.black start stop screen
     done
 
@@ -1071,7 +1065,7 @@ module Ciseau = struct
       show_status editor screen' (Screen.last_last_line screen') ;
       show_user_input editor screen' (Screen.last_line screen') ;
       default_fill_screen 1 (editor.height - 3) screen' ;
-      print_file_buffer (editor.width - editor.view_offset.x) editor.filebuffer screen' ;
+      print_file_buffer editor.view_offset (editor.width - editor.view_offset.x) editor.filebuffer screen' ;
       let screen'' =
         screen' |> Screen.put_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> (<+>) editor.view_offset)
