@@ -588,11 +588,22 @@ module Screen = struct
       CompositionBuffer.set_color start len fg bg cb
 
   (* Set the foreground and background colors of the line pointed to by the current position. *)
-  (* TODO: is this really useful ? I probably might not need it *)
+  (* TODO: migrate all callers to put_line and kill this *)
   let put_color_line fg bg vec2 screen =
     let start = shift_left vec2 in
     let stop = start <+> (line_size_vec screen) in
     put_color_segment fg bg start stop screen
+
+  let put_color_string fg bg start s screen =
+    let stop = put_string start s screen in
+    put_color_segment fg bg start stop screen ;
+    stop
+
+  let put_line fg bg start line screen =
+    let stop = put_string start line screen in
+    let line_stop = v2_of_xy screen.size.x stop.y in
+    put_color_segment fg bg start line_stop screen ;
+    stop
 
 (* to set the cursor, I need to save the position and then add it after ! *)
   let put_cursor vec2 screen = {
@@ -1009,6 +1020,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
+      (* TODO: use put_line instead *)
       Screen.put_string vec2 s screen |> ignore ;
       Screen.put_color_line Term.Color.black Term.Color.yellow vec2 screen
 
@@ -1020,6 +1032,7 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
+      (* TODO: use put_line instead *)
       Screen.put_string vec2' s screen |> ignore ;
       Screen.put_color_line Term.Color.black Term.Color.white vec2 screen
 
@@ -1037,13 +1050,10 @@ module Ciseau = struct
                       let number_start = v2_of_xy 0 y' in
                       let line = truncate_string line_length info.text in
                       let number = Printf.sprintf "%4d " info.number in
-                      let line_start = Screen.put_string number_start number screen in
-                      let line_end = Screen.put_string line_start line screen in
-                      (* TODO: move line_end to end of line for correctly highlightning current line *)
-                      Screen.put_color_segment info.fg_color info.bg_color line_start line_end screen ;
-                      Screen.put_color_segment Term.Color.green Term.Color.black number_start line_start screen
-                      (* TODO: handle line wrapping by passing down the returned
-                       *       vec2 end point to the next line *)
+                      let line_start =
+                        Screen.put_color_string Term.Color.green Term.Color.black number_start number screen in
+                      let line_end = Screen.put_line info.fg_color info.bg_color line_start line screen in
+                      ()
       | End       ->  ()
     in
     let { lines } = apply_view_frustrum filebuffer in
