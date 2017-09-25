@@ -543,6 +543,7 @@ module Screen = struct
   let line_offset =
     v2_of_xy 0 1
 
+  (* TODO; line up and line down should return an Option *)
   let line_up vec2 =
     vec2 <-> line_offset
 
@@ -555,6 +556,12 @@ module Screen = struct
   let last_last_line screen =
     screen.size |> line_up |> line_up
 
+  let stop_of screen start s =
+    let stride = screen.composition_buffer.CompositionBuffer.window.x in
+    start |> v2_to_offset stride
+          |> (+) (slen s)
+          |> offset_to_v2 stride
+
   (* TODO: turn into screen -> () once clear is deleted *)
   let reset screen =
     CompositionBuffer.clear screen.composition_buffer ;
@@ -566,15 +573,9 @@ module Screen = struct
     }
 
   (* Write a string to the screen starting at the given position.
-   * If the string is longer then the remaining space on the line, then wraps the string to the next line.
-   * Returns a position at the end of the string written, including wrapping *)
+   * If the string is longer then the remaining space on the line, then wraps the string to the next line. *)
   let put_string start s screen =
-    let cb = screen.composition_buffer  in
-    let stride = cb.CompositionBuffer.window.x in
-    CompositionBuffer.set_text start s cb ;
-    start |> v2_to_offset stride
-          |> (+) (slen s)
-          |> offset_to_v2 stride
+    CompositionBuffer.set_text start s screen.composition_buffer
 
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
@@ -595,17 +596,20 @@ module Screen = struct
     put_color_segment fg bg start stop screen
 
   let put_color_string fg bg start s screen =
-    let stop = put_string start s screen in
-    put_color_segment fg bg start stop screen ;
-    stop
+    let stop = stop_of screen start s
+    in
+      put_string start s screen ;
+      put_color_segment fg bg start stop screen ;
+      stop
 
   let put_line fg bg start line screen =
-    let stop = put_string start line screen in
-    let line_stop = v2_of_xy screen.size.x stop.y in
-    put_color_segment fg bg start line_stop screen ;
-    stop
+    let stop = stop_of screen start line in
+    let line_stop = v2_of_xy screen.size.x stop.y
+    in
+      put_string start line screen ;
+      put_color_segment fg bg start line_stop screen ;
+      line_stop
 
-(* to set the cursor, I need to save the position and then add it after ! *)
   let put_cursor vec2 screen = {
     size                = screen.size ;
     cursor_position     = vec2 ;
@@ -1020,9 +1024,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      (* TODO: use put_line instead *)
-      Screen.put_string vec2 s screen |> ignore ;
-      Screen.put_color_line Term.Color.black Term.Color.yellow vec2 screen
+      Screen.put_line Term.Color.black Term.Color.yellow vec2 s screen |> ignore
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
@@ -1032,16 +1034,14 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      (* TODO: use put_line instead *)
-      Screen.put_string vec2' s screen |> ignore ;
-      Screen.put_color_line Term.Color.black Term.Color.white vec2 screen
+      Screen.put_line Term.Color.black Term.Color.white vec2' s screen |> ignore
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
-      Screen.put_string vec2' s screen |> ignore
+      Screen.put_line Term.Color.white Term.Color.black vec2' s screen |> ignore
 
   let print_file_buffer view_offset line_length filebuffer screen =
     let open Filebuffer in
@@ -1061,14 +1061,12 @@ module Ciseau = struct
 
   let default_fill_screen y_start y_stop screen =
     for y = y_start to y_stop do
+      (* TODO: use return value of put_color_string for driving the iteration *)
       let start = v2_of_xy 0 y in
-      let stop  = v2_of_xy 1 y in
-      Screen.put_string start "~" screen |> ignore ;
-      Screen.put_color_segment Term.Color.blue Term.Color.black start stop screen
+      Screen.put_color_string Term.Color.blue Term.Color.black start "~" screen |> ignore
     done
 
-  (* BUGS:  - put_color_line and put_string are offsetted by 1, except on the first line !
-   *        - the last line is not visible *)
+  (* BUGS:  - last_line and last_last_line have +1 offset ! *)
   let refresh_screen editor =
     let screen' = Screen.reset editor.screen in (
       show_header editor screen' v2_zero ;
