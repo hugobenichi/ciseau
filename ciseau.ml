@@ -6,6 +6,8 @@
  *  - finish implementing terminal save and restore by restoring cursor position
  *)
 
+let some x = Some x
+
 let alen = Array.length ;;
 let blen = Bytes.length ;;
 let slen = String.length ;;
@@ -562,6 +564,11 @@ module Screen = struct
           |> (+) (slen s)
           |> offset_to_v2 stride
 
+  let next_line screen vec2 =
+    if vec2.y < screen.size.y
+    then v2_of_xy 0 (vec2.y + 1) |> some
+    else None
+
   (* TODO: turn into screen -> () once clear is deleted *)
   let reset screen =
     CompositionBuffer.clear screen.composition_buffer ;
@@ -1044,6 +1051,7 @@ module Ciseau = struct
       Screen.put_line Term.Color.white Term.Color.black vec2' s screen |> ignore
 
   let print_file_buffer view_offset line_length filebuffer screen =
+    (* TODO: pass view_offset inside nested screen *)
     let open Filebuffer in
     let print_line y = function
       | Line info ->  let y' = y + view_offset.y in
@@ -1059,20 +1067,22 @@ module Ciseau = struct
     let { lines } = apply_view_frustrum filebuffer in
     Array.iteri print_line lines
 
-  let default_fill_screen y_start y_stop screen =
-    for y = y_start to y_stop do
-      (* TODO: use return value of put_color_string for driving the iteration *)
-      let start = v2_of_xy 0 y in
-      Screen.put_color_string Term.Color.blue Term.Color.black start "~" screen |> ignore
-    done
+  let default_fill_screen screen =
+    let rec loop = function
+      | Some line ->  Screen.put_color_string Term.Color.blue Term.Color.black line "~" screen
+                        |> Screen.next_line screen
+                        |> loop
+      | None      ->  ()
+    in
+      v2_zero |> some |> loop
 
   (* BUGS:  - last_line and last_last_line have +1 offset ! *)
   let refresh_screen editor =
     let screen' = Screen.reset editor.screen in (
+      default_fill_screen screen' ;
       show_header editor screen' v2_zero ;
       show_status editor screen' (Screen.last_last_line screen') ;
       show_user_input editor screen' (Screen.last_line screen') ;
-      default_fill_screen 1 (editor.height - 3) screen' ;
       print_file_buffer editor.view_offset (editor.width - editor.view_offset.x) editor.filebuffer screen' ;
       let screen'' =
         screen' |> Screen.put_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
