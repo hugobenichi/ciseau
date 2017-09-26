@@ -842,12 +842,14 @@ module Filebuffer = struct
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
-  type line_info = End | Line of {
+  type line_struct = {
     text        : string ;
     number      : int ;
     fg_color    : Term.Color.t ;
     bg_color    : Term.Color.t ;
   }
+
+  type line_info = End | Line of line_struct (* TODO: replace with Option *)
 
   type projected_view = {
     lines       : line_info array ;
@@ -1050,22 +1052,33 @@ module Ciseau = struct
     in
       Screen.put_line Term.Color.white Term.Color.black vec2' s screen |> ignore
 
-  let print_file_buffer view_offset line_length filebuffer screen =
-    (* TODO: pass view_offset inside nested screen *)
+  let print_file_buffer max_line filebuffer screen =
+    (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
+    let y_offset = 1 in
+    let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let print_line y = function
-      | Line info ->  let y' = y + view_offset.y in
-                      let number_start = v2_of_xy 0 y' in
-                      let line = truncate_string line_length info.text in
-                      let number = Printf.sprintf "%4d " info.number in
-                      let line_start =
-                        Screen.put_color_string Term.Color.green Term.Color.black number_start number screen in
-                      let line_end = Screen.put_line info.fg_color info.bg_color line_start line screen in
-                      ()
-      | End       ->  ()
-    in
     let { lines } = apply_view_frustrum filebuffer in
-    Array.iteri print_line lines
+    let print_line start { text ; number ; fg_color ; bg_color ; } =
+      let num = Printf.sprintf "%4d " number in
+      let next = Screen.put_color_string Term.Color.green Term.Color.black start num screen in
+      let stop = Screen.put_line fg_color bg_color next text screen in
+      Screen.next_line screen stop
+    in
+    let rec loop i line =
+      if i < max_line then
+        match (lines.(i), line) with
+        | (Line info, Some start) ->  if start.y < stop_offset then
+                                        let next_line = print_line start info in
+                                        loop (i + 1) next_line
+        | _ -> ()
+    in
+      loop 0 (v2_of_xy 0 y_offset |> some)
+    (* TODO: after correct screen boundary is done, and apply_view_frustrum returns a list, simplify to:
+    let rec loop lines line_start =
+        match (lines, next_line_start) with
+        | (line_info :: next_lines, Some line_start) -> print_line line_start line_info |> loop next_lines
+        | _ -> ()
+    *)
 
   let default_fill_screen screen =
     let rec loop = function
@@ -1083,7 +1096,7 @@ module Ciseau = struct
       show_header editor screen' v2_zero ;
       show_status editor screen' (Screen.last_last_line screen') ;
       show_user_input editor screen' (Screen.last_line screen') ;
-      print_file_buffer editor.view_offset (editor.width - editor.view_offset.x) editor.filebuffer screen' ;
+      print_file_buffer (editor.height - 3) editor.filebuffer screen' ;
       let screen'' =
         screen' |> Screen.put_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
                                                         |> (<+>) editor.view_offset)
