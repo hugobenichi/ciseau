@@ -1,9 +1,10 @@
-(* TODOs:
- *  - handle line wrapping: print_file_buffer should be able to handle long line and line wrapping by orrectly using the return value of Screen.put_string
- *
- *  - implement redo command
- *  - add selection of current word (with highlight), go to next selection, search function
- *  - finish implementing terminal save and restore by restoring cursor position
+(* next TODOs:
+ *  - do tab expansion and \r\n stripping
+ *  - cleanup: remove all the view management code from FileBuffer, this should be done somewhere else
+ *  - implement nested screens and bounded screens
+ *  - do screens + filebuffer swapping (first several screens into the same filebuffer)
+ *      data layout would be file_view = struct { screen (* for drawing *) ; filebuffer (* the source *) }
+ *      if several screen mutates the same filebuffer content, they need either a handle *)
  *)
 
 let some x = Some x
@@ -842,36 +843,35 @@ module Filebuffer = struct
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
-  type line_struct = {
+  type line_info = {
     text        : string ;
     number      : int ;
     fg_color    : Term.Color.t ;
     bg_color    : Term.Color.t ;
   }
 
-  type line_info = End | Line of line_struct (* TODO: replace with Option *)
-
   type projected_view = {
-    lines       : line_info array ;
+    lines       : line_info list ;
   }
 
-  let apply_view_frustrum t =
+  let apply_view_frustrum max_line t =
+    let view_size = min (t.view_diff + 1) max_line in
+    let stop = min t.buflen (t.view_start + view_size) in
     let offset = match t.line_number_m with
     | Absolute        -> 1 ;
     | CursorRelative  -> -t.cursor.y
-    in let get_line idx =
-      let i = idx + t.view_start in
+    in let rec get_line i =
       let bg = if (i = t.cursor.y) then (Term.Color.Gray 4) else Term.Color.black in
-      if i < t.buflen
-      then Line {
+      if i < stop
+      then {
         text        = t.buffer.(i) ;
         number      = i + offset ;
         fg_color    = Term.Color.white ;
         bg_color    = bg ;
-      }
-      else End
+      } :: get_line (i + 1)
+      else []
     in {
-      lines         = Array.init (t.view_diff + 1) get_line ;
+      lines         = get_line t.view_start ;
     }
 
 end
@@ -1057,28 +1057,31 @@ module Ciseau = struct
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let { lines } = apply_view_frustrum filebuffer in
     let print_line start { text ; number ; fg_color ; bg_color ; } =
       let num = Printf.sprintf "%4d " number in
       let next = Screen.put_color_string Term.Color.green Term.Color.black start num screen in
       let stop = Screen.put_line fg_color bg_color next text screen in
       Screen.next_line screen stop
     in
-    let rec loop i line =
-      if i < max_line then
-        match (lines.(i), line) with
-        | (Line info, Some start) ->  if start.y < stop_offset then
-                                        let next_line = print_line start info in
-                                        loop (i + 1) next_line
-        | _ -> ()
-    in
-      loop 0 (v2_of_xy 0 y_offset |> some)
-    (* TODO: after correct screen boundary is done, and apply_view_frustrum returns a list, simplify to:
     let rec loop lines line_start =
-        match (lines, next_line_start) with
-        | (line_info :: next_lines, Some line_start) -> print_line line_start line_info |> loop next_lines
-        | _ -> ()
-    *)
+    match (lines, line_start) with
+    | (info :: rest_lines, Some start) ->
+      (* BUG: this stop_offset guard is still necessary because the filebuffer
+       * has no way currently to tell which lines are going to overflow.
+       *  -> this causes problems when the cursors are in the last lines of the pseudo view
+       *     inside the filebuffer. For instance if cursor is on last line and one previous line overflow,
+       *     the cursor should be hidden.
+       *     -> the conclusion is that the Filebuffer (or the ting aware of cursor into the file and doing
+       *        view adjust) needs to know about which line overflows.
+       *        -> the view could be actually calculated here and passed back to the filebuffer.
+       *           this would require removing all the view adjust code from the filebuffer.
+       *)
+      if start.y < stop_offset
+      then print_line start info |> loop rest_lines
+    | _ -> ()
+    in
+      let { lines } = apply_view_frustrum max_line filebuffer in
+      loop lines (v2_of_xy 0 y_offset |> some)
 
   let default_fill_screen screen =
     let rec loop = function
