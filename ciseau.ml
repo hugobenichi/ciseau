@@ -4,7 +4,7 @@
  *  - implement nested screens and bounded screens
  *  - do screens + filebuffer swapping (first several screens into the same filebuffer)
  *      data layout would be file_view = struct { screen (* for drawing *) ; filebuffer (* the source *) }
- *      if several screen mutates the same filebuffer content, they need either a handle *)
+ *      if several screen mutates the same filebuffer content, they need either a handle
  *)
 
 let some x = Some x
@@ -474,6 +474,16 @@ module CompositionBuffer = struct
     in
       loop 0 bvec
 
+  (* merge with previous function *)
+  let full_render cursor composition_buffer render_buffer =
+    render_buffer |> Bytevector.reset
+                  |> Bytevector.append Term.Control.cursor_hide
+                  |> Bytevector.append Term.Control.gohome
+                  |> render composition_buffer
+                  |> Bytevector.append (Term.Control.cursor_control_string cursor)
+                  |> Bytevector.append Term.Control.cursor_show
+                  |> Bytevector.write Unix.stdout
+
   (* TODO: define an Area type and use Area instead of vec2 *)
   (* TODO: strip the string from \r\n, do tab expansion *)
   let set_text vec2 s t =
@@ -522,19 +532,20 @@ module Screen = struct
 
   type t = {
     size                : v2 ;
-    cursor_position     : v2 ;
-    render_buffer       : Bytevector.t ;
+    screen_offset       : v2 ;
+    cursor_position     : v2 ;                    (* Note: cursor_position is not used now, but will be later on *)
     composition_buffer  : CompositionBuffer.t ;
 
-    (* In the future, this will have several composition_buffers linked to different file buffer.
-     * Composition buffer overlap, tiling and rendering will be managed here *)
+    (* In the future, this will may have subscreens nested to this screen, sharing the same composition buffer.
+     * Overlap, tiling and rendering will be managed by using the offset, size, and z value per screen,
+     * using the z_buffer of the backing composition buffer *)
   }
 
-  let init vec2 = {
-    size                = vec2 ;
+  let init cb offset size = {
+    size                = size ;
+    screen_offset       = offset ;
     cursor_position     = v2_zero ;
-    render_buffer       = Bytevector.init 0x1000 ;
-    composition_buffer  = CompositionBuffer.init vec2 ;
+    composition_buffer  = cb ;
   }
 
   let line_size_vec screen =
@@ -546,7 +557,7 @@ module Screen = struct
   let line_offset =
     v2_of_xy 0 1
 
-  (* TODO; line up and line down should return an Option *)
+  (* TODO; line up and line down should return an Option to indicate if the result is inside the screen *)
   let line_up vec2 =
     vec2 <-> line_offset
 
@@ -569,16 +580,6 @@ module Screen = struct
     if vec2.y < screen.size.y
     then v2_of_xy 0 (vec2.y + 1) |> some
     else None
-
-  (* TODO: turn into screen -> () once clear is deleted *)
-  let reset screen =
-    CompositionBuffer.clear screen.composition_buffer ;
-    {
-      size                = screen.size ;
-      cursor_position     = screen.cursor_position ;
-      render_buffer       = Bytevector.reset screen.render_buffer ;
-      composition_buffer  = screen.composition_buffer ;
-    }
 
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line. *)
@@ -617,27 +618,6 @@ module Screen = struct
       put_string start line screen ;
       put_color_segment fg bg start line_stop screen ;
       line_stop
-
-  let put_cursor vec2 screen = {
-    size                = screen.size ;
-    cursor_position     = vec2 ;
-    render_buffer       = screen.render_buffer ;
-    composition_buffer  = screen.composition_buffer ;
-  }
-
-  (* Render the screen to the backing terminal device *)
-  let render screen =
-    let buffer' =
-      screen.render_buffer  |> Bytevector.reset
-                            |> Bytevector.append Term.Control.cursor_hide
-                            |> Bytevector.append Term.Control.gohome
-                            |> CompositionBuffer.render screen.composition_buffer
-                            |> Bytevector.append (Term.Control.cursor_control_string screen.cursor_position)
-                            |> Bytevector.append Term.Control.cursor_show
-    in
-      Bytevector.write Unix.stdout buffer' ;
-      { screen with render_buffer = buffer' }
-
 end
 
 
@@ -932,15 +912,19 @@ module Ciseau = struct
     timestamp           : float ;
     last_input_duration : float ;
     last_cycle_duration : float ;
+
+    render_buffer       : Bytevector.t ;
+    composition_buffer  : CompositionBuffer.t ;
   }
 
 
   let init file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
     let term_dim = v2_of_xy term_cols term_rows in
+    let composition_buffer = CompositionBuffer.init term_dim in
     let lines = slurp file in
     {
-      screen          = Screen.init term_dim ;
+      screen          = Screen.init composition_buffer v2_zero term_dim ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
@@ -960,6 +944,9 @@ module Ciseau = struct
       timestamp           = Sys.time() ;
       last_input_duration = 0. ;
       last_cycle_duration = 0. ;
+
+      render_buffer       = Bytevector.init 0x1000 ;
+      composition_buffer  = composition_buffer ;
     }
 
   let queue_pending_command editor = function
@@ -1094,17 +1081,19 @@ module Ciseau = struct
 
   (* BUGS:  - last_line and last_last_line have +1 offset ! *)
   let refresh_screen editor =
-    let screen' = Screen.reset editor.screen in (
-      default_fill_screen screen' ;
-      show_header editor screen' v2_zero ;
-      show_status editor screen' (Screen.last_last_line screen') ;
-      show_user_input editor screen' (Screen.last_line screen') ;
-      print_file_buffer (editor.height - 3) editor.filebuffer screen' ;
-      let screen'' =
-        screen' |> Screen.put_cursor (editor.filebuffer |> Filebuffer.cursor_relative_to_view
-                                                        |> (<+>) editor.view_offset)
-                |> Screen.render
-      in { editor with screen = screen'' }
+    (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
+    let cursor_position =
+      (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> (<+>) editor.view_offset)
+    in
+    let screen = editor.screen in (
+      CompositionBuffer.clear editor.composition_buffer ;
+      default_fill_screen screen ;
+      show_header editor screen v2_zero ;
+      show_status editor screen (Screen.last_last_line screen) ;
+      show_user_input editor screen (Screen.last_line screen) ;
+      print_file_buffer (editor.height - 3) editor.filebuffer screen ;
+      CompositionBuffer.full_render cursor_position editor.composition_buffer editor.render_buffer ;
+      editor
     )
 
 
