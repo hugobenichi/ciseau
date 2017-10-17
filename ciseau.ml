@@ -1,6 +1,6 @@
 (* next TODOs:
  *  - do tab expansion and \r\n stripping
- *  - cleanup: remove all the view management code from FileBuffer, this should be done somewhere else
+ *  - cleanup: remove all the view management code from filebuffer, this should be done somewhere else
  *  - implement nested screens and bounded screens
  *  - do screens + filebuffer swapping (first several screens into the same filebuffer)
  *      data layout would be file_view = struct { screen (* for drawing *) ; filebuffer (* the source *) }
@@ -621,10 +621,12 @@ module Filebuffer = struct
 
       cursor : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
 
+  (* TODO: move to FileView *)
       view_start : int ;      (* index of first row in view *)
       view_diff  : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                               (* index of last row in view is view_start + view_diff *)
 
+  (* TODO: move to FileView *)
       line_number_m : numbering_mode ;
   }
 
@@ -832,6 +834,31 @@ module Filebuffer = struct
 
 end
 
+
+(* FileView wraps a Filebuffer and represents an open view into a file
+ * it manages drawing the lines of the file into the backing composition buffer
+ * and handles line overwrapping, line numbering, view centering *)
+module FileView = struct
+
+  type t = {
+    background:   Screen.t ;  (* Area given for displaying the file content, including header and line numbers *)
+    text_area:    Screen.t ;  (* subarea for drawing the text *)
+    cursor:       v2 ;        (* position of the cursor relative to that screen coordinates system *)
+
+    composition:  CompositionBuffer.t ;
+    file_buffer:  Filebuffer.t ;
+  }
+
+  (* TODOs: - move show_header and print_file_buffer here as is
+   *        - remove all view offset from main Editor struct
+   *        - redirect View commands to FileView
+   *        - take into account overwrapping lines for managing diff between FileView and FileBuffer cursors
+   *)
+
+  (* How to deal with different FileViews sharing the sale Filebuffer ?
+   *  whenever a view changes the Filebuffer, all other Fileviews needs to be updated with the new Filebuffer *)
+
+end
 
 module Ciseau = struct
 
