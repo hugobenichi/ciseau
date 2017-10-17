@@ -386,6 +386,8 @@ end
 
 
 module CompositionBuffer = struct
+  (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
+   *       and use them for set_text and set_color *)
 
   module Default = struct
     let fg    = Term.Color.white ;;
@@ -444,6 +446,17 @@ module CompositionBuffer = struct
        bvec
             |> loop start stop
 
+    let render_all_sections t bvec =
+      let rec loop start bvec =
+        if start < t.len
+        then
+          let stop = next_contiguous_color_section t start in
+          bvec |> render_section (colors_at t start) start stop t
+               |> loop stop
+        else
+          bvec
+      in
+        loop 0 bvec
   end
 
   let init vec2 =
@@ -463,31 +476,16 @@ module CompositionBuffer = struct
     Array.fill t.bg_colors 0 t.len Default.bg ;
     Array.fill t.z_index 0 t.len Default.z
 
-  let render t bvec =
-    let open Priv in
-    let rec loop start bvec =
-      if start < t.len
-      then
-        let stop = next_contiguous_color_section t start in
-        bvec |> render_section (colors_at t start) start stop t
-             |> loop stop
-      else
-        bvec
-    in
-      loop 0 bvec
-
-  (* merge with previous function *)
-  let full_render cursor composition_buffer render_buffer =
+  let render cursor composition_buffer render_buffer =
     render_buffer |> Bytevector.reset
                   |> Bytevector.append Term.Control.cursor_hide
                   |> Bytevector.append Term.Control.gohome
-                  |> render composition_buffer
+                  |> Priv.render_all_sections composition_buffer
                   |> Bytevector.append (Term.Control.cursor_control_string cursor)
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
-  (* TODO: define an Area type and use Area instead of vec2 *)
-  (* TODO: strip the string from \r\n, do tab expansion *)
+  (* TODO: strip \r\n, do tab to space expansion *)
   let set_text vec2 s t =
     let start = v2_to_offset t.window.x vec2 in
     if start < t.len then
@@ -496,8 +494,6 @@ module CompositionBuffer = struct
       let stoplen = min len maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
-  (* TODO: define an Area type and use Area instead of vec2 + len *)
-  (* TODO: consider changing this api to take start : vec2 + stop : vec2 as a first step towards teh Area type *)
   let set_color vec2 len fg bg t =
     let start = v2_to_offset t.window.x vec2 in
     if start < t.len then
@@ -505,28 +501,6 @@ module CompositionBuffer = struct
       let stoplen = min len maxlen in
       Array.fill t.fg_colors start stoplen fg ;
       Array.fill t.bg_colors start stoplen bg
-
-  (* TODO: define types for bounding box, area and wrapping mode, blending mode for color, ... *)
-
-  (* TODO: delete this test once CompositionBuffer is enhanced with Area type based apis *)
-  let test () =
-    let cb = init (v2_of_xy 20 10) in ignore (
-      set_text (v2_of_xy 0 0) "hello world" cb ;
-      set_text (v2_of_xy 14 1) "foobar" cb ;
-      set_text (v2_of_xy 0 2) "this is 20 char long" cb ;
-      set_text (v2_of_xy 3 3) "hello world blablabalblabalbalbalablalabalbal" cb ;
-      set_text (v2_of_xy 0 9) "left" cb ;
-      set_text (v2_of_xy 15 9) "right" cb ;
-      set_color (v2_of_xy 4 0) 8 Term.Color.black Term.Color.white cb ;
-      set_color (v2_of_xy 0 1) 2 Term.Color.white Term.Color.red cb ;
-      set_color (v2_of_xy 16 2) 3 Term.Color.white Term.Color.red cb ;
-      set_color (v2_of_xy 0 3) 20 Term.Color.white Term.Color.red cb ;
-      set_color (v2_of_xy 12 4) 8 Term.Color.white Term.Color.red cb ;
-      set_color (v2_of_xy 16 5) 8 Term.Color.white Term.Color.red cb ;
-
-      Bytevector.init 1000 |> render cb
-                           |> Bytevector.write Unix.stdout
-    )
 end
 
 
@@ -1094,7 +1068,7 @@ module Ciseau = struct
       show_status editor screen (Screen.last_last_line screen) ;
       show_user_input editor screen (Screen.last_line screen) ;
       print_file_buffer (editor.height - 3) editor.filebuffer screen ;
-      CompositionBuffer.full_render cursor_position editor.composition_buffer editor.render_buffer ;
+      CompositionBuffer.render cursor_position editor.composition_buffer editor.render_buffer ;
       editor
     )
 
