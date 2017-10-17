@@ -122,6 +122,7 @@ module Keys = struct
                   | Alt_j
                   | Alt_k
                   | Alt_l
+                  | Space
                   | ArrowUp
                   | ArrowDown
                   | ArrowRight
@@ -167,6 +168,7 @@ module Keys = struct
   code_to_key_table.(11)  <- make_key Ctrl_k      "Ctrl_k"        11 ;;
   code_to_key_table.(21)  <- make_key Ctrl_u      "Ctrl_u"        21 ;;
   code_to_key_table.(26)  <- make_key Ctrl_z      "Ctrl_z"        26 ;;
+  code_to_key_table.(32)  <- make_key Space       "Space"         32 ;;
   code_to_key_table.(65)  <- make_key ArrowUp     "ArrowUp"       65 ;;
   code_to_key_table.(66)  <- make_key ArrowDown   "ArrowDown"     66 ;;
   code_to_key_table.(67)  <- make_key ArrowRight  "ArrowRight"    67 ;;
@@ -1109,6 +1111,7 @@ module Ciseau = struct
     | Keys.Alt_j        -> Move Filebuffer.move_file_end
     | Keys.Alt_l        -> Move Filebuffer.move_line_end
     | Keys.Alt_h        -> Move Filebuffer.move_line_start
+    | Keys.Space        -> View Filebuffer.recenter_view
     | Keys.ArrowUp      -> Move Filebuffer.move_cursor_up
     | Keys.ArrowDown    -> Move Filebuffer.move_cursor_down
     | Keys.ArrowRight   -> Move Filebuffer.move_cursor_right
