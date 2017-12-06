@@ -239,7 +239,7 @@ module Bytevector = struct
 
   end
 
-  let init len = {
+  let init_bytevector len = {
     bytes = Bytes.make len (Char.chr 0) ;
     len   = 0 ;
   }
@@ -517,7 +517,7 @@ module Screen = struct
      * using the z_buffer of the backing composition buffer *)
   }
 
-  let init cb offset size = {
+  let init_screen cb offset size = {
     size                = size ;
     screen_offset       = offset ;
     cursor_position     = v2_zero ;
@@ -630,7 +630,7 @@ module Filebuffer = struct
       line_number_m : numbering_mode ;
   }
 
-  let init lines view_h =
+  let init_filebuffer lines view_h =
     let buffer = Array.of_list lines in {
       buffer        = buffer ;
       buflen        = alen buffer ;
@@ -921,19 +921,19 @@ module Ciseau = struct
   }
 
 
-  let init file : editor =
+  let init_editor file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
     let term_dim = v2_of_xy term_cols term_rows in
     let composition_buffer = CompositionBuffer.init term_dim in
     let lines = slurp file in
     {
-      screen          = Screen.init composition_buffer v2_zero term_dim ;
+      screen          = Screen.init_screen composition_buffer v2_zero term_dim ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
 
       file            = file ;
-      filebuffer      = Filebuffer.init lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
+      filebuffer      = Filebuffer.init_filebuffer lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
       view_offset     = v2_of_xy 5 1 ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
@@ -948,7 +948,7 @@ module Ciseau = struct
       last_input_duration = 0. ;
       last_cycle_duration = 0. ;
 
-      render_buffer       = Bytevector.init 0x1000 ;
+      render_buffer       = Bytevector.init_bytevector 0x1000 ;
       composition_buffer  = composition_buffer ;
     }
 
@@ -1171,7 +1171,7 @@ module Ciseau = struct
 
   let main () =
     (if alen Sys.argv > 1 then Sys.argv.(1) else __FILE__)
-      |> init
+      |> init_editor
       |> run_loop
       |> Term.do_with_raw_mode
 
