@@ -7,6 +7,7 @@
  *      if several screen mutates the same filebuffer content, they need either a handle
  *)
 
+
 let some x = Some x
 
 let alen = Array.length ;;
@@ -64,6 +65,57 @@ let slurp f =
   let action () = loop [] ch in
   let cleanup () = close_in ch in
   try_finally action cleanup
+
+
+
+
+(*
+ *  -> function that takes lines as string and break them down in atoms
+ *  atoms are just string pieces
+ *    -> that for defining the bottom atom layer
+ *    -> that's just a tokenizer basically
+ *  -> function that takes a list of atoms and returns another list of atoms
+ *    -> that's for definning the layers above
+ *
+ *
+ *  block operations are insert, swap, move, find next, find previous
+ *    so given a pointer to a block, I must be able to easily find the next one
+ *    a block has left and right limits to
+ *)
+
+module Atom = struct
+  type atom_type = Text | Digit | Spacing | Math | Structure | Control | Other
+
+  type atom = Word of string | End_Of_Line | Space | Tab
+
+  let rec generic_atom_parser (line : string) : atom list =
+    if slen line = 0 then []
+    else
+      []
+      (* traverse the line maintaining an index, a type and an index since last type
+       * inspect the next char and find the type
+       *  if type is same continue
+       *  if type is different, then push a new atom of the correct type, then reset the thing to 0
+       *
+       *
+       * TODO: I need a list of basic character types: digit, 3
+       *)
+
+end
+
+
+module AtomList = struct
+  open Atom
+
+  type t = {
+    atoms : atom list;
+  }
+
+  let init_atomlocklist () = {
+    atoms = [];
+  }
+end
+
 
 
 module Vec2 = struct
