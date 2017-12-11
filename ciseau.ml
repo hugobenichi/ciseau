@@ -222,7 +222,10 @@ module Atom = struct
   }
 
   let atom_to_string a =
-    Printf.sprintf "%s:'%s'" (atom_kind_to_string_padded a.kind) (String.sub a.line a.start (a.stop - a.start))
+    String.sub a.line a.start (a.stop - a.start)
+
+  let atom_to_pretty_string a =
+    Printf.sprintf "%s:'%s'" (atom_kind_to_string_padded a.kind) (atom_to_string a)
 
   (* TODO: support utf8 as Text *)
   (* TODO: define grouping more properly. For instance Structure chars should never group *)
@@ -251,7 +254,7 @@ module Atom = struct
     (* "let {x ; y } = cursor_offset <+> vec2 in" *)
     "let cursor_hide           = start ^ \"?25l\" ;;"
     |> generic_atom_parser
-    |> List.iter (atom_to_string >> println)
+    |> List.iter (atom_to_pretty_string >> println)
 
 end
 
@@ -820,14 +823,15 @@ module Filebuffer = struct
   type numbering_mode = Absolute | CursorRelative
 
   type t = {
-      buffer: string array ;  (* the file data, line per line *)
-      buflen: int ;           (* number of lines in the buffer, may be less than buffer array length *)
+      buffer      : string array ;  (* the file data, line per line *)
+      atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
+      buflen      : int ;           (* number of lines in the buffer, may be less than buffer array length *)
 
-      cursor : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
+      cursor      : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
 
   (* TODO: move to FileView *)
-      view_start : int ;      (* index of first row in view *)
-      view_diff  : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
+      view_start  : int ;      (* index of first row in view *)
+      view_diff   : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                               (* index of last row in view is view_start + view_diff *)
 
   (* TODO: move to FileView *)
@@ -835,8 +839,10 @@ module Filebuffer = struct
   }
 
   let init_filebuffer lines view_h =
-    let buffer = Array.of_list lines in {
+    let buffer = Array.of_list lines in
+    let atoms = Array.map Atom.generic_atom_parser buffer in {
       buffer        = buffer ;
+      atom_buffer   = atoms ;
       buflen        = alen buffer ;
       cursor        = v2_zero ;
       view_start    = 0 ;
@@ -1005,16 +1011,36 @@ module Filebuffer = struct
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
-  type line_info = {
-    text        : string ;
-    number      : int ;
+  type color_pair = {
     fg_color    : Term.Color.t ;
     bg_color    : Term.Color.t ;
+  }
+
+  type line_info = {
+    number      : int ;
+    text        : string ;
+    colors      : color_pair ;
+    atoms        : Atom.atom list ;
   }
 
   type projected_view = {
     lines       : line_info list ;
   }
+
+  let line_from_atoms index t =
+    let fn s a = s ^ (Atom.atom_to_string a) in
+    List.fold_left fn "" t.atom_buffer.(index)
+
+  module Colors = struct
+    let default = {
+      fg_color    = Term.Color.white ;
+      bg_color    = Term.Color.black ;
+    }
+    let cursor_line = {
+      fg_color    = Term.Color.white ;
+      bg_color    = Term.Color.Gray 4 ;
+    }
+  end
 
   let apply_view_frustrum max_line t =
     let view_size = min (t.view_diff + 1) max_line in
@@ -1023,13 +1049,18 @@ module Filebuffer = struct
     | Absolute        -> 1 ;
     | CursorRelative  -> -t.cursor.y
     in let rec get_line i =
-      let bg = if (i = t.cursor.y) then (Term.Color.Gray 4) else Term.Color.black in
+      let colors =
+        if (i = t.cursor.y)
+        then Colors.cursor_line
+        else Colors.default
+      in
       if i < stop
       then {
-        text        = t.buffer.(i) ;
-        number      = i + offset ;
-        fg_color    = Term.Color.white ;
-        bg_color    = bg ;
+        (* text        = t.buffer.(i) ; *)
+        number  = i + offset ;
+        text    = line_from_atoms i t ;
+        colors  = colors ;
+        atoms    = t.atom_buffer.(i) ;
       } :: get_line (i + 1)
       else []
     in {
@@ -1246,15 +1277,26 @@ module Ciseau = struct
     in
       Screen.put_line Term.Color.white Term.Color.black vec2' s screen |> ignore
 
+  let print_atoms screen fg_color bg_color index atoms =
+    let rec loop index = function
+      | []      -> index
+      | a :: t  -> let text = Atom.atom_to_string a in
+                   let next = Screen.put_color_string fg_color bg_color index text screen in
+                   loop next t
+    in
+      loop index atoms
+
   let print_file_buffer max_line filebuffer screen =
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let print_line start { text ; number ; fg_color ; bg_color ; } =
+    let print_line start { text ; number ; colors ; atoms } =
+      let { fg_color ; bg_color } = colors in
       let num = Printf.sprintf "%4d " number in
       let next = Screen.put_color_string Term.Color.green Term.Color.black start num screen in
-      let stop = Screen.put_line fg_color bg_color next text screen in
+      (* let stop = Screen.put_line fg_color bg_color next text screen in *)
+      let stop = print_atoms screen fg_color bg_color next atoms in
       Screen.next_line screen stop
     in
     let rec loop lines line_start =
@@ -1382,5 +1424,5 @@ module Ciseau = struct
 end
 
 let () =
-  Atom.test()
-  (* Ciseau.main () *)
+  (* Atom.test() *)
+  Ciseau.main ()
