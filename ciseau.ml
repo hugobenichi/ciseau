@@ -176,7 +176,7 @@ module Atom = struct
   atom_kind_table.(092 (* '\' *) ) <- Operator ;;
   atom_kind_table.(093 (* ']' *) ) <- Structure ;;
   atom_kind_table.(094 (* '^' *) ) <- Operator ;;
-  atom_kind_table.(095 (* '_' *) ) <- Operator ;;
+  atom_kind_table.(095 (* '_' *) ) <- Text ;;
   atom_kind_table.(096 (* '`' *) ) <- Operator ;;
   atom_kind_table.(097 (* 'a' *) ) <- Text ;;
   atom_kind_table.(098 (* 'b' *) ) <- Text ;;
@@ -1017,8 +1017,8 @@ module Filebuffer = struct
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
   type color_pair = {
-    fg_color    : Term.Color.t ;
-    bg_color    : Term.Color.t ;
+    fg    : Term.Color.t ;
+    bg    : Term.Color.t ;
   }
 
   type line_info = {
@@ -1032,19 +1032,44 @@ module Filebuffer = struct
     lines       : line_info list ;
   }
 
-  let line_from_atoms index t =
-    let fn s a = s ^ (Atom.atom_to_string a) in
-    List.fold_left fn "" t.atom_buffer.(index)
-
   module Colors = struct
+    let operator = {
+      fg    = Term.Color.green ;
+      bg    = Term.Color.black ;
+    }
+    let structure = {
+      fg    = Term.Color.red ;
+      bg    = Term.Color.black ;
+    }
+    let spacing = {
+      fg    = Term.Color.black ;
+      bg    = Term.Color.black ;
+    }
+    let numbers = {
+      fg    = Term.Color.magenta ;
+      bg    = Term.Color.black ;
+    }
     let default = {
-      fg_color    = Term.Color.white ;
-      bg_color    = Term.Color.black ;
+      fg    = Term.Color.white ;
+      bg    = Term.Color.black ;
     }
     let cursor_line = {
-      fg_color    = Term.Color.white ;
-      bg_color    = Term.Color.Gray 4 ;
+      fg    = Term.Color.white ;
+      bg    = Term.Color.Gray 4 ;
     }
+
+    let for_atom { Atom.kind ; _ } =
+      let open Atom in
+        match kind with
+        | Text      -> default
+        | Digit     -> numbers
+        | Spacing   -> spacing
+        | Operator  -> operator
+        | Structure -> structure
+        | Line      -> default
+        | Control   -> default
+        | Other     -> default
+        | Ending    -> default
   end
 
   let apply_view_frustrum max_line t =
@@ -1061,11 +1086,10 @@ module Filebuffer = struct
       in
       if i < stop
       then {
-        (* text        = t.buffer.(i) ; *)
         number  = i + offset ;
-        text    = line_from_atoms i t ;
+        text    = t.buffer.(i) ;
         colors  = colors ;
-        atoms    = t.atom_buffer.(i) ;
+        atoms   = t.atom_buffer.(i) ;
       } :: get_line (i + 1)
       else []
     in {
@@ -1282,11 +1306,12 @@ module Ciseau = struct
     in
       Screen.put_line Term.Color.white Term.Color.black vec2' s screen |> ignore
 
-  let print_atoms screen fg_color bg_color index atoms =
+  let print_atoms screen fg bg index atoms =
     let rec loop index = function
       | []      -> index
       | a :: t  -> let text = Atom.atom_to_string a in
-                   let next = Screen.put_color_string fg_color bg_color index text screen in
+                   let { Filebuffer.fg ; Filebuffer.bg } = Filebuffer.Colors.for_atom a in
+                   let next = Screen.put_color_string fg bg index text screen in
                    loop next t
     in
       loop index atoms
@@ -1297,11 +1322,11 @@ module Ciseau = struct
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
     let print_line start { text ; number ; colors ; atoms } =
-      let { fg_color ; bg_color } = colors in
+      let { fg ; bg } = colors in
       let num = Printf.sprintf "%4d " number in
       let next = Screen.put_color_string Term.Color.green Term.Color.black start num screen in
-      (* let stop = Screen.put_line fg_color bg_color next text screen in *)
-      let stop = print_atoms screen fg_color bg_color next atoms in
+      (* let stop = Screen.put_line fg bg next text screen in *)
+      let stop = print_atoms screen fg bg next atoms in
       Screen.next_line screen stop
     in
     let rec loop lines line_start =
