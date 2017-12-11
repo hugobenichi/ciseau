@@ -518,7 +518,12 @@ module Term = struct
       | Gray g          -> 232 + g                  (* TODO: clamp to [0,23] *)
       | RGB216 (r,g,b)  -> 16 + 36 * r + 6 * g + b  (* TODO: clamp to [0, 5] ^ 3 *)
 
-    let color_control_string fg bg =
+    type cell = {
+      fg : t ;
+      bg : t ;
+    }
+
+    let color_control_string fg bg = (* TODO: use 'cell' type here and let 'cell' propagates to all callers  *)
       Printf.sprintf "38;5;%d;48;5;%dm" (color_control_code fg) (color_control_code bg)
 
     let black   = Normal Black ;;
