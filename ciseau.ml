@@ -518,12 +518,12 @@ module Term = struct
       | Gray g          -> 232 + g                  (* TODO: clamp to [0,23] *)
       | RGB216 (r,g,b)  -> 16 + 36 * r + 6 * g + b  (* TODO: clamp to [0, 5] ^ 3 *)
 
-    type cell = {
+    type color_cell = {
       fg : t ;
       bg : t ;
     }
 
-    let color_control_string fg bg = (* TODO: use 'cell' type here and let 'cell' propagates to all callers  *)
+    let color_control_string { fg ; bg } =
       Printf.sprintf "38;5;%d;48;5;%dm" (color_control_code fg) (color_control_code bg)
 
     let black   = Normal Black ;;
@@ -618,7 +618,11 @@ module CompositionBuffer = struct
   }
 
   module Priv = struct
-    let colors_at t offset = (t.fg_colors.(offset), t.bg_colors.(offset))
+    let colors_at t offset =
+      let open Term.Color in {
+        fg = t.fg_colors.(offset) ;
+        bg = t.bg_colors.(offset) ;
+      }
 
     let next_contiguous_color_section t start =
       let colors_to_match = colors_at t start in
@@ -628,7 +632,7 @@ module CompositionBuffer = struct
         else stop
       in loop (start + 1)
 
-    let render_section (fg_color, bg_color) start stop t bvec =
+    let render_section color_cell start stop t bvec =
       (* append lines one at a time starting from start offset, ending at stop offset *)
       let next_line_len t start stop =
         min (t.window.x - (start mod t.window.x)) (stop - start)
@@ -646,7 +650,7 @@ module CompositionBuffer = struct
           let len = next_line_len t start stop in
           bvec
                |> Bytevector.append Term.Control.start
-               |> Bytevector.append (Term.Color.color_control_string fg_color bg_color)
+               |> Bytevector.append (Term.Color.color_control_string color_cell)
                |> Bytevector.append_bytes t.text start len
                |> Bytevector.append Term.Control.finish
                (* Last newline need to be appened *after* the terminating control command for colors *)
@@ -706,7 +710,7 @@ module CompositionBuffer = struct
       let stoplen = min len maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
-  let set_color vec2 len fg bg t =
+  let set_color vec2 len { Term.Color.fg ; Term.Color.bg } t =
     let start = v2_to_offset t.window.x vec2 in
     if start < t.len then
       let maxlen = t.len - start in
@@ -776,35 +780,35 @@ module Screen = struct
 
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
-  let put_color_segment fg bg start stop screen =
+  let put_color_segment colors start stop screen =
     let cb = screen.composition_buffer  in
     let stride = cb.CompositionBuffer.window.x in
     let start_p = v2_to_offset stride start in
     let stop_p  = v2_to_offset stride stop in
     let len = stop_p - start_p in
     if len > 0 then
-      CompositionBuffer.set_color start len fg bg cb
+      CompositionBuffer.set_color start len colors cb
 
   (* Set the foreground and background colors of the line pointed to by the current position. *)
   (* TODO: migrate all callers to put_line and kill this *)
-  let put_color_line fg bg vec2 screen =
+  let put_color_line colors vec2 screen =
     let start = shift_left vec2 in
     let stop = start <+> (line_size_vec screen) in
-    put_color_segment fg bg start stop screen
+    put_color_segment colors start stop screen
 
-  let put_color_string fg bg start s screen =
+  let put_color_string colors start s screen =
     let stop = stop_of screen start s
     in
       put_string start s screen ;
-      put_color_segment fg bg start stop screen ;
+      put_color_segment colors start stop screen ;
       stop
 
-  let put_line fg bg start line screen =
+  let put_line colors start line screen =
     let stop = stop_of screen start line in
     let line_stop = v2_of_xy screen.size.x stop.y
     in
       put_string start line screen ;
-      put_color_segment fg bg start line_stop screen ;
+      put_color_segment colors start line_stop screen ;
       line_stop
 end
 
@@ -1016,15 +1020,10 @@ module Filebuffer = struct
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
   (* Represents the result of projecting a line of text inside a drawing view rectangle *)
-  type color_pair = {
-    fg    : Term.Color.t ;
-    bg    : Term.Color.t ;
-  }
-
   type line_info = {
     number      : int ;
     text        : string ;
-    colors      : color_pair ;
+    colors      : Term.Color.color_cell ;
     atoms        : Atom.atom list ;
   }
 
@@ -1033,6 +1032,8 @@ module Filebuffer = struct
   }
 
   module Colors = struct
+    open Term.Color
+
     let operator = {
       fg    = Term.Color.green ;
       bg    = Term.Color.black ;
@@ -1056,6 +1057,26 @@ module Filebuffer = struct
     let cursor_line = {
       fg    = Term.Color.white ;
       bg    = Term.Color.Gray 4 ;
+    }
+    let line_numbers = {
+      fg    = Term.Color.green ;
+      bg    = Term.Color.black ;
+    }
+    let header = {
+      fg    = Term.Color.black ;
+      bg    = Term.Color.yellow ;
+    }
+    let status = {
+      fg    = Term.Color.black ;
+      bg    = Term.Color.white ;
+    }
+    let user_input = {
+      fg    = Term.Color.white ;
+      bg    = Term.Color.black ;
+    }
+    let default_fill = {
+      fg    = Term.Color.blue ;
+      bg    = Term.Color.black ;
     }
 
     let for_atom { Atom.kind ; _ } =
@@ -1287,7 +1308,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      Screen.put_line Term.Color.black Term.Color.yellow vec2 s screen |> ignore
+      Screen.put_line Filebuffer.Colors.header vec2 s screen |> ignore
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
@@ -1297,22 +1318,23 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.put_line Term.Color.black Term.Color.white vec2' s screen |> ignore
+      Screen.put_line Filebuffer.Colors.status vec2' s screen |> ignore
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
-      Screen.put_line Term.Color.white Term.Color.black vec2' s screen |> ignore
+      Screen.put_line Filebuffer.Colors.user_input vec2' s screen |> ignore
 
-  let print_atoms screen fg bg index atoms =
+  let print_atoms screen colors index atoms =
     let rec loop index = function
       | []      -> index
-      | a :: t  -> let text = Atom.atom_to_string a in
-                   let { Filebuffer.fg ; Filebuffer.bg } = Filebuffer.Colors.for_atom a in
-                   let next = Screen.put_color_string fg bg index text screen in
-                   loop next t
+      | a :: t  ->
+          let text = Atom.atom_to_string a in
+          let colors = (Filebuffer.Colors.for_atom a) in
+          let next = Screen.put_color_string colors index text screen in
+          loop next t
     in
       loop index atoms
 
@@ -1322,11 +1344,9 @@ module Ciseau = struct
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
     let print_line start { text ; number ; colors ; atoms } =
-      let { fg ; bg } = colors in
       let num = Printf.sprintf "%4d " number in
-      let next = Screen.put_color_string Term.Color.green Term.Color.black start num screen in
-      (* let stop = Screen.put_line fg bg next text screen in *)
-      let stop = print_atoms screen fg bg next atoms in
+      let next = Screen.put_color_string Filebuffer.Colors.line_numbers start num screen in
+      let stop = print_atoms screen colors next atoms in
       Screen.next_line screen stop
     in
     let rec loop lines line_start =
@@ -1351,7 +1371,7 @@ module Ciseau = struct
 
   let default_fill_screen screen =
     let rec loop = function
-      | Some line ->  Screen.put_color_string Term.Color.blue Term.Color.black line "~" screen
+      | Some line ->  Screen.put_color_string Filebuffer.Colors.default_fill line "~" screen
                         |> Screen.next_line screen
                         |> loop
       | None      ->  ()
