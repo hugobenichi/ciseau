@@ -597,6 +597,81 @@ module Term = struct
 end
 
 
+(* this is a config module for storing all parameters *)
+module Config = struct
+  open Term.Color
+
+  type colors = {
+    operator      : color_cell ;
+    structure     : color_cell ;
+    spacing       : color_cell ;
+    numbers       : color_cell ;
+    default       : color_cell ;
+    cursor_line   : color_cell ;
+    line_numbers  : color_cell ;
+    header        : color_cell ;
+    status        : color_cell ;
+    user_input    : color_cell ;
+    default_fill  : color_cell ;
+  }
+
+  type cfg = {
+    colors : colors ;
+  }
+
+  let default : cfg = {
+    colors = {
+      operator = {
+        fg    = green ;
+        bg    = black ;
+      } ;
+      structure = {
+        fg    = red ;
+        bg    = black ;
+      } ;
+      spacing = {
+        fg    = black ;
+        bg    = black ;
+      } ;
+      numbers = {
+        fg    = magenta ;
+        bg    = black ;
+      } ;
+      default = {
+        fg    = white ;
+        bg    = black ;
+      } ;
+      cursor_line = {
+        fg    = white ;
+        bg    = Gray 4 ;
+      } ;
+      line_numbers = {
+        fg    = green ;
+        bg    = black ;
+      } ;
+      header = {
+        fg    = black ;
+        bg    = yellow ;
+      } ;
+      status = {
+        fg    = black ;
+        bg    = white ;
+      } ;
+      user_input = {
+        fg    = white ;
+        bg    = black ;
+      } ;
+      default_fill = {
+        fg    = blue ;
+        bg    = black ;
+      } ;
+    } ;
+  }
+end
+
+open Config
+
+
 module CompositionBuffer = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
@@ -1023,7 +1098,7 @@ module Filebuffer = struct
   type line_info = {
     number      : int ;
     text        : string ;
-    colors      : Term.Color.color_cell ;
+    colors      : Term.Color.color_cell ; (* currently unused *)
     atoms        : Atom.atom list ;
   }
 
@@ -1031,67 +1106,18 @@ module Filebuffer = struct
     lines       : line_info list ;
   }
 
-  module Colors = struct
-    open Term.Color
-
-    let operator = {
-      fg    = Term.Color.green ;
-      bg    = Term.Color.black ;
-    }
-    let structure = {
-      fg    = Term.Color.red ;
-      bg    = Term.Color.black ;
-    }
-    let spacing = {
-      fg    = Term.Color.black ;
-      bg    = Term.Color.black ;
-    }
-    let numbers = {
-      fg    = Term.Color.magenta ;
-      bg    = Term.Color.black ;
-    }
-    let default = {
-      fg    = Term.Color.white ;
-      bg    = Term.Color.black ;
-    }
-    let cursor_line = {
-      fg    = Term.Color.white ;
-      bg    = Term.Color.Gray 4 ;
-    }
-    let line_numbers = {
-      fg    = Term.Color.green ;
-      bg    = Term.Color.black ;
-    }
-    let header = {
-      fg    = Term.Color.black ;
-      bg    = Term.Color.yellow ;
-    }
-    let status = {
-      fg    = Term.Color.black ;
-      bg    = Term.Color.white ;
-    }
-    let user_input = {
-      fg    = Term.Color.white ;
-      bg    = Term.Color.black ;
-    }
-    let default_fill = {
-      fg    = Term.Color.blue ;
-      bg    = Term.Color.black ;
-    }
-
-    let for_atom { Atom.kind ; _ } =
-      let open Atom in
-        match kind with
-        | Text      -> default
-        | Digit     -> numbers
-        | Spacing   -> spacing
-        | Operator  -> operator
-        | Structure -> structure
-        | Line      -> default
-        | Control   -> default
-        | Other     -> default
-        | Ending    -> default
-  end
+  let color_for_atom { Atom.kind ; _ } =
+    let open Atom in
+      match kind with
+      | Text      -> Config.default.colors.default
+      | Digit     -> Config.default.colors.numbers
+      | Spacing   -> Config.default.colors.spacing
+      | Operator  -> Config.default.colors.operator
+      | Structure -> Config.default.colors.structure
+      | Line      -> Config.default.colors.default
+      | Control   -> Config.default.colors.default
+      | Other     -> Config.default.colors.default
+      | Ending    -> Config.default.colors.default
 
   let apply_view_frustrum max_line t =
     let view_size = min (t.view_diff + 1) max_line in
@@ -1102,8 +1128,8 @@ module Filebuffer = struct
     in let rec get_line i =
       let colors =
         if (i = t.cursor.y)
-        then Colors.cursor_line
-        else Colors.default
+        then Config.default.colors.cursor_line
+        else Config.default.colors.default
       in
       if i < stop
       then {
@@ -1308,7 +1334,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      Screen.put_line Filebuffer.Colors.header vec2 s screen |> ignore
+      Screen.put_line Config.default.colors.header vec2 s screen |> ignore
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
@@ -1318,21 +1344,21 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.put_line Filebuffer.Colors.status vec2' s screen |> ignore
+      Screen.put_line Config.default.colors.status vec2' s screen |> ignore
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = Screen.line_up vec2 in
     let s =  editor.user_input
     in
-      Screen.put_line Filebuffer.Colors.user_input vec2' s screen |> ignore
+      Screen.put_line Config.default.colors.user_input vec2' s screen |> ignore
 
   let print_atoms screen colors index atoms =
     let rec loop index = function
       | []      -> index
       | a :: t  ->
           let text = Atom.atom_to_string a in
-          let colors = (Filebuffer.Colors.for_atom a) in
+          let colors = (Filebuffer.color_for_atom a) in
           let next = Screen.put_color_string colors index text screen in
           loop next t
     in
@@ -1345,7 +1371,7 @@ module Ciseau = struct
     let open Filebuffer in
     let print_line start { text ; number ; colors ; atoms } =
       let num = Printf.sprintf "%4d " number in
-      let next = Screen.put_color_string Filebuffer.Colors.line_numbers start num screen in
+      let next = Screen.put_color_string Config.default.colors.line_numbers start num screen in
       let stop = print_atoms screen colors next atoms in
       Screen.next_line screen stop
     in
@@ -1371,7 +1397,7 @@ module Ciseau = struct
 
   let default_fill_screen screen =
     let rec loop = function
-      | Some line ->  Screen.put_color_string Filebuffer.Colors.default_fill line "~" screen
+      | Some line ->  Screen.put_color_string Config.default.colors.default_fill line "~" screen
                         |> Screen.next_line screen
                         |> loop
       | None      ->  ()
