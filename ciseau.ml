@@ -86,12 +86,11 @@ let slurp f =
 
 module Atom = struct
 
-  type atom_kind = Text | Digit | Dquote | Spacing | Operator | Structure | Line | Control | Other | Ending
+  type atom_kind = Text | Digit | Spacing | Operator | Structure | Line | Control | Other | Ending
 
   let atom_kind_to_string = function
     | Text      -> "Text"
     | Digit     -> "Digit"
-    | Dquote    -> "Dquote"
     | Spacing   -> "Spacing"
     | Operator  -> "Operator"
     | Structure -> "Structure"
@@ -103,7 +102,6 @@ module Atom = struct
   let atom_kind_to_string_padded = function
     | Text      -> "Text      "
     | Digit     -> "Digit     "
-    | Dquote    -> "Dquote    "
     | Spacing   -> "Spacing   "
     | Operator  -> "Operator  "
     | Structure -> "Structure "
@@ -121,7 +119,7 @@ module Atom = struct
   (* printable codes *)
   atom_kind_table.(032 (* ' ' *) ) <- Spacing ;;
   atom_kind_table.(033 (* '!' *) ) <- Operator ;;
-  atom_kind_table.(034 (* '"' *) ) <- Dquote ;;
+  atom_kind_table.(034 (* '"' *) ) <- Structure ;;
   atom_kind_table.(035 (* '#' *) ) <- Operator ;;
   atom_kind_table.(036 (* '$' *) ) <- Operator ;;
   atom_kind_table.(037 (* '%' *) ) <- Operator ;;
@@ -238,13 +236,10 @@ module Atom = struct
     | (Text , Digit ) -> true
     | (Digit , Text) -> true
     | (Structure , _ ) -> false
-    | (Dquote, Dquote) -> false
-    | (Dquote, _) -> true
     | (current , next ) when current = next -> true
     | _ -> false
 
   let rec tokenize_atoms all_atoms kind start index line =
-    Printf.fprintf logs "%s:%d:%d %s\n" line start index (atom_kind_to_string kind) ;
     if kind = Ending
     then List.rev all_atoms
     else
@@ -1108,7 +1103,6 @@ module Filebuffer = struct
       match kind with
       | Text      -> Config.default.colors.default
       | Digit     -> Config.default.colors.numbers
-      | Dquote    -> Config.default.colors.string
       | Spacing   -> Config.default.colors.spacing
       | Operator  -> Config.default.colors.operator
       | Structure -> Config.default.colors.structure
