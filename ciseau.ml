@@ -8,6 +8,10 @@
  *)
 
 
+let logs = open_out "/tmp/ciseau.log"
+
+let this_is_a_value2345 = "this is a string" ^ (("this is another string" |> String.sub) 0 5)
+
 let some x = Some x
 
 let alen = Array.length ;;
@@ -82,11 +86,12 @@ let slurp f =
 
 module Atom = struct
 
-  type atom_kind = Text | Digit | Spacing | Operator | Structure | Line | Control | Other | Ending
+  type atom_kind = Text | Digit | Dquote | Spacing | Operator | Structure | Line | Control | Other | Ending
 
   let atom_kind_to_string = function
     | Text      -> "Text"
     | Digit     -> "Digit"
+    | Dquote    -> "Dquote"
     | Spacing   -> "Spacing"
     | Operator  -> "Operator"
     | Structure -> "Structure"
@@ -98,6 +103,7 @@ module Atom = struct
   let atom_kind_to_string_padded = function
     | Text      -> "Text      "
     | Digit     -> "Digit     "
+    | Dquote    -> "Dquote    "
     | Spacing   -> "Spacing   "
     | Operator  -> "Operator  "
     | Structure -> "Structure "
@@ -115,7 +121,7 @@ module Atom = struct
   (* printable codes *)
   atom_kind_table.(032 (* ' ' *) ) <- Spacing ;;
   atom_kind_table.(033 (* '!' *) ) <- Operator ;;
-  atom_kind_table.(034 (* '"' *) ) <- Structure ;;
+  atom_kind_table.(034 (* '"' *) ) <- Dquote ;;
   atom_kind_table.(035 (* '#' *) ) <- Operator ;;
   atom_kind_table.(036 (* '$' *) ) <- Operator ;;
   atom_kind_table.(037 (* '%' *) ) <- Operator ;;
@@ -227,15 +233,24 @@ module Atom = struct
   let atom_to_pretty_string a =
     Printf.sprintf "%s:'%s'" (atom_kind_to_string_padded a.kind) (atom_to_string a)
 
-  (* TODO: support utf8 as Text *)
-  (* TODO: define grouping more properly. For instance Structure chars should never group *)
-  let rec tokenize_atoms line all_atoms kind start index =
+  let should_continue_atom = function
+    | (_, Ending) -> false
+    | (Text , Digit ) -> true
+    | (Digit , Text) -> true
+    | (Structure , _ ) -> false
+    | (Dquote, Dquote) -> false
+    | (Dquote, _) -> true
+    | (current , next ) when current = next -> true
+    | _ -> false
+
+  let rec tokenize_atoms all_atoms kind start index line =
+    Printf.fprintf logs "%s:%d:%d %s\n" line start index (atom_kind_to_string kind) ;
     if kind = Ending
     then List.rev all_atoms
     else
       let next_kind = atom_kind_at line index in
-      if next_kind = kind
-      then tokenize_atoms line all_atoms kind start (index + 1)
+      if should_continue_atom (kind, next_kind)
+      then tokenize_atoms all_atoms kind start (index + 1) line
       else
         let a = {
           kind  = kind ;
@@ -243,34 +258,11 @@ module Atom = struct
           start = start ;
           stop  = index ;
         } in
-        tokenize_atoms line (a :: all_atoms) next_kind index (index + 1)
+        tokenize_atoms (a :: all_atoms) next_kind index (index + 1) line
 
   let generic_atom_parser line =
-    tokenize_atoms line [] (atom_kind_at line 0) 0 1
-
-  let println s = print_string s ; print_newline ()
-
-  let test () =
-    (* "let {x ; y } = cursor_offset <+> vec2 in" *)
-    "let cursor_hide           = start ^ \"?25l\" ;;"
-    |> generic_atom_parser
-    |> List.iter (atom_to_pretty_string >> println)
-
+    tokenize_atoms [] (atom_kind_at line 0) 0 1 line
 end
-
-
-module AtomList = struct
-  open Atom
-
-  type t = {
-    atoms : atom list;
-  }
-
-  let init_atomlocklist () = {
-    atoms = [];
-  }
-end
-
 
 
 module Vec2 = struct
@@ -604,6 +596,7 @@ module Config = struct
   type colors = {
     operator      : color_cell ;
     structure     : color_cell ;
+    string        : color_cell ;
     spacing       : color_cell ;
     numbers       : color_cell ;
     default       : color_cell ;
@@ -627,6 +620,10 @@ module Config = struct
       } ;
       structure = {
         fg    = red ;
+        bg    = black ;
+      } ;
+      string  = {
+        fg    = yellow ;
         bg    = black ;
       } ;
       spacing = {
@@ -1111,6 +1108,7 @@ module Filebuffer = struct
       match kind with
       | Text      -> Config.default.colors.default
       | Digit     -> Config.default.colors.numbers
+      | Dquote    -> Config.default.colors.string
       | Spacing   -> Config.default.colors.spacing
       | Operator  -> Config.default.colors.operator
       | Structure -> Config.default.colors.structure
@@ -1500,5 +1498,5 @@ module Ciseau = struct
 end
 
 let () =
-  (* Atom.test() *)
-  Ciseau.main ()
+  Ciseau.main () ;
+  close_out logs
