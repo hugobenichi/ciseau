@@ -398,8 +398,17 @@ module Keys = struct
 
 end
 
+module type BytevectorType = sig
+  type t
 
-module Bytevector = struct
+  val init_bytevector : int -> t
+  val reset : t -> t
+  val append : string -> t -> t
+  val append_bytes : Bytes.t -> int -> int -> t -> t
+  val write : Unix.file_descr -> t -> unit
+end
+
+module Bytevector : BytevectorType = struct
 
   type t = {
     bytes : bytes ;
@@ -664,17 +673,16 @@ end
 open Config
 
 
-module type CompositionBufferType = sig
+module type FrameBufferType = sig
   type t
-
-  val init_composition_buffer : v2 -> t
-  val clear                   : t -> unit
-  val render                  : t -> unit
-  val set_text                : v2 -> string -> t -> unit
-  val set_color               : v2 -> int -> Term.Color.color_cell -> t -> unit
+  val init_frame_buffer  : v2 -> t
+  val clear             : t -> unit
+  val render            : v2 -> t -> Bytevector.t -> unit
+  val set_text          : v2 -> string -> t -> unit
+  val set_color         : v2 -> int -> Term.Color.color_cell -> t -> unit
 end
 
-module CompositionBuffer = struct
+module FrameBuffer : FrameBufferType = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -752,7 +760,7 @@ module CompositionBuffer = struct
         loop 0 bvec
   end
 
-  let init_composition_buffer vec2 =
+  let init_frame_buffer vec2 =
     let len = vec2.x * vec2.y
     in {
       text        = Bytes.make len Default.text ;
@@ -769,11 +777,11 @@ module CompositionBuffer = struct
     Array.fill t.bg_colors 0 t.len Default.bg ;
     Array.fill t.z_index 0 t.len Default.z
 
-  let render cursor composition_buffer render_buffer =
+  let render cursor frame_buffer render_buffer =
     render_buffer |> Bytevector.reset
                   |> Bytevector.append Term.Control.cursor_hide
                   |> Bytevector.append Term.Control.gohome
-                  |> Priv.render_all_sections composition_buffer
+                  |> Priv.render_all_sections frame_buffer
                   |> Bytevector.append (Term.Control.cursor_control_string cursor)
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
@@ -800,22 +808,23 @@ end
 module Screen = struct
 
   type t = {
-    size                : v2 ;
-    screen_offset       : v2 ;
-    cursor_position     : v2 ;                    (* Note: cursor_position is not used now, but will be later on *)
-    composition_buffer  : CompositionBuffer.t ;
+    size            : v2 ;
+    screen_offset   : v2 ;
+    frame_buffer    : FrameBuffer.t ;
 
-    (* In the future, this will may have subscreens nested to this screen, sharing the same composition buffer.
+    (* In the future, this will may have subscreens nested to this screen, sharing the same frame buffer.
      * Overlap, tiling and rendering will be managed by using the offset, size, and z value per screen,
-     * using the z_buffer of the backing composition buffer *)
+     * using the z_buffer of the backing frame buffer *)
   }
 
   let init_screen cb offset size = {
     size                = size ;
     screen_offset       = offset ;
-    cursor_position     = v2_zero ;
-    composition_buffer  = cb ;
+    frame_buffer        = cb ;
   }
+
+  let screen_stride screen =
+    screen.size.x
 
   let line_size_vec screen =
     v2_of_xy screen.size.x 0
@@ -840,7 +849,7 @@ module Screen = struct
     screen.size |> line_up |> line_up
 
   let stop_of screen start s =
-    let stride = screen.composition_buffer.CompositionBuffer.window.x in
+    let stride = screen_stride screen in
     start |> v2_to_offset stride
           |> (+) (slen s)
           |> offset_to_v2 stride
@@ -853,18 +862,17 @@ module Screen = struct
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line. *)
   let put_string start s screen =
-    CompositionBuffer.set_text start s screen.composition_buffer
+    FrameBuffer.set_text start s screen.frame_buffer
 
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
   let put_color_segment colors start stop screen =
-    let cb = screen.composition_buffer  in
-    let stride = cb.CompositionBuffer.window.x in
+    let stride = screen_stride screen in
     let start_p = v2_to_offset stride start in
     let stop_p  = v2_to_offset stride stop in
     let len = stop_p - start_p in
     if len > 0 then
-      CompositionBuffer.set_color start len colors cb
+      FrameBuffer.set_color start len colors screen.frame_buffer
 
   (* Set the foreground and background colors of the line pointed to by the current position. *)
   (* TODO: migrate all callers to put_line and kill this *)
@@ -1149,7 +1157,7 @@ end
 
 
 (* FileView wraps a Filebuffer and represents an open view into a file
- * it manages drawing the lines of the file into the backing composition buffer
+ * it manages drawing the lines of the file into the backing frame buffer
  * and handles line overwrapping, line numbering, view centering *)
 module FileView = struct
 
@@ -1158,8 +1166,8 @@ module FileView = struct
     text_area:    Screen.t ;  (* subarea for drawing the text *)
     cursor:       v2 ;        (* position of the cursor relative to that screen coordinates system *)
 
-    composition:  CompositionBuffer.t ;
-    file_buffer:  Filebuffer.t ;
+    frame_buffer :  FrameBuffer.t ;
+    file_buffer :  Filebuffer.t ;
   }
 
   (* TODOs: - move show_header and print_file_buffer here as is
@@ -1230,17 +1238,17 @@ module Ciseau = struct
     last_cycle_duration : float ;
 
     render_buffer       : Bytevector.t ;
-    composition_buffer  : CompositionBuffer.t ;
+    frame_buffer        : FrameBuffer.t ;
   }
 
 
   let init_editor file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
     let term_dim = v2_of_xy term_cols term_rows in
-    let composition_buffer = CompositionBuffer.init_composition_buffer term_dim in
+    let frame_buffer = FrameBuffer.init_frame_buffer term_dim in
     let lines = slurp file in
     {
-      screen          = Screen.init_screen composition_buffer v2_zero term_dim ;
+      screen          = Screen.init_screen frame_buffer v2_zero term_dim ;
       width           = term_cols ;
       height          = term_rows ;
       running         = true ;
@@ -1262,7 +1270,7 @@ module Ciseau = struct
       last_cycle_duration = 0. ;
 
       render_buffer       = Bytevector.init_bytevector 0x1000 ;
-      composition_buffer  = composition_buffer ;
+      frame_buffer        = frame_buffer ;
     }
 
   let queue_pending_command editor = function
@@ -1413,13 +1421,13 @@ module Ciseau = struct
       (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> (<+>) editor.view_offset)
     in
     let screen = editor.screen in (
-      CompositionBuffer.clear editor.composition_buffer ;
+      FrameBuffer.clear editor.frame_buffer ;
       default_fill_screen screen ;
       show_header editor screen v2_zero ;
       show_status editor screen (Screen.last_last_line screen) ;
       show_user_input editor screen (Screen.last_line screen) ;
       print_file_buffer (editor.height - 3) editor.filebuffer screen ;
-      CompositionBuffer.render cursor_position editor.composition_buffer editor.render_buffer ;
+      FrameBuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
     )
 
