@@ -664,6 +664,16 @@ end
 open Config
 
 
+module type CompositionBufferType = sig
+  type t
+
+  val init_composition_buffer : v2 -> t
+  val clear                   : t -> unit
+  val render                  : t -> unit
+  val set_text                : v2 -> string -> t -> unit
+  val set_color               : v2 -> int -> Term.Color.color_cell -> t -> unit
+end
+
 module CompositionBuffer = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
@@ -742,7 +752,7 @@ module CompositionBuffer = struct
         loop 0 bvec
   end
 
-  let init vec2 =
+  let init_composition_buffer vec2 =
     let len = vec2.x * vec2.y
     in {
       text        = Bytes.make len Default.text ;
@@ -1227,7 +1237,7 @@ module Ciseau = struct
   let init_editor file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
     let term_dim = v2_of_xy term_cols term_rows in
-    let composition_buffer = CompositionBuffer.init term_dim in
+    let composition_buffer = CompositionBuffer.init_composition_buffer term_dim in
     let lines = slurp file in
     {
       screen          = Screen.init_screen composition_buffer v2_zero term_dim ;
