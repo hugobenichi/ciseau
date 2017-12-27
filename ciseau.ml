@@ -687,14 +687,16 @@ open Config
 
 module type FrameBufferType = sig
   type t
-  val init_frame_buffer  : v2 -> t
+  type bytevector
+
+  val init_frame_buffer : v2 -> t
   val clear             : t -> unit
-  val render            : v2 -> t -> Bytevector.t -> unit
+  val render            : v2 -> t -> bytevector -> unit
   val set_text          : v2 -> string -> t -> unit
   val set_color         : v2 -> int -> Term.Color.color_cell -> t -> unit
 end
 
-module FrameBuffer : FrameBufferType = struct
+module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type bytevector = Vec.t) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -713,6 +715,8 @@ module FrameBuffer : FrameBufferType = struct
     len         : int ;
     window      : v2 ;
   }
+
+  type bytevector = Vec.t
 
   module Priv = struct
     let colors_at t offset =
@@ -738,7 +742,7 @@ module FrameBuffer : FrameBufferType = struct
         let is_end_of_line        = (position mod t.window.x) = 0 in
         let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
         if is_end_of_line && is_not_end_of_buffer
-        then Bytevector.append Term.Control.newline bvec
+        then Vec.append Term.Control.newline bvec
         else bvec
       in
       let rec loop start stop bvec =
@@ -746,10 +750,10 @@ module FrameBuffer : FrameBufferType = struct
         then
           let len = next_line_len t start stop in
           bvec
-               |> Bytevector.append Term.Control.start
-               |> Bytevector.append (Term.Color.color_control_string color_cell)
-               |> Bytevector.append_bytes t.text start len
-               |> Bytevector.append Term.Control.finish
+               |> Vec.append Term.Control.start
+               |> Vec.append (Term.Color.color_control_string color_cell)
+               |> Vec.append_bytes t.text start len
+               |> Vec.append Term.Control.finish
                (* Last newline need to be appened *after* the terminating control command for colors *)
                |> append_newline_if_needed t (start + len)
                |> loop (start + len) stop
@@ -790,13 +794,13 @@ module FrameBuffer : FrameBufferType = struct
     Array.fill t.z_index 0 t.len Default.z
 
   let render cursor frame_buffer render_buffer =
-    render_buffer |> Bytevector.reset
-                  |> Bytevector.append Term.Control.cursor_hide
-                  |> Bytevector.append Term.Control.gohome
+    render_buffer |> Vec.reset
+                  |> Vec.append Term.Control.cursor_hide
+                  |> Vec.append Term.Control.gohome
                   |> Priv.render_all_sections frame_buffer
-                  |> Bytevector.append (Term.Control.cursor_control_string cursor)
-                  |> Bytevector.append Term.Control.cursor_show
-                  |> Bytevector.write Unix.stdout
+                  |> Vec.append (Term.Control.cursor_control_string cursor)
+                  |> Vec.append Term.Control.cursor_show
+                  |> Vec.write Unix.stdout
 
   (* TODO: strip \r\n, do tab to space expansion *)
   let set_text vec2 s t =
@@ -815,6 +819,9 @@ module FrameBuffer : FrameBufferType = struct
       Array.fill t.fg_colors start stoplen fg ;
       Array.fill t.bg_colors start stoplen bg
 end
+
+
+module FrameBuffer = FrameBufferImpl(Bytevector)
 
 
 module Screen = struct
@@ -1522,6 +1529,5 @@ module Ciseau = struct
 end
 
 let () =
-  test_dir_ls ()
-  (* Ciseau.main () ; *)
-  (* close_out logs *)
+  Ciseau.main () ;
+  close_out logs
