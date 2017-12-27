@@ -70,7 +70,19 @@ let slurp f =
   let cleanup () = close_in ch in
   try_finally action cleanup
 
+let dir_ls path =
+  let rec loop entries handle =
+    match Unix.readdir handle with
+    | s                     -> loop (s :: entries) handle
+    | exception End_of_file -> List.rev entries
+  in
+  let handle = Unix.opendir path in
+  let entries = loop [] handle in
+    Unix.closedir handle ;
+    entries
 
+let test_dir_ls () =
+  "." |> dir_ls |> List.iteri (Printf.printf "%d: %s\n")
 
 
 (*
@@ -1510,5 +1522,6 @@ module Ciseau = struct
 end
 
 let () =
-  Ciseau.main () ;
-  close_out logs
+  test_dir_ls ()
+  (* Ciseau.main () ; *)
+  (* close_out logs *)
