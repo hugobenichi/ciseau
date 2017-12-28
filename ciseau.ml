@@ -430,6 +430,32 @@ module type BytevectorType = sig
   val write : Unix.file_descr -> t -> unit
 end
 
+
+module type FrameBufferType = sig
+  type t
+  type bytevector
+  type color_cell
+
+  val init_frame_buffer : v2 -> t
+  val clear             : t -> unit
+  val render            : v2 -> t -> bytevector -> unit
+  val set_text          : v2 -> string -> t -> unit
+  val set_color         : v2 -> int -> color_cell -> t -> unit
+end
+
+
+module type ScreenType = sig
+  type t
+  type framebuffer
+  type color_cell
+
+  val init_screen : framebuffer -> v2 -> v2 -> t
+  val put_line : color_cell -> v2 -> string -> t -> v2
+  val put_color_string : color_cell -> v2 -> string -> t -> v2
+  val next_line : t -> v2 -> v2 option
+end
+
+
 module Bytevector : BytevectorType = struct
 
   type t = {
@@ -695,19 +721,7 @@ end
 open Config
 
 
-module type FrameBufferType = sig
-  type t
-  type bytevector
-
-  val init_frame_buffer : v2 -> t
-  val clear             : t -> unit
-  val render            : v2 -> t -> bytevector -> unit
-  val set_text          : v2 -> string -> t -> unit
-  val set_color         : v2 -> int -> Term.Color.color_cell -> t -> unit
-end
-
-
-module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = struct
+module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and type color_cell = Term.Color.color_cell) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -718,6 +732,9 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = str
     let text  = ' ' ;;
   end
 
+  type bytevector = Bytevector.t
+  type color_cell = Term.Color.color_cell
+
   type t = {
     text        : Bytes.t ;
     fg_colors   : Term.Color.t array ;
@@ -726,8 +743,6 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = str
     len         : int ;
     window      : v2 ;
   }
-
-  type bytevector = Bytevector.t
 
   module Priv = struct
     let colors_at t offset =
@@ -831,17 +846,6 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = str
       Array.fill t.bg_colors start stoplen bg
 end
 
-
-module type ScreenType = sig
-  type t
-  type framebuffer
-  type color_cell
-
-  val init_screen : framebuffer -> v2 -> v2 -> t
-  val put_line : color_cell -> v2 -> string -> t -> v2
-  val put_color_string : color_cell -> v2 -> string -> t -> v2
-  val next_line : t -> v2 -> v2 option
-end
 
 module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color_cell = Term.Color.color_cell) = struct
   type framebuffer = FrameBuffer.t
