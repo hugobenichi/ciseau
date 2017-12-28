@@ -32,6 +32,8 @@ let try_finally action cleanup =
 
 let (>>) f g x = g (f x)
 
+let flip f x y = f y x
+
 let string_of_char c = String.make 1 c
 
 let truncate_string l s =
@@ -84,6 +86,66 @@ let dir_ls path =
 let test_dir_ls () =
   "." |> dir_ls |> List.iteri (Printf.printf "%d: %s\n")
 
+
+module Iter = struct
+
+  exception End_of_Iterator
+
+  (* TODO: add a way to pull many in next ? *)
+  (* TODO: add a way to ask how many remains ? *)
+  type 'a t = End | Elem of { elem : 'a ; next : unit -> 'a t }
+
+  let mk_elem e n = Elem { elem = e ; next = n }
+
+  let next it = function
+    | End               -> raise End_of_Iterator
+    | Elem { next ; _ } -> next ()
+
+  let get it = function
+    | End               -> raise End_of_Iterator
+    | Elem { elem ; _ } -> elem
+
+  let rec each fn = function
+    | End                   -> ()
+    | Elem { elem ; next }  -> fn elem ; each fn (next ())
+
+  let rec fold fn zero = function
+    | End                   -> zero
+    | Elem { elem ; next }  -> fold fn (fn zero elem) (next ())
+
+  let rec map fn = function
+    | End                   -> End
+    | Elem { elem ; next }  -> mk_elem (fn elem) (next >> map fn)
+
+  let rec filter fn = function
+    | End                       -> End
+    | Elem { elem ; next } as n
+        when fn elem            -> n
+    | Elem { next ; _}          -> filter fn (next ())
+
+  let to_list it =
+    it |> fold (flip List.cons) [] |> List.rev
+
+  let rec from_list = function
+    | [] -> End
+    | h :: t -> mk_elem h (fun () -> from_list t)
+
+  let test () =
+    let print_iter x =
+      each (fun x -> print_int x ; print_string ", " ) x ; print_newline ()
+    in
+    let print_list =
+      from_list >> print_iter
+    in
+    let l1 = [1 ; 2 ; 3 ; 5] in
+    print_list l1 ;
+    l1 |> from_list |> filter (fun x -> x < 3) |> to_list |> print_list ;
+    l1 |> from_list |> map (fun x -> x * 2) |> to_list |> print_list ;
+    ()
+
+    let _ = test ()
+
+end
 
 (*
  *  -> tokenizer that takes lines as strings and breaks them down in base atoms
@@ -1593,5 +1655,5 @@ module Ciseau = struct
 end
 
 let () =
-  Ciseau.main () ;
+  (* Ciseau.main () ; *)
   close_out logs
