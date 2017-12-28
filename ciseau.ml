@@ -477,7 +477,6 @@ module type FilebufferType = sig
   val view_diff : t -> int
   val swap_line_number_mode : t -> t
   val recenter_view : t -> t
-  val color_for_atom : atom -> color_cell (* move me somewhere else *)
   val cursor_relative_to_view : t -> v2
   val file_length_string : t -> string
   val get_view : int -> t -> view
@@ -744,6 +743,19 @@ module Config = struct
       } ;
     } ;
   }
+
+  let color_for_atom cfg { Atom.kind ; _ } =
+    let open Atom in
+      match kind with
+      | Text      -> cfg.colors.default
+      | Digit     -> cfg.colors.numbers
+      | Spacing   -> cfg.colors.spacing
+      | Operator  -> cfg.colors.operator
+      | Structure -> cfg.colors.structure
+      | Line      -> cfg.colors.default
+      | Control   -> cfg.colors.default
+      | Other     -> cfg.colors.default
+      | Ending    -> cfg.colors.default
 end
 
 open Config
@@ -1110,19 +1122,6 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_ce
   let cursor_relative_to_view t = t.cursor <-> { x = 0; y = t.view_start } ;;
   let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
 
-  let color_for_atom { Atom.kind ; _ } =
-    let open Atom in
-      match kind with
-      | Text      -> Config.default.colors.default
-      | Digit     -> Config.default.colors.numbers
-      | Spacing   -> Config.default.colors.spacing
-      | Operator  -> Config.default.colors.operator
-      | Structure -> Config.default.colors.structure
-      | Line      -> Config.default.colors.default
-      | Control   -> Config.default.colors.default
-      | Other     -> Config.default.colors.default
-      | Ending    -> Config.default.colors.default
-
   let get_view max_line t =
     let view_size = min (t.view_diff + 1) max_line in
     let stop = min t.buflen (t.view_start + view_size) in
@@ -1446,7 +1445,7 @@ module Ciseau = struct
       | []      -> index
       | a :: t  ->
           let text = Atom.atom_to_string a in
-          let colors = (Filebuffer.color_for_atom a) in
+          let colors = (color_for_atom Config.default a) in
           let next = Screen.put_color_string colors index text screen in
           loop next t
     in
