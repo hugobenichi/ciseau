@@ -284,6 +284,16 @@ module Vec2 = struct
     y = 0 ;
   }
 
+  let v2_x1y0 = {
+    x = 1 ;
+    y = 0 ;
+  }
+
+  let v2_x0y1 = {
+    x = 0 ;
+    y = 1 ;
+  }
+
   let v2_of_xy x y = {
     x = x ;
     y = y ;
@@ -696,7 +706,8 @@ module type FrameBufferType = sig
   val set_color         : v2 -> int -> Term.Color.color_cell -> t -> unit
 end
 
-module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type bytevector = Vec.t) = struct
+
+module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -716,7 +727,7 @@ module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type byteve
     window      : v2 ;
   }
 
-  type bytevector = Vec.t
+  type bytevector = Bytevector.t
 
   module Priv = struct
     let colors_at t offset =
@@ -742,7 +753,7 @@ module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type byteve
         let is_end_of_line        = (position mod t.window.x) = 0 in
         let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
         if is_end_of_line && is_not_end_of_buffer
-        then Vec.append Term.Control.newline bvec
+        then Bytevector.append Term.Control.newline bvec
         else bvec
       in
       let rec loop start stop bvec =
@@ -750,10 +761,10 @@ module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type byteve
         then
           let len = next_line_len t start stop in
           bvec
-               |> Vec.append Term.Control.start
-               |> Vec.append (Term.Color.color_control_string color_cell)
-               |> Vec.append_bytes t.text start len
-               |> Vec.append Term.Control.finish
+               |> Bytevector.append Term.Control.start
+               |> Bytevector.append (Term.Color.color_control_string color_cell)
+               |> Bytevector.append_bytes t.text start len
+               |> Bytevector.append Term.Control.finish
                (* Last newline need to be appened *after* the terminating control command for colors *)
                |> append_newline_if_needed t (start + len)
                |> loop (start + len) stop
@@ -794,13 +805,13 @@ module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type byteve
     Array.fill t.z_index 0 t.len Default.z
 
   let render cursor frame_buffer render_buffer =
-    render_buffer |> Vec.reset
-                  |> Vec.append Term.Control.cursor_hide
-                  |> Vec.append Term.Control.gohome
+    render_buffer |> Bytevector.reset
+                  |> Bytevector.append Term.Control.cursor_hide
+                  |> Bytevector.append Term.Control.gohome
                   |> Priv.render_all_sections frame_buffer
-                  |> Vec.append (Term.Control.cursor_control_string cursor)
-                  |> Vec.append Term.Control.cursor_show
-                  |> Vec.write Unix.stdout
+                  |> Bytevector.append (Term.Control.cursor_control_string cursor)
+                  |> Bytevector.append Term.Control.cursor_show
+                  |> Bytevector.write Unix.stdout
 
   (* TODO: strip \r\n, do tab to space expansion *)
   let set_text vec2 s t =
@@ -821,10 +832,20 @@ module FrameBufferImpl (Vec : BytevectorType): (FrameBufferType with type byteve
 end
 
 
-module FrameBuffer = FrameBufferImpl(Bytevector)
+module type ScreenType = sig
+  type t
+  type framebuffer
+  type color_cell
 
+  val init_screen : framebuffer -> v2 -> v2 -> t
+  val put_line : color_cell -> v2 -> string -> t -> v2
+  val put_color_string : color_cell -> v2 -> string -> t -> v2
+  val next_line : t -> v2 -> v2 option
+end
 
-module Screen = struct
+module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color_cell = Term.Color.color_cell) = struct
+  type framebuffer = FrameBuffer.t
+  type color_cell = Term.Color.color_cell
 
   type t = {
     size            : v2 ;
@@ -853,19 +874,6 @@ module Screen = struct
 
   let line_offset =
     v2_of_xy 0 1
-
-  (* TODO; line up and line down should return an Option to indicate if the result is inside the screen *)
-  let line_up vec2 =
-    vec2 <-> line_offset
-
-  let line_down vec2 =
-    vec2 <+> line_offset
-
-  let last_line screen =
-    screen.size |> line_up
-
-  let last_last_line screen =
-    screen.size |> line_up |> line_up
 
   let stop_of screen start s =
     let stride = screen_stride screen in
@@ -1367,7 +1375,7 @@ module Ciseau = struct
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
-    let vec2' = Screen.line_up vec2 in
+    let vec2' = vec2 <-> v2_x0y1 in
     let s = "Ciseau stats: win = "
           ^ (window_size editor)
           ^ (format_memory_stats editor)
@@ -1377,7 +1385,7 @@ module Ciseau = struct
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
-    let vec2' = Screen.line_up vec2 in
+    let vec2' = vec2 <-> v2_x0y1 in
     let s =  editor.user_input
     in
       Screen.put_line Config.default.colors.user_input vec2' s screen |> ignore
@@ -1433,9 +1441,15 @@ module Ciseau = struct
     in
       v2_zero |> some |> loop
 
-  (* BUGS:  - last_line and last_last_line have +1 offset ! *)
+
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
+    let last_line editor =
+      v2_of_xy editor.width (editor.height - 1)
+    in
+    let last_last_line editor =
+      v2_of_xy editor.width (editor.height - 2)
+    in
     let cursor_position =
       (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> (<+>) editor.view_offset)
     in
@@ -1443,8 +1457,8 @@ module Ciseau = struct
       FrameBuffer.clear editor.frame_buffer ;
       default_fill_screen screen ;
       show_header editor screen v2_zero ;
-      show_status editor screen (Screen.last_last_line screen) ;
-      show_user_input editor screen (Screen.last_line screen) ;
+      show_status editor screen (last_last_line editor) ;
+      show_user_input editor screen (last_line editor) ;
       print_file_buffer (editor.height - 3) editor.filebuffer screen ;
       FrameBuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
