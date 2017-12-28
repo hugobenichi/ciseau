@@ -456,6 +456,34 @@ module type ScreenType = sig
 end
 
 
+module type FilebufferType = sig
+  type t
+  type atom
+  type color_cell
+  type view
+
+  val init_filebuffer : string list -> int -> t
+  val apply_movement : (t -> v2) -> t -> t
+  val cursor : t -> v2
+  val cursor_next_char : t -> v2
+  val cursor_prev_char : t -> v2
+  val cursor_next_line : t -> v2
+  val cursor_prev_line : t -> v2
+  val is_current_char_valid : t -> bool
+  val adjust_cursor : v2 -> t -> t
+  val current_line : t -> string
+  val current_char : t -> char
+  val buflen : t -> int
+  val view_diff : t -> int
+  val swap_line_number_mode : t -> t
+  val recenter_view : t -> t
+  val color_for_atom : atom -> color_cell (* move me somewhere else *)
+  val cursor_relative_to_view : t -> v2
+  val file_length_string : t -> string
+  val get_view : int -> t -> view
+end
+
+
 module Bytevector : BytevectorType = struct
 
   type t = {
@@ -928,6 +956,27 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color
       line_stop
 end
 
+(* Represents the result of projecting a line of text inside a drawing view rectangle *)
+(* TODO: put me in a module
+ * TODO: remove the atom thing and instead replace with basic (string, color_cell) tuple *)
+type line_info = LineInfo of {
+  number      : int ;
+  text        : string ;
+  colors      : Term.Color.color_cell ; (* currently unused *)
+  atoms        : Atom.atom list ;
+}
+
+(* TODO: add cursor info, and everthing needed to draw a text section *)
+type text_view = {
+  lines       : line_info list ;
+  (* cursor ... *)
+  (* other selections and highlights ? *)
+}
+
+module FilebufferUtil = struct
+  let saturate_up length x = min (max (length - 1) 0) x
+end
+
 
 (* This represents a file currently edited
  * It contains both file information, and windowing information
@@ -943,9 +992,14 @@ end
          empty line, while move_next_word must absolutely do.
          Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
          representation. *)
-module Filebuffer = struct
+module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_cell = Term.Color.color_cell and type view = text_view) = struct
+  open FilebufferUtil
 
   type numbering_mode = Absolute | CursorRelative
+
+  type atom = Atom.atom
+  type color_cell = Term.Color.color_cell
+  type view = text_view
 
   type t = {
       buffer      : string array ;  (* the file data, line per line *)
@@ -979,8 +1033,8 @@ module Filebuffer = struct
   let current_line t = t.buffer.(t.cursor.y)
   let current_char t = String.get (current_line t) t.cursor.x ;;
   let cursor t = t.cursor ;;
-
-  let saturate_up length x = min (max (length - 1) 0) x
+  let buflen t = t.buflen ;;
+  let view_diff t = t.view_diff ;;
 
   let adjust_view t =
     if t.cursor.y < t.view_start then
@@ -1008,37 +1062,10 @@ module Filebuffer = struct
     let new_start = t.cursor.y - t.view_diff / 2 in
     { t with view_start = max new_start 0 }
 
-  (* TODO: regroup movement functions that fit the Ciseau.command type into a specific submodule. *)
-  (* move_* commands saturates at 0 and end of line *)
-  let move_cursor_left t = {
-    x = t.cursor.x |> dec |> max 0 ;
-    y = t.cursor.y ;
-  }
-
   let move_cursor_left2 t = {
     x = t.cursor.x |> dec |> max 0 ;
     y = t.cursor.y ;
   }
-
-  let move_cursor_right t = {
-    x = t.cursor.x |> inc |> saturate_up (slen t.buffer.(t.cursor.y)) ;
-    y = t.cursor.y ;
-  }
-
-  let move_n_up n t = {
-    x = t.cursor.x ;
-    y = t.cursor.y |> fun x -> x - n |> max 0 ;
-  }
-
-  let move_n_down n t = {
-    x = t.cursor.x ;
-    y = t.cursor.y |> (+) n |> saturate_up t.buflen ;
-  }
-
-  let move_cursor_up   = move_n_up 1 ;;
-  let move_cursor_down = move_n_down 1 ;;
-  let move_page_up   t = move_n_up (t.view_diff + 1) t ;;
-  let move_page_down t = move_n_down (t.view_diff + 1) t ;;
 
   let cursor_next_char_proto t vec2 =
     (* BUG: infinite loop on file where the matcher never return true *)
@@ -1080,11 +1107,84 @@ module Filebuffer = struct
       y = y' ;
     }
 
+  let cursor_relative_to_view t = t.cursor <-> { x = 0; y = t.view_start } ;;
+  let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
+
+  let color_for_atom { Atom.kind ; _ } =
+    let open Atom in
+      match kind with
+      | Text      -> Config.default.colors.default
+      | Digit     -> Config.default.colors.numbers
+      | Spacing   -> Config.default.colors.spacing
+      | Operator  -> Config.default.colors.operator
+      | Structure -> Config.default.colors.structure
+      | Line      -> Config.default.colors.default
+      | Control   -> Config.default.colors.default
+      | Other     -> Config.default.colors.default
+      | Ending    -> Config.default.colors.default
+
+  let get_view max_line t =
+    let view_size = min (t.view_diff + 1) max_line in
+    let stop = min t.buflen (t.view_start + view_size) in
+    let offset = match t.line_number_m with
+    | Absolute        -> 1 ;
+    | CursorRelative  -> -t.cursor.y
+    in let rec get_line i =
+      let colors =
+        if (i = t.cursor.y)
+        then Config.default.colors.cursor_line
+        else Config.default.colors.default
+      in
+      if i < stop
+      then LineInfo {
+        number  = i + offset ;
+        text    = t.buffer.(i) ;
+        colors  = colors ;
+        atoms   = t.atom_buffer.(i) ;
+      } :: get_line (i + 1)
+      else []
+    in {
+      lines         = get_line t.view_start ;
+    }
+
+end
+
+
+module FilebufferMovements = struct
+  open Filebuffer
+  open FilebufferUtil
+
   (* TODO: refactor to remove the use of adjust cursor *)
   let rec cursor_move_while u f t =
     if f t
     then t |> adjust_cursor (u t) |> cursor_move_while u f
     else t
+
+  let move_n_up n t = {
+    x = (cursor t).x ;
+    y = (cursor t).y |> fun x -> x - n |> max 0 ;
+  }
+
+  let move_n_down n t = {
+    x = (cursor t).x ;
+    y = (cursor t).y |> (+) n |> saturate_up (buflen t) ;
+  }
+
+  (* move_* commands saturates at 0 and end of line *)
+  let move_cursor_left t = {
+    x = (cursor t).x |> dec |> max 0 ;
+    y = (cursor t).y ;
+  }
+
+  let move_cursor_right t = {
+    x = (cursor t).x |> inc |> saturate_up (t |> current_line |> slen) ;
+    y = (cursor t).y ;
+  }
+
+  let move_cursor_up   = move_n_up 1 ;;
+  let move_cursor_down = move_n_down 1 ;;
+  let move_page_up   t = move_n_up ((view_diff t) + 1) t ;;
+  let move_page_down t = move_n_down ((view_diff t) + 1) t ;;
 
   (* BUG ? '_' is considered to be a word separation *)
   let move_next_word t =
@@ -1127,63 +1227,10 @@ module Filebuffer = struct
       |> cursor_move_while cursor_prev_line (current_line >> is_empty)
       |> cursor
 
-  let move_line_start t = { x = 0 ; y = t.cursor.y } ;;
-  let move_line_end t   = { x = max 0 ((slen t.buffer.(t.cursor.y)) - 1) ; y = t.cursor.y } ;;
-  let move_file_start t = { x = t.cursor.x ; y = 0 } ;;
-  let move_file_end t   = { x = t.cursor.x ; y = t.buflen - 1 } ;;
-
-  let cursor_relative_to_view t = t.cursor <-> { x = 0; y = t.view_start } ;;
-  let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
-
-  (* Represents the result of projecting a line of text inside a drawing view rectangle *)
-  type line_info = {
-    number      : int ;
-    text        : string ;
-    colors      : Term.Color.color_cell ; (* currently unused *)
-    atoms        : Atom.atom list ;
-  }
-
-  type projected_view = {
-    lines       : line_info list ;
-  }
-
-  let color_for_atom { Atom.kind ; _ } =
-    let open Atom in
-      match kind with
-      | Text      -> Config.default.colors.default
-      | Digit     -> Config.default.colors.numbers
-      | Spacing   -> Config.default.colors.spacing
-      | Operator  -> Config.default.colors.operator
-      | Structure -> Config.default.colors.structure
-      | Line      -> Config.default.colors.default
-      | Control   -> Config.default.colors.default
-      | Other     -> Config.default.colors.default
-      | Ending    -> Config.default.colors.default
-
-  let apply_view_frustrum max_line t =
-    let view_size = min (t.view_diff + 1) max_line in
-    let stop = min t.buflen (t.view_start + view_size) in
-    let offset = match t.line_number_m with
-    | Absolute        -> 1 ;
-    | CursorRelative  -> -t.cursor.y
-    in let rec get_line i =
-      let colors =
-        if (i = t.cursor.y)
-        then Config.default.colors.cursor_line
-        else Config.default.colors.default
-      in
-      if i < stop
-      then {
-        number  = i + offset ;
-        text    = t.buffer.(i) ;
-        colors  = colors ;
-        atoms   = t.atom_buffer.(i) ;
-      } :: get_line (i + 1)
-      else []
-    in {
-      lines         = get_line t.view_start ;
-    }
-
+  let move_line_start t = { x = 0 ; y = (cursor t).y } ;;
+  let move_line_end t   = { x = max 0 ((t |> current_line |> slen) - 1) ; y = (cursor t).y } ;;
+  let move_file_start t = { x = (cursor t).x ; y = 0 } ;;
+  let move_file_end t   = { x = (cursor t).x ; y = (buflen t) - 1 } ;;
 end
 
 
@@ -1204,7 +1251,7 @@ module FileView = struct
   (* TODOs: - move show_header and print_file_buffer here as is
    *        - remove all view offset from main Editor struct
    *        - redirect View commands to FileView
-   *        - take into account overwrapping lines for managing diff between FileView and FileBuffer cursors
+   *        - take into account overwrapping lines for managing diff between FileView and Filebuffer cursors
    *)
 
   (* How to deal with different FileViews sharing the sale Filebuffer ?
@@ -1410,7 +1457,7 @@ module Ciseau = struct
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let print_line start { text ; number ; colors ; atoms } =
+    let print_line start (LineInfo { text ; number ; colors ; atoms }) =
       let num = Printf.sprintf "%4d " number in
       let next = Screen.put_color_string Config.default.colors.line_numbers start num screen in
       let stop = print_atoms screen colors next atoms in
@@ -1433,7 +1480,7 @@ module Ciseau = struct
       then print_line start info |> loop rest_lines
     | _ -> ()
     in
-      let { lines } = apply_view_frustrum max_line filebuffer in
+      let { lines } = get_view max_line filebuffer in
       loop lines (v2_of_xy 0 y_offset |> some)
 
   let default_fill_screen screen =
@@ -1473,27 +1520,27 @@ module Ciseau = struct
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Filebuffer.swap_line_number_mode
     | Keys.Ctrl_z       -> View Filebuffer.recenter_view
-    | Keys.Ctrl_d       -> Move Filebuffer.move_page_down
-    | Keys.Ctrl_j       -> Move Filebuffer.move_next_paragraph
-    | Keys.Ctrl_k       -> Move Filebuffer.move_prev_paragraph
-    | Keys.Ctrl_u       -> Move Filebuffer.move_page_up
-    | Keys.Alt_k        -> Move Filebuffer.move_file_start
-    | Keys.Alt_j        -> Move Filebuffer.move_file_end
-    | Keys.Alt_l        -> Move Filebuffer.move_line_end
-    | Keys.Alt_h        -> Move Filebuffer.move_line_start
     | Keys.Space        -> View Filebuffer.recenter_view
-    | Keys.ArrowUp      -> Move Filebuffer.move_cursor_up
-    | Keys.ArrowDown    -> Move Filebuffer.move_cursor_down
-    | Keys.ArrowRight   -> Move Filebuffer.move_cursor_right
-    | Keys.ArrowLeft    -> Move Filebuffer.move_cursor_left
-    | Keys.Lower_k      -> Move Filebuffer.move_cursor_up
-    | Keys.Lower_j      -> Move Filebuffer.move_cursor_down
-    | Keys.Lower_l      -> Move Filebuffer.move_cursor_right
-    | Keys.Lower_h      -> Move Filebuffer.move_cursor_left
-    | Keys.Lower_w      -> Move Filebuffer.move_next_word
-    | Keys.Lower_b      -> Move Filebuffer.move_prev_word
-    | Keys.Upper_w      -> Move Filebuffer.move_next_space
-    | Keys.Upper_b      -> Move Filebuffer.move_prev_space
+    | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
+    | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
+    | Keys.Ctrl_k       -> Move FilebufferMovements.move_prev_paragraph
+    | Keys.Ctrl_u       -> Move FilebufferMovements.move_page_up
+    | Keys.Alt_k        -> Move FilebufferMovements.move_file_start
+    | Keys.Alt_j        -> Move FilebufferMovements.move_file_end
+    | Keys.Alt_l        -> Move FilebufferMovements.move_line_end
+    | Keys.Alt_h        -> Move FilebufferMovements.move_line_start
+    | Keys.ArrowUp      -> Move FilebufferMovements.move_cursor_up
+    | Keys.ArrowDown    -> Move FilebufferMovements.move_cursor_down
+    | Keys.ArrowRight   -> Move FilebufferMovements.move_cursor_right
+    | Keys.ArrowLeft    -> Move FilebufferMovements.move_cursor_left
+    | Keys.Lower_k      -> Move FilebufferMovements.move_cursor_up
+    | Keys.Lower_j      -> Move FilebufferMovements.move_cursor_down
+    | Keys.Lower_l      -> Move FilebufferMovements.move_cursor_right
+    | Keys.Lower_h      -> Move FilebufferMovements.move_cursor_left
+    | Keys.Lower_w      -> Move FilebufferMovements.move_next_word
+    | Keys.Lower_b      -> Move FilebufferMovements.move_prev_word
+    | Keys.Upper_w      -> Move FilebufferMovements.move_next_space
+    | Keys.Upper_b      -> Move FilebufferMovements.move_prev_space
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
     | Keys.Digit_2      -> Pending (Digit 2)
