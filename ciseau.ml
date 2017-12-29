@@ -108,6 +108,7 @@ module Iter = struct
         cursor  : 'cursor ;
       }
 
+  (* TODO: change this so that 'first' is just a cursor to the first item ! *)
   type ('elem , 'cursor) iter_class = {
     first : ('elem , 'cursor) iter_seq ;
     next  : 'cursor -> ('elem , 'cursor) iter_seq ;
@@ -125,12 +126,15 @@ module Iter = struct
     size  = s ;
   }
 
-  let each fn { first ; next } =
-    let rec loop =
+  let iteri fn { first ; next } =
+    let rec loop i =
       function
       | End                     -> ()
-      | Elem { elem ; cursor }  -> fn elem ; cursor |> next |> loop
-    in loop first
+      | Elem { elem ; cursor }  -> fn i elem ; loop (i + 1) (next cursor)
+    in loop 0 first
+
+  let iter fn =
+    iteri (fun _ x -> fn x)
 
   let fold fn  zero { first ; next } =
     let rec loop z =
@@ -177,6 +181,23 @@ module Iter = struct
       | h :: t -> mk_elem h t
     in mk_iter (next ls) next size_info_finite
 
+  let to_array_slow it =
+    it |> to_list |> Array.of_list
+
+  let to_array_fast n default it =
+    let a = Array.make n default in
+    iteri (Array.set a) it ;
+    a
+
+  let to_array it =
+    match it.first with
+    | End -> to_array_slow it (* stupid trick to avoid having to provide a 'a element when there is none *)
+    | Elem { elem ; cursor } ->
+        match it.size cursor with
+        | Exact n -> to_array_fast n elem it
+        | Bounded n -> to_array_fast n elem it
+        | _ -> to_array_slow it
+
   let from_array_slice start stop a =
     let next i =
       if i < stop then mk_elem a.(i) (i + 1) else End
@@ -189,7 +210,7 @@ module Iter = struct
 
   let test () =
     let print_iter x =
-      each (fun x -> print_int x ; print_string ", " ) x ; print_newline ()
+      iter (fun x -> print_int x ; print_string ", " ) x ; print_newline ()
     in
     let print_list =
       from_list >> print_iter
