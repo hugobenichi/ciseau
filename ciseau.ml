@@ -10,8 +10,6 @@
 
 let logs = open_out "/tmp/ciseau.log"
 
-let this_is_a_value2345 = "this is a string" ^ (("this is another string" |> String.sub) 0 5)
-
 let some x = Some x
 
 let alen = Array.length ;;
@@ -87,13 +85,90 @@ let test_dir_ls () =
   "." |> dir_ls |> List.iteri (Printf.printf "%d: %s\n")
 
 
+module Iter2 = struct
+  type ('elem , 'cursor) iter_seq =
+      End
+    | Elem of {
+        elem    : 'elem ;
+        cursor  : 'cursor ;
+      }
+
+  (* TODO: use size info *)
+  type size_info = Empty | Unknown | Finite of int | Bounded of int | Infinite
+  (* TODO: use next_info to implement efficient drop and range *)
+  type next_info = Stop | PullOne | Pull of int | Drop of int | Limit of int
+
+  type ('elem , 'cursor) iter_class = {
+    first : ('elem , 'cursor) iter_seq ;
+    next  : 'cursor -> ('elem , 'cursor) iter_seq ;
+    (* left  : 'cursor -> size_info *)
+  }
+
+  let mk_elem e c = Elem { elem = e ; cursor = c }
+
+  let rec each fn { first ; next } =
+    let rec loop = function
+    | End                     -> ()
+    | Elem { elem ; cursor }  -> fn elem ; cursor |> next |> loop
+    in loop first
+
+  let rec fold fn zero { first ; next } =
+    let rec loop z = function
+    | End                     -> z
+    | Elem { elem ; cursor }  -> loop (fn z elem) (next cursor)
+    in loop first
+
+  let rec map fn { first ; next } =
+    let map_fn = function
+    | End -> End
+    | Elem { elem ; cursor } -> mk_elem (fn elem) cursor
+    in { first = map_fn first ; next = next >> map_fn }
+
+  let rec filter fn { first ; next } =
+    let rec loop = function
+    | End -> End
+    | Elem { elem ; cursor } as e ->
+      if fn elem then e else cursor |> next |> loop
+    in { first = loop first ; next = next >> loop }
+
+  let to_list it =
+    it |> fold (flip List.cons) [] |> List.rev
+
+  let rec from_list ls =
+    let next = function
+      | [] -> End
+      | h :: t -> mk_elem h t
+    in { first = ls ; next = next }
+
+  let test () =
+    let print_iter x =
+      each (fun x -> print_int x ; print_string ", " ) x ; print_newline ()
+    in
+    let print_list =
+      from_list >> print_iter
+    in
+    let l1 = [1 ; 2 ; 3 ; 5] in
+    print_list l1 ;
+    l1 |> from_list |> filter (fun x -> x < 3) |> to_list |> print_list ;
+    l1 |> from_list |> map (fun x -> x * 2) |> to_list |> print_list ;
+    ()
+
+    let _ = test ()
+
+end
+
 module Iter = struct
 
   exception End_of_Iterator
 
   (* TODO: add a way to pull many in next ? *)
   (* TODO: add a way to ask how many remains ? *)
-  type 'a t = End | Elem of { elem : 'a ; next : unit -> 'a t }
+  type 'elem t =
+      End
+    | Elem of {
+        elem : 'elem ;
+        next : unit -> 'elem t
+      }
 
   let mk_elem e n = Elem { elem = e ; next = n }
 
