@@ -85,7 +85,22 @@ let test_dir_ls () =
   "." |> dir_ls |> List.iteri (Printf.printf "%d: %s\n")
 
 
-module Iter2 = struct
+module Iter = struct
+
+  type size_info =
+      Empty           (* an empty iterator *)
+    | Exact of int    (* an iterator with exactly n elements, like for an aray iterator *)
+    | Bounded of int  (* an iterator with at most n elements *)
+    | Finite          (* a finite iterator with unknown size, like for a list iterator *)
+    | Unknown         (* an iterator whose size is unknown. May be infinite *)
+
+  let size_info_finite x  = Finite
+  let size_info_unknown x = Unknown
+  let size_info_empty x   = Empty
+
+  (* TODO: use next_info to implement efficient drop and range *)
+  type next_info = Stop | PullOne | Pull of int | Drop of int | Limit of int
+
   type ('elem , 'cursor) iter_seq =
       End
     | Elem of {
@@ -93,45 +108,43 @@ module Iter2 = struct
         cursor  : 'cursor ;
       }
 
-  type size_info =
-      Empty           (* an empty iterator *)
-    | Exact of int    (* an iterator with exactly n elements, like for instance an aray iterator *)
-    | Bounded of int  (* an iterator with at most n elements *)
-    | Finite          (* a finite iterator with unknown size, like for instance a list iterator *)
-    | Unknown         (* an iterator whose size is unknown. May be infinite *)
-
-  let size_info_finite x = Finite
-  let size_info_unknown x = Unknown
-  let size_info_empty x = Empty
-
-  (* TODO: use next_info to implement efficient drop and range *)
-  type next_info = Stop | PullOne | Pull of int | Drop of int | Limit of int
-
   type ('elem , 'cursor) iter_class = {
     first : ('elem , 'cursor) iter_seq ;
     next  : 'cursor -> ('elem , 'cursor) iter_seq ;
     size  : 'cursor -> size_info ;
   }
 
-  let mk_elem e c = Elem { elem = e ; cursor = c }
+  let mk_elem e c = Elem {
+    elem    = e ;
+    cursor  = c ;
+  }
+
+  let mk_iter f n s = {
+    first = f ;
+    next  = n ;
+    size  = s ;
+  }
 
   let each fn { first ; next } =
-    let rec loop = function
-    | End                     -> ()
-    | Elem { elem ; cursor }  -> fn elem ; cursor |> next |> loop
+    let rec loop =
+      function
+      | End                     -> ()
+      | Elem { elem ; cursor }  -> fn elem ; cursor |> next |> loop
     in loop first
 
-  let fold (fn : 'a -> 'b -> 'a)  (zero : 'a) ({ first ; next } : ('b, 'c) iter_class) : 'a =
-    let rec loop z = function
-    | End                     -> z
-    | Elem { elem ; cursor }  -> loop (fn z elem) (next cursor)
+  let fold fn  zero { first ; next } =
+    let rec loop z =
+      function
+      | End                     -> z
+      | Elem { elem ; cursor }  -> loop (fn z elem) (next cursor)
     in loop zero first
 
   let map fn { first ; next ; size } =
-    let map_fn = function
-    | End -> End
-    | Elem { elem ; cursor } -> mk_elem (fn elem) cursor
-    in { first = map_fn first ; next = next >> map_fn ; size = size }
+    let map_fn =
+      function
+      | End -> End
+      | Elem { elem ; cursor } -> mk_elem (fn elem) cursor
+    in mk_iter (map_fn first) (next >> map_fn) size
 
   let filter fn { first ; next ; size } =
     let size' cursor =
@@ -139,34 +152,37 @@ module Iter2 = struct
       | Exact n -> Bounded n
       | other -> other
     in
-    let rec loop = function
-    | End -> End
-    | Elem { elem ; cursor } as e ->
-      if fn elem then e else cursor |> next |> loop
-    in { first = loop first ; next = next >> loop ; size = size' }
+    let rec loop =
+      function
+      | End -> End
+      | Elem { elem ; cursor } as e ->
+          if fn elem then e else cursor |> next |> loop
+    in mk_iter (loop first) (next >> loop) size'
 
   let drop n { first ; next ; size } =
-   let rec loop n = function
+   let rec loop n =
+     function
      | End -> End
      | e when n = 0 -> e
      | Elem { cursor ; _ } -> loop (n - 1) (next cursor)
-   in { first = loop n first ; next = next ; size = size }
+   in mk_iter (loop n first) next size
 
   let to_list it =
     it |> fold (flip List.cons) [] |> List.rev
 
   let from_list (ls : 'a list) : ('a, 'a list) iter_class =
-    let next = function
+    let next =
+      function
       | [] -> End
       | h :: t -> mk_elem h t
-    in { first = next ls ; next = next ; size = size_info_finite }
+    in mk_iter (next ls) next size_info_finite
 
   let from_array_slice start stop a =
     let next i =
       if i < stop then mk_elem a.(i) (i + 1) else End
     in
-    let size_info i = Exact (stop - i)
-    in { first = next start ; next = next ; size = size_info }
+    let size i = Exact (stop - i)
+    in mk_iter (next start) next size
 
   let from_array a =
     from_array_slice 0 (alen a) a
