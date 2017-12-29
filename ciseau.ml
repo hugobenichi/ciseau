@@ -106,25 +106,25 @@ module Iter2 = struct
 
   let mk_elem e c = Elem { elem = e ; cursor = c }
 
-  let rec each fn { first ; next } =
+  let each fn { first ; next } =
     let rec loop = function
     | End                     -> ()
     | Elem { elem ; cursor }  -> fn elem ; cursor |> next |> loop
     in loop first
 
-  let rec fold fn zero { first ; next } =
+  let fold (fn : 'a -> 'b -> 'a)  (zero : 'a) ({ first ; next } : ('b, 'c) iter_class) : 'a =
     let rec loop z = function
     | End                     -> z
     | Elem { elem ; cursor }  -> loop (fn z elem) (next cursor)
-    in loop first
+    in loop zero first
 
-  let rec map fn { first ; next } =
+  let map fn { first ; next } =
     let map_fn = function
     | End -> End
     | Elem { elem ; cursor } -> mk_elem (fn elem) cursor
     in { first = map_fn first ; next = next >> map_fn }
 
-  let rec filter fn { first ; next } =
+  let filter fn { first ; next } =
     let rec loop = function
     | End -> End
     | Elem { elem ; cursor } as e ->
@@ -134,11 +134,11 @@ module Iter2 = struct
   let to_list it =
     it |> fold (flip List.cons) [] |> List.rev
 
-  let rec from_list ls =
+  let from_list (ls : 'a list) : ('a, 'a list) iter_class =
     let next = function
       | [] -> End
       | h :: t -> mk_elem h t
-    in { first = ls ; next = next }
+    in { first = next ls ; next = next }
 
   let test () =
     let print_iter x =
@@ -157,70 +157,6 @@ module Iter2 = struct
 
 end
 
-module Iter = struct
-
-  exception End_of_Iterator
-
-  (* TODO: add a way to pull many in next ? *)
-  (* TODO: add a way to ask how many remains ? *)
-  type 'elem t =
-      End
-    | Elem of {
-        elem : 'elem ;
-        next : unit -> 'elem t
-      }
-
-  let mk_elem e n = Elem { elem = e ; next = n }
-
-  let next it = function
-    | End               -> raise End_of_Iterator
-    | Elem { next ; _ } -> next ()
-
-  let get it = function
-    | End               -> raise End_of_Iterator
-    | Elem { elem ; _ } -> elem
-
-  let rec each fn = function
-    | End                   -> ()
-    | Elem { elem ; next }  -> fn elem ; each fn (next ())
-
-  let rec fold fn zero = function
-    | End                   -> zero
-    | Elem { elem ; next }  -> fold fn (fn zero elem) (next ())
-
-  let rec map fn = function
-    | End                   -> End
-    | Elem { elem ; next }  -> mk_elem (fn elem) (next >> map fn)
-
-  let rec filter fn = function
-    | End                       -> End
-    | Elem { elem ; next } as n
-        when fn elem            -> n
-    | Elem { next ; _}          -> filter fn (next ())
-
-  let to_list it =
-    it |> fold (flip List.cons) [] |> List.rev
-
-  let rec from_list = function
-    | [] -> End
-    | h :: t -> mk_elem h (fun () -> from_list t)
-
-  let test () =
-    let print_iter x =
-      each (fun x -> print_int x ; print_string ", " ) x ; print_newline ()
-    in
-    let print_list =
-      from_list >> print_iter
-    in
-    let l1 = [1 ; 2 ; 3 ; 5] in
-    print_list l1 ;
-    l1 |> from_list |> filter (fun x -> x < 3) |> to_list |> print_list ;
-    l1 |> from_list |> map (fun x -> x * 2) |> to_list |> print_list ;
-    ()
-
-    let _ = test ()
-
-end
 
 (*
  *  -> tokenizer that takes lines as strings and breaks them down in base atoms
