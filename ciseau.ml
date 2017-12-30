@@ -472,6 +472,66 @@ end
 open Vec2
 
 
+module Color = struct
+
+  type base = Black
+            | Red
+            | Green
+            | Yellow
+            | Blue
+            | Magenta
+            | Cyan
+            | White
+
+  let base_code = function
+    | Black   -> 0
+    | Red     -> 1
+    | Green   -> 2
+    | Yellow  -> 3
+    | Blue    -> 4
+    | Magenta -> 5
+    | Cyan    -> 6
+    | White   -> 7
+
+  let bold_code = function
+    | Black   -> 8
+    | Red     -> 9
+    | Green   -> 10
+    | Yellow  -> 11
+    | Blue    -> 12
+    | Magenta -> 13
+    | Cyan    -> 14
+    | White   -> 15
+
+  type t = Normal of base
+         | Bold of base
+         | Gray of int
+         | RGB216 of int * int * int
+         (* | RGB24b of int * int * int *) (* TODO: support 24b colors, support rgb hex string *)
+
+  let color_control_code = function
+    | Normal c        -> base_code c
+    | Bold c          -> bold_code c
+    | Gray g          -> 232 + g                  (* TODO: clamp to [0,23] *)
+    | RGB216 (r,g,b)  -> 16 + 36 * r + 6 * g + b  (* TODO: clamp to [0, 5] ^ 3 *)
+
+  type color_cell = {
+    fg : t ;
+    bg : t ;
+  }
+
+  let black   = Normal Black ;;
+  let red     = Normal Red ;;
+  let green   = Normal Green ;;
+  let yellow  = Normal Yellow ;;
+  let blue    = Normal Blue ;;
+  let magenta = Normal Magenta ;;
+  let cyan    = Normal Cyan ;;
+  let white   = Normal White ;;
+
+end
+
+
 (* Mappings of character codes
  * char code -> char enum
  * char code -> char string repr
@@ -704,68 +764,6 @@ end
 (* main module for interacting with the terminal *)
 module Term = struct
 
-  module Color = struct
-
-    type base = Black
-              | Red
-              | Green
-              | Yellow
-              | Blue
-              | Magenta
-              | Cyan
-              | White
-
-    let base_code = function
-      | Black   -> 0
-      | Red     -> 1
-      | Green   -> 2
-      | Yellow  -> 3
-      | Blue    -> 4
-      | Magenta -> 5
-      | Cyan    -> 6
-      | White   -> 7
-
-    let bold_code = function
-      | Black   -> 8
-      | Red     -> 9
-      | Green   -> 10
-      | Yellow  -> 11
-      | Blue    -> 12
-      | Magenta -> 13
-      | Cyan    -> 14
-      | White   -> 15
-
-    type t = Normal of base
-           | Bold of base
-           | Gray of int
-           | RGB216 of int * int * int
-           (* | RGB24b of int * int * int *) (* TODO: support 24b colors, support rgb hex string *)
-
-    let color_control_code = function
-      | Normal c        -> base_code c
-      | Bold c          -> bold_code c
-      | Gray g          -> 232 + g                  (* TODO: clamp to [0,23] *)
-      | RGB216 (r,g,b)  -> 16 + 36 * r + 6 * g + b  (* TODO: clamp to [0, 5] ^ 3 *)
-
-    type color_cell = {
-      fg : t ;
-      bg : t ;
-    }
-
-    let color_control_string { fg ; bg } =
-      Printf.sprintf "38;5;%d;48;5;%dm" (color_control_code fg) (color_control_code bg)
-
-    let black   = Normal Black ;;
-    let red     = Normal Red ;;
-    let green   = Normal Green ;;
-    let yellow  = Normal Yellow ;;
-    let blue    = Normal Blue ;;
-    let magenta = Normal Magenta ;;
-    let cyan    = Normal Cyan ;;
-    let white   = Normal White ;;
-
-  end
-
   module Control = struct
     let escape                = 27 |> Char.chr |> string_of_char ;;
     let start                 = escape ^ "[" ;;
@@ -784,6 +782,10 @@ module Term = struct
     let cursor_control_string vec2 =
       let {x ; y } = cursor_offset <+> vec2 in
       Printf.sprintf "%s%d;%dH" start y x
+
+    let color_control_string { Color.fg ; Color.bg } =
+      Printf.sprintf "38;5;%d;48;5;%dm" (Color.color_control_code fg) (Color.color_control_code bg)
+
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
@@ -828,7 +830,7 @@ end
 
 (* this is a config module for storing all parameters *)
 module Config = struct
-  open Term.Color
+  open Color
 
   type colors = {
     operator      : color_cell ;
@@ -919,25 +921,25 @@ end
 open Config
 
 
-module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and type color = Term.Color.t and type color_cell = Term.Color.color_cell) = struct
+module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and type color = Color.t and type color_cell = Color.color_cell) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
   module Default = struct
-    let fg    = Term.Color.white ;;
-    let bg    = Term.Color.black ;;
+    let fg    = Color.white ;;
+    let bg    = Color.black ;;
     let z     = 0 ;;
     let text  = ' ' ;;
   end
 
   type bytevector = Bytevector.t
-  type color      = Term.Color.t
-  type color_cell = Term.Color.color_cell
+  type color      = Color.t
+  type color_cell = Color.color_cell
 
   type t = {
     text        : Bytes.t ;
-    fg_colors   : Term.Color.t array ;
-    bg_colors   : Term.Color.t array ;
+    fg_colors   : Color.t array ;
+    bg_colors   : Color.t array ;
     z_index     : int array ;
     len         : int ;
     window      : v2 ;
@@ -945,7 +947,7 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
 
   module Priv = struct
     let colors_at t offset =
-      let open Term.Color in {
+      let open Color in {
         fg = t.fg_colors.(offset) ;
         bg = t.bg_colors.(offset) ;
       }
@@ -976,7 +978,7 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
           let len = next_line_len t start stop in
           bvec
                |> Bytevector.append Term.Control.start
-               |> Bytevector.append (Term.Color.color_control_string color_cell)
+               |> Bytevector.append (Term.Control.color_control_string color_cell)
                |> Bytevector.append_bytes t.text start len
                |> Bytevector.append Term.Control.finish
                (* Last newline need to be appened *after* the terminating control command for colors *)
@@ -1036,7 +1038,7 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
       let stoplen = min len maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
-  let set_color vec2 len { Term.Color.fg ; Term.Color.bg } t =
+  let set_color vec2 len { Color.fg ; Color.bg } t =
     let start = v2_to_offset t.window.x vec2 in
     if start < t.len then
       let maxlen = t.len - start in
@@ -1060,11 +1062,11 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
 end
 
 
-module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color = Term.Color.t and type color_cell = Term.Color.color_cell) = struct
+module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color = Color.t and type color_cell = Color.color_cell) = struct
 
   type framebuffer  = FrameBuffer.t
-  type color        = Term.Color.t
-  type color_cell   = Term.Color.color_cell
+  type color        = Color.t
+  type color_cell   = Color.color_cell
 
   type t = {
     size            : v2 ;
@@ -1148,7 +1150,7 @@ end
 
 type block_info = {
   text    : string ;
-  colors  : Term.Color.color_cell ;
+  colors  : Color.color_cell ;
 }
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
@@ -1170,7 +1172,7 @@ type range_info = { (* TODO: more sophisticate type which can describe a full li
 }
 
 type selection_info = SelectionInfo of {
-  bg      : Term.Color.t ;
+  bg      : Color.t ;
   ranges  : range_info list ;
 }
 
@@ -1202,13 +1204,13 @@ end
          empty line, while move_next_word must absolutely do.
          Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
          representation. *)
-module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_cell = Term.Color.color_cell and type view = text_view) = struct
+module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_cell = Color.color_cell and type view = text_view) = struct
   open FilebufferUtil
 
   type numbering_mode = Absolute | CursorRelative
 
   type atom = Atom.atom
-  type color_cell = Term.Color.color_cell
+  type color_cell = Color.color_cell
   type view = text_view
 
   type t = {
@@ -1343,7 +1345,7 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_ce
       lines         = get_line t.view_start ;
       selections    = [
         SelectionInfo {
-          bg      = Config.default.colors.cursor_line.Term.Color.bg ;
+          bg      = Config.default.colors.cursor_line.Color.bg ;
           ranges  = [
             { start = v2_of_xy 0 t.cursor.y ; len = line_len t.cursor.y t } (* TODO: switch to a full line descr when available *)
           ]
