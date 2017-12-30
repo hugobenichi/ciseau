@@ -1,10 +1,12 @@
 (* next TODOs:
- *  - do tab expansion and \r\n stripping
- *  - cleanup: remove all the view management code from filebuffer, this should be done somewhere else
- *  - implement nested screens and bounded screens
- *  - do screens + filebuffer swapping (first several screens into the same filebuffer)
- *      data layout would be file_view = struct { screen (* for drawing *) ; filebuffer (* the source *) }
- *      if several screen mutates the same filebuffer content, they need either a handle
+ *  a) add more sophisticated RangeInfo type
+ *       that can describe a line segment, a non-bounded segment, or a full ine
+ *       and use it from the and screen types up
+ *  b) introduce iterator in TextView and in print_file_buffer
+ *  c) correctly manage the cursor position in text coordinates and in screen coordinates
+ *
+ *  once a) is done, that should allow to implement b) by taking out the print_file_buffer function from the
+ *  Ciseau module and move it to ScreenType module, and that should achieve c) easily
  *)
 
 
@@ -643,11 +645,19 @@ type line_info = LineInfo of {
   blocks      : block_info list ;
 }
 
-(* TODO: more sophisticate type which can describe a full line w.r.t the screen *)
 type range_info = RangeInfo of {
   start : v2 ;
   len   : int ;
 }
+
+module Range = struct
+  type t =
+    | Row of { y : int }                                (* complete row from x=0 to x=width *)
+    | Rows of { y : int ; len : int }                   (* contiguous rows from index y to y + len, excluded *)
+    | RowSegment of { pos : v2 ; len : int }            (* segment of a row from (x,y) to (x+len,y), no overflow *)
+    | UnboundedSegment of { pos : v2 ; len : int }      (* segment of a row from (x,y) to (x+len,?), can overflow *)
+    | Rectangle of { topleft : v2 ; bottomright : v2 }  (* rectanble, with bottom right included *)
+end
 
 type selection_info = SelectionInfo of {
   bg      : Color.t ;
@@ -671,8 +681,6 @@ module type BytevectorType = sig
   val write : Unix.file_descr -> t -> unit
 end
 
-
-(* TODO: Refactor these signatures to work with a range_info type *)
 
 module type FrameBufferType = sig
   type t
@@ -698,6 +706,16 @@ module type ScreenType = sig
 
   val init_screen : framebuffer -> v2 -> v2 -> t
   val next_line : t -> v2 -> v2 option
+
+  (* TODO: Refactor these signatures to work with a range_info type
+   * this should boild down to:
+  val put_block : Range.t -> string -> t -> Range.t
+  val set_bg_color : Range.t -> color -> t -> unit
+
+  warning: it might be convenient to add an overflow parameter for put_block, so that the next Range.t can
+  be controlled to next line or to next slot in the current line
+   *)
+
   val put_line : color_cell -> v2 -> string -> t -> v2
   val put_color_string : color_cell -> v2 -> string -> t -> v2
   val set_bg_color : color -> v2 -> int -> t -> unit
