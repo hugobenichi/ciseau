@@ -685,24 +685,20 @@ end
 module type FrameBufferType = sig
   type t
   type bytevector
-  type color
-  type color_cell
 
   val init_frame_buffer : v2 -> t
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
   val set_text          : v2 -> string -> t -> unit
-  val set_color         : v2 -> int -> color_cell -> t -> unit
-  val set_color_fg      : v2 -> int -> color -> t -> unit
-  val set_color_bg      : v2 -> int -> color -> t -> unit
+  val set_color         : v2 -> int -> Color.color_cell -> t -> unit
+  val set_color_fg      : v2 -> int -> Color.t -> t -> unit
+  val set_color_bg      : v2 -> int -> Color.t -> t -> unit
 end
 
 
 module type ScreenType = sig
   type t
   type framebuffer
-  type color_cell
-  type color
 
   val init_screen : framebuffer -> v2 -> v2 -> t
   val next_line : t -> v2 -> v2 option
@@ -716,16 +712,15 @@ module type ScreenType = sig
   be controlled to next line or to next slot in the current line
    *)
 
-  val put_line : color_cell -> v2 -> string -> t -> v2
-  val put_color_string : color_cell -> v2 -> string -> t -> v2
-  val set_bg_color : color -> v2 -> int -> t -> unit
+  val put_line : Color.color_cell -> v2 -> string -> t -> v2
+  val put_color_string : Color.color_cell -> v2 -> string -> t -> v2
+  val set_bg_color : Color.t -> v2 -> int -> t -> unit
 end
 
 
 module type FilebufferType = sig
   type t
   type atom
-  type color_cell
   type view
 
   val init_filebuffer : string list -> int -> t
@@ -969,7 +964,7 @@ end
 open Config
 
 
-module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and type color = Color.t and type color_cell = Color.color_cell) = struct
+module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -981,8 +976,6 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
   end
 
   type bytevector = Bytevector.t
-  type color      = Color.t
-  type color_cell = Color.color_cell
 
   type t = {
     text        : Bytes.t ;
@@ -1110,11 +1103,9 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
 end
 
 
-module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color = Color.t and type color_cell = Color.color_cell) = struct
+module Screen : (ScreenType with type framebuffer = FrameBuffer.t) = struct
 
   type framebuffer  = FrameBuffer.t
-  type color        = Color.t
-  type color_cell   = Color.color_cell
 
   type t = {
     size            : v2 ;
@@ -1220,13 +1211,12 @@ end
          empty line, while move_next_word must absolutely do.
          Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
          representation. *)
-module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_cell = Color.color_cell and type view = text_view) = struct
+module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = text_view) = struct
   open FilebufferUtil
 
   type numbering_mode = Absolute | CursorRelative
 
   type atom = Atom.atom
-  type color_cell = Color.color_cell
   type view = text_view
 
   type t = {
