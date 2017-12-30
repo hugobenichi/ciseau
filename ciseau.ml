@@ -631,6 +631,36 @@ module Keys = struct
 
 end
 
+
+type block_info = BlockInfo of {
+  text    : string ;
+  colors  : Color.color_cell ;
+}
+
+(* Represents the result of projecting a line of text inside a drawing view rectangle *)
+type line_info = LineInfo of {
+  number      : int ;
+  blocks      : block_info list ;
+}
+
+(* TODO: more sophisticate type which can describe a full line w.r.t the screen *)
+type range_info = RangeInfo of {
+  start : v2 ;
+  len   : int ;
+}
+
+type selection_info = SelectionInfo of {
+  bg      : Color.t ;
+  ranges  : range_info list ;
+}
+
+type text_view = TextView of {
+  lines       : line_info list ;
+  selections  : selection_info list ;
+  cursor      : v2 ;
+}
+
+
 module type BytevectorType = sig
   type t
 
@@ -642,7 +672,7 @@ module type BytevectorType = sig
 end
 
 
-(* Refactor these signatures to work with a range_info type *)
+(* TODO: Refactor these signatures to work with a range_info type *)
 
 module type FrameBufferType = sig
   type t
@@ -1148,41 +1178,9 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color
     FrameBuffer.set_color_bg vec2 len bg screen.frame_buffer
 end
 
-type block_info = {
-  text    : string ;
-  colors  : Color.color_cell ;
-}
-
-let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
+let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = BlockInfo {
   text    = String.sub line start (stop - start) ;
   colors  = Config.color_for_atom Config.default kind ;
-}
-
-(* Represents the result of projecting a line of text inside a drawing view rectangle *)
-(* TODO: put me in a module
- * TODO: remove the atom thing and instead replace with basic (string, color_cell) tuple *)
-type line_info = LineInfo of {
-  number      : int ;
-  blocks      : block_info list ;
-}
-
-type range_info = { (* TODO: more sophisticate type which can describe a full line w.r.t the screen *)
-  start : v2 ;
-  len   : int ;
-}
-
-type selection_info = SelectionInfo of {
-  bg      : Color.t ;
-  ranges  : range_info list ;
-}
-
-(* TODO: add cursor info, and everthing needed to draw a text section *)
-type text_view = {
-  lines       : line_info list ;
-  selections  : selection_info list ;
-  cursor      : v2 ;
-  (* cursor ... *)
-  (* other selections and highlights ? *)
 }
 
 module FilebufferUtil = struct
@@ -1341,13 +1339,14 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_ce
         blocks  = List.map atom_to_block t.atom_buffer.(i) ;
       } :: get_line (i + 1)
       else []
-    in {
+    in TextView {
       lines         = get_line t.view_start ;
       selections    = [
         SelectionInfo {
           bg      = Config.default.colors.cursor_line.Color.bg ;
           ranges  = [
-            { start = v2_of_xy 0 t.cursor.y ; len = line_len t.cursor.y t } (* TODO: switch to a full line descr when available *)
+            (* TODO: switch to a full line descr when available *)
+            RangeInfo { start = v2_of_xy 0 t.cursor.y ; len = line_len t.cursor.y t }
           ]
         }
       ] ;
@@ -1651,7 +1650,7 @@ module Ciseau = struct
   let print_blocks screen index blocks =
     let rec loop index = function
       | []      -> index
-      | { text ; colors } :: t  ->
+      | BlockInfo { text ; colors } :: t  ->
           let next = Screen.put_color_string colors index text screen in
           loop next t
     in
@@ -1688,10 +1687,10 @@ module Ciseau = struct
     let rec print_selections = function
       | [] -> ()
       | SelectionInfo { bg ; ranges } :: t ->
-          List.iter (fun { start ; len } -> Screen.set_bg_color bg start len screen) ranges ;
+          List.iter (fun (RangeInfo { start ; len }) -> Screen.set_bg_color bg start len screen) ranges ;
           print_selections t
     in
-      let { lines ; selections } = get_view max_line filebuffer in
+      let TextView { lines ; selections } = get_view max_line filebuffer in
       print_lines lines (v2_of_xy 0 y_offset |> some) ;
       print_selections selections
 
