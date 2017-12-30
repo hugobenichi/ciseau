@@ -101,7 +101,7 @@ module Iter = struct
   (* TODO: use next_info to implement efficient drop and range *)
   type next_info = Stop | PullOne | Pull of int | Drop of int | Limit of int
 
-  type ('elem , 'cursor) iter_seq =
+  type ('elem , 'cursor) seq =
       End
     | Elem of {
         elem    : 'elem ;
@@ -109,9 +109,9 @@ module Iter = struct
       }
 
   (* TODO: change this so that 'first' is just a cursor to the first item ! *)
-  type ('elem , 'cursor) iter_class = {
-    first : ('elem , 'cursor) iter_seq ;
-    next  : 'cursor -> ('elem , 'cursor) iter_seq ;
+  type ('elem , 'cursor) iter = {
+    first : ('elem , 'cursor) seq ;
+    next  : 'cursor -> ('elem , 'cursor) seq ;
     size  : 'cursor -> size_info ;
   }
 
@@ -174,7 +174,7 @@ module Iter = struct
   let to_list it =
     it |> fold (flip List.cons) [] |> List.rev
 
-  let from_list (ls : 'a list) : ('a, 'a list) iter_class =
+  let from_list (ls : 'a list) : ('a, 'a list) iter =
     let next =
       function
       | [] -> End
@@ -231,7 +231,7 @@ module Iter = struct
     a1 |> from_array_slice 2 5 |> print_iter ;
     ()
 
-    let _ = test ()
+    (* let _ = test () *)
 
 end
 
@@ -582,9 +582,12 @@ module type BytevectorType = sig
 end
 
 
+(* Refactor these signatures to work with a range_info type *)
+
 module type FrameBufferType = sig
   type t
   type bytevector
+  type color
   type color_cell
 
   val init_frame_buffer : v2 -> t
@@ -592,6 +595,8 @@ module type FrameBufferType = sig
   val render            : v2 -> t -> bytevector -> unit
   val set_text          : v2 -> string -> t -> unit
   val set_color         : v2 -> int -> color_cell -> t -> unit
+  val set_color_fg      : v2 -> int -> color -> t -> unit
+  val set_color_bg      : v2 -> int -> color -> t -> unit
 end
 
 
@@ -599,11 +604,13 @@ module type ScreenType = sig
   type t
   type framebuffer
   type color_cell
+  type color
 
   val init_screen : framebuffer -> v2 -> v2 -> t
+  val next_line : t -> v2 -> v2 option
   val put_line : color_cell -> v2 -> string -> t -> v2
   val put_color_string : color_cell -> v2 -> string -> t -> v2
-  val next_line : t -> v2 -> v2 option
+  val set_bg_color : color -> v2 -> int -> t -> unit
 end
 
 
@@ -895,7 +902,7 @@ module Config = struct
     } ;
   }
 
-  let color_for_atom cfg { Atom.kind ; _ } =
+  let color_for_atom cfg kind =
     let open Atom in
       match kind with
       | Text      -> cfg.colors.default
@@ -912,7 +919,7 @@ end
 open Config
 
 
-module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and type color_cell = Term.Color.color_cell) = struct
+module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and type color = Term.Color.t and type color_cell = Term.Color.color_cell) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -924,6 +931,7 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
   end
 
   type bytevector = Bytevector.t
+  type color      = Term.Color.t
   type color_cell = Term.Color.color_cell
 
   type t = {
@@ -1035,12 +1043,28 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t and ty
       let stoplen = min len maxlen in
       Array.fill t.fg_colors start stoplen fg ;
       Array.fill t.bg_colors start stoplen bg
+
+  let set_color_fg vec2 len fg t =
+    let start = v2_to_offset t.window.x vec2 in
+    if start < t.len then
+      let maxlen = t.len - start in
+      let stoplen = min len maxlen in
+      Array.fill t.fg_colors start stoplen fg
+
+  let set_color_bg vec2 len bg t =
+    let start = v2_to_offset t.window.x vec2 in
+    if start < t.len then
+      let maxlen = t.len - start in
+      let stoplen = min len maxlen in
+      Array.fill t.bg_colors start stoplen bg
 end
 
 
-module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color_cell = Term.Color.color_cell) = struct
-  type framebuffer = FrameBuffer.t
-  type color_cell = Term.Color.color_cell
+module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color = Term.Color.t and type color_cell = Term.Color.color_cell) = struct
+
+  type framebuffer  = FrameBuffer.t
+  type color        = Term.Color.t
+  type color_cell   = Term.Color.color_cell
 
   type t = {
     size            : v2 ;
@@ -1117,21 +1141,44 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t and type color
       put_string start line screen ;
       put_color_segment colors start line_stop screen ;
       line_stop
+
+  let set_bg_color bg vec2 len screen =
+    FrameBuffer.set_color_bg vec2 len bg screen.frame_buffer
 end
+
+type block_info = {
+  text    : string ;
+  colors  : Term.Color.color_cell ;
+}
+
+let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
+  text    = String.sub line start (stop - start) ;
+  colors  = Config.color_for_atom Config.default kind ;
+}
 
 (* Represents the result of projecting a line of text inside a drawing view rectangle *)
 (* TODO: put me in a module
  * TODO: remove the atom thing and instead replace with basic (string, color_cell) tuple *)
 type line_info = LineInfo of {
   number      : int ;
-  text        : string ;
-  colors      : Term.Color.color_cell ; (* currently unused *)
-  atoms        : Atom.atom list ;
+  blocks      : block_info list ;
+}
+
+type range_info = { (* TODO: more sophisticate type which can describe a full line w.r.t the screen *)
+  start : v2 ;
+  len   : int ;
+}
+
+type selection_info = SelectionInfo of {
+  bg      : Term.Color.t ;
+  ranges  : range_info list ;
 }
 
 (* TODO: add cursor info, and everthing needed to draw a text section *)
 type text_view = {
   lines       : line_info list ;
+  selections  : selection_info list ;
+  cursor      : v2 ;
   (* cursor ... *)
   (* other selections and highlights ? *)
 }
@@ -1270,8 +1317,14 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_ce
       y = y' ;
     }
 
-  let cursor_relative_to_view t = t.cursor <-> { x = 0; y = t.view_start } ;;
-  let file_length_string t = (string_of_int t.buflen) ^ "L" ;;
+  let cursor_relative_to_view t =
+    t.cursor <-> { x = 0; y = t.view_start }
+
+  let file_length_string t =
+    (string_of_int t.buflen) ^ "L"
+
+  let line_len i t =
+    slen t.buffer.(i)
 
   let get_view max_line t =
     let view_size = min (t.view_diff + 1) max_line in
@@ -1280,21 +1333,23 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type color_ce
     | Absolute        -> 1 ;
     | CursorRelative  -> -t.cursor.y
     in let rec get_line i =
-      let colors =
-        if (i = t.cursor.y)
-        then Config.default.colors.cursor_line
-        else Config.default.colors.default
-      in
       if i < stop
       then LineInfo {
         number  = i + offset ;
-        text    = t.buffer.(i) ;
-        colors  = colors ;
-        atoms   = t.atom_buffer.(i) ;
+        blocks  = List.map atom_to_block t.atom_buffer.(i) ;
       } :: get_line (i + 1)
       else []
     in {
       lines         = get_line t.view_start ;
+      selections    = [
+        SelectionInfo {
+          bg      = Config.default.colors.cursor_line.Term.Color.bg ;
+          ranges  = [
+            { start = v2_of_xy 0 t.cursor.y ; len = line_len t.cursor.y t } (* TODO: switch to a full line descr when available *)
+          ]
+        }
+      ] ;
+      cursor        = t.cursor ;
     }
 
 end
@@ -1591,47 +1646,52 @@ module Ciseau = struct
     in
       Screen.put_line Config.default.colors.user_input vec2' s screen |> ignore
 
-  let print_atoms screen colors index atoms =
+  let print_blocks screen index blocks =
     let rec loop index = function
       | []      -> index
-      | a :: t  ->
-          let text = Atom.atom_to_string a in
-          let colors = (color_for_atom Config.default a) in
+      | { text ; colors } :: t  ->
           let next = Screen.put_color_string colors index text screen in
           loop next t
     in
-      loop index atoms
+      loop index blocks
 
   let print_file_buffer max_line filebuffer screen =
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let print_line start (LineInfo { text ; number ; colors ; atoms }) =
+    let print_line start (LineInfo { number ; blocks }) =
       let num = Printf.sprintf "%4d " number in
       let next = Screen.put_color_string Config.default.colors.line_numbers start num screen in
-      let stop = print_atoms screen colors next atoms in
+      let stop = print_blocks screen next blocks in
       Screen.next_line screen stop
     in
-    let rec loop lines line_start =
-    match (lines, line_start) with
-    | (info :: rest_lines, Some start) ->
-      (* BUG: this stop_offset guard is still necessary because the filebuffer
-       * has no way currently to tell which lines are going to overflow.
-       *  -> this causes problems when the cursors are in the last lines of the pseudo view
-       *     inside the filebuffer. For instance if cursor is on last line and one previous line overflow,
-       *     the cursor should be hidden.
-       *     -> the conclusion is that the Filebuffer (or the ting aware of cursor into the file and doing
-       *        view adjust) needs to know about which line overflows.
-       *        -> the view could be actually calculated here and passed back to the filebuffer.
-       *           this would require removing all the view adjust code from the filebuffer.
-       *)
-      if start.y < stop_offset
-      then print_line start info |> loop rest_lines
-    | _ -> ()
+    let rec print_lines lines line_start =
+      match (lines, line_start) with
+      | (info :: rest_lines, Some start) ->
+        (* BUG: this stop_offset guard is still necessary because the filebuffer
+         * has no way currently to tell which lines are going to overflow.
+         *  -> this causes problems when the cursors are in the last lines of the pseudo view
+         *     inside the filebuffer. For instance if cursor is on last line and one previous line overflow,
+         *     the cursor should be hidden.
+         *     -> the conclusion is that the Filebuffer (or the ting aware of cursor into the file and doing
+         *        view adjust) needs to know about which line overflows.
+         *        -> the view could be actually calculated here and passed back to the filebuffer.
+         *           this would require removing all the view adjust code from the filebuffer.
+         *)
+        if start.y < stop_offset
+        then print_line start info |> print_lines rest_lines
+      | _ -> ()
     in
-      let { lines } = get_view max_line filebuffer in
-      loop lines (v2_of_xy 0 y_offset |> some)
+    let rec print_selections = function
+      | [] -> ()
+      | SelectionInfo { bg ; ranges } :: t ->
+          List.iter (fun { start ; len } -> Screen.set_bg_color bg start len screen) ranges ;
+          print_selections t
+    in
+      let { lines ; selections } = get_view max_line filebuffer in
+      print_lines lines (v2_of_xy 0 y_offset |> some) ;
+      print_selections selections
 
   let default_fill_screen screen =
     let rec loop = function
@@ -1744,5 +1804,5 @@ module Ciseau = struct
 end
 
 let () =
-  (* Ciseau.main () ; *)
+  Ciseau.main () ;
   close_out logs
