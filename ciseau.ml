@@ -447,7 +447,7 @@ module Vec2 = struct
     y = 1 ;
   }
 
-  let v2_of_xy x y = {
+  let mk_v2 x y = {
     x = x ;
     y = y ;
   }
@@ -466,7 +466,7 @@ module Vec2 = struct
 
   let v2_to_offset stride vec2 = vec2.y * stride + vec2.x
 
-  let offset_to_v2 stride offset = v2_of_xy (offset mod stride) (offset / stride)
+  let offset_to_v2 stride offset = mk_v2 (offset mod stride) (offset / stride)
 
 end
 
@@ -651,12 +651,53 @@ type range_info = RangeInfo of {
 }
 
 module Range = struct
+  type overflow = Clip | Overflow
+
+  type segment = { pos : v2 ; len : int }
+
+  let mk_segment x y l = {
+    pos = mk_v2 x y ;
+    len = l ;
+  }
+
   type t =
     | Row of { y : int }                                (* complete row from x=0 to x=width *)
-    | Rows of { y : int ; len : int }                   (* contiguous rows from index y to y + len, excluded *)
-    | RowSegment of { pos : v2 ; len : int }            (* segment of a row from (x,y) to (x+len,y), no overflow *)
-    | UnboundedSegment of { pos : v2 ; len : int }      (* segment of a row from (x,y) to (x+len,?), can overflow *)
+    | Segment of segment               (* segment of a row from (x,y) to (x+len,y), no overflow *)
     | Rectangle of { topleft : v2 ; bottomright : v2 }  (* rectanble, with bottom right included *)
+    | Multi of t list
+
+  let row0 = Row { y = 0 }
+
+  let clip_x v2_max x =
+    max v2_max.x x
+
+  let clip_y v2_max y =
+    max v2_max.y y
+
+  let clip_v2 v2_max { x ; y } = {
+    x = clip_x v2_max x ;
+    y = clip_y v2_max y ;
+  }
+
+  let clip_segment { x ; y } { pos ; len } =
+    let x' = max x pos.x in
+    let y' = max y pos.y in
+    let l' = max (pos.x - x') len in
+    mk_segment x' y' l'
+
+  let rec reduce_range bounds =
+    function
+      | Row { y } ->
+          [ mk_segment 0 y bounds.x |> clip_segment bounds ]
+      | Segment s ->
+          [ clip_segment bounds s ]
+      | Rectangle { topleft ; bottomright } ->
+          let { x = x0 ; y = y0 } = clip_v2 bounds topleft in
+          let { x = x1 ; y = y1 } = clip_v2 bounds bottomright in
+          let dx = x1 - x0 in
+          let dy = y1 - y0 in
+          Array.init dy (fun i -> mk_segment x0 (y0 + i) dx) |> Array.to_list
+      | Multi ls -> ls |> List.map (reduce_range bounds) |> List.flatten
 end
 
 type selection_info = SelectionInfo of {
@@ -682,7 +723,7 @@ module type BytevectorType = sig
 end
 
 
-module type FrameBufferType = sig
+module type FramebufferType = sig
   type t
   type bytevector
 
@@ -693,6 +734,8 @@ module type FrameBufferType = sig
   val set_color         : v2 -> int -> Color.color_cell -> t -> unit
   val set_color_fg      : v2 -> int -> Color.t -> t -> unit
   val set_color_bg      : v2 -> int -> Color.t -> t -> unit
+
+  val set_color_by_range : Range.overflow -> Range.t -> Color.t -> t -> unit
 end
 
 
@@ -819,7 +862,7 @@ module Term = struct
     let switch_mainscreen     = start ^ "?47l" ;;
     let gohome                = start ^ "H" ;;
 
-    let cursor_offset = v2_of_xy 1 1
+    let cursor_offset = mk_v2 1 1
 
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
     let cursor_control_string vec2 =
@@ -964,7 +1007,7 @@ end
 open Config
 
 
-module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = struct
+module Framebuffer : (FramebufferType with type bytevector = Bytevector.t) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -1100,17 +1143,20 @@ module FrameBuffer : (FrameBufferType with type bytevector = Bytevector.t) = str
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
       Array.fill t.bg_colors start stoplen bg
+
+  let set_color_by_range overflow range color t =
+    ()
 end
 
 
-module Screen : (ScreenType with type framebuffer = FrameBuffer.t) = struct
+module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
 
-  type framebuffer  = FrameBuffer.t
+  type framebuffer  = Framebuffer.t
 
   type t = {
     size            : v2 ;
     screen_offset   : v2 ;
-    frame_buffer    : FrameBuffer.t ;
+    frame_buffer    : Framebuffer.t ;
 
     (* In the future, this will may have subscreens nested to this screen, sharing the same frame buffer.
      * Overlap, tiling and rendering will be managed by using the offset, size, and z value per screen,
@@ -1127,13 +1173,13 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t) = struct
     screen.size.x
 
   let line_size_vec screen =
-    v2_of_xy screen.size.x 0
+    mk_v2 screen.size.x 0
 
   let shift_left vec2 =
-    v2_of_xy 0 vec2.y
+    mk_v2 0 vec2.y
 
   let line_offset =
-    v2_of_xy 0 1
+    mk_v2 0 1
 
   let stop_of screen start s =
     let stride = screen_stride screen in
@@ -1143,13 +1189,13 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t) = struct
 
   let next_line screen vec2 =
     if vec2.y < screen.size.y
-    then v2_of_xy 0 (vec2.y + 1) |> some
+    then mk_v2 0 (vec2.y + 1) |> some
     else None
 
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line. *)
   let put_string start s screen =
-    FrameBuffer.set_text start s screen.frame_buffer
+    Framebuffer.set_text start s screen.frame_buffer
 
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
@@ -1159,7 +1205,7 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t) = struct
     let stop_p  = v2_to_offset stride stop in
     let len = stop_p - start_p in
     if len > 0 then
-      FrameBuffer.set_color start len colors screen.frame_buffer
+      Framebuffer.set_color start len colors screen.frame_buffer
 
   (* Set the foreground and background colors of the line pointed to by the current position. *)
   (* TODO: migrate all callers to put_line and kill this *)
@@ -1177,14 +1223,14 @@ module Screen : (ScreenType with type framebuffer = FrameBuffer.t) = struct
 
   let put_line colors start line screen =
     let stop = stop_of screen start line in
-    let line_stop = v2_of_xy screen.size.x stop.y
+    let line_stop = mk_v2 screen.size.x stop.y
     in
       put_string start line screen ;
       put_color_segment colors start line_stop screen ;
       line_stop
 
   let set_bg_color bg vec2 len screen =
-    FrameBuffer.set_color_bg vec2 len bg screen.frame_buffer
+    Framebuffer.set_color_bg vec2 len bg screen.frame_buffer
 end
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = BlockInfo {
@@ -1354,7 +1400,7 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
           bg      = Config.default.colors.cursor_line.Color.bg ;
           ranges  = [
             (* TODO: switch to a full line descr when available *)
-            RangeInfo { start = v2_of_xy 0 t.cursor.y ; len = line_len t.cursor.y t }
+            RangeInfo { start = mk_v2 0 t.cursor.y ; len = line_len t.cursor.y t }
           ]
         }
       ] ;
@@ -1458,7 +1504,7 @@ module FileView = struct
     text_area:    Screen.t ;  (* subarea for drawing the text *)
     cursor:       v2 ;        (* position of the cursor relative to that screen coordinates system *)
 
-    frame_buffer :  FrameBuffer.t ;
+    frame_buffer :  Framebuffer.t ;
     file_buffer :  Filebuffer.t ;
   }
 
@@ -1530,14 +1576,14 @@ module Ciseau = struct
     last_cycle_duration : float ;
 
     render_buffer       : Bytevector.t ;
-    frame_buffer        : FrameBuffer.t ;
+    frame_buffer        : Framebuffer.t ;
   }
 
 
   let init_editor file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
-    let term_dim = v2_of_xy term_cols term_rows in
-    let frame_buffer = FrameBuffer.init_frame_buffer term_dim in
+    let term_dim = mk_v2 term_cols term_rows in
+    let frame_buffer = Framebuffer.init_frame_buffer term_dim in
     let lines = slurp file in
     {
       screen          = Screen.init_screen frame_buffer v2_zero term_dim ;
@@ -1547,7 +1593,7 @@ module Ciseau = struct
 
       file            = file ;
       filebuffer      = Filebuffer.init_filebuffer lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
-      view_offset     = v2_of_xy 5 1 ; (* +5 for line numbers, +1 for header *)
+      view_offset     = mk_v2 5 1 ; (* +5 for line numbers, +1 for header *)
 
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
@@ -1699,7 +1745,7 @@ module Ciseau = struct
           print_selections t
     in
       let TextView { lines ; selections } = get_view max_line filebuffer in
-      print_lines lines (v2_of_xy 0 y_offset |> some) ;
+      print_lines lines (mk_v2 0 y_offset |> some) ;
       print_selections selections
 
   let default_fill_screen screen =
@@ -1715,22 +1761,22 @@ module Ciseau = struct
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
     let last_line editor =
-      v2_of_xy editor.width (editor.height - 1)
+      mk_v2 editor.width (editor.height - 1)
     in
     let last_last_line editor =
-      v2_of_xy editor.width (editor.height - 2)
+      mk_v2 editor.width (editor.height - 2)
     in
     let cursor_position =
       (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> (<+>) editor.view_offset)
     in
     let screen = editor.screen in (
-      FrameBuffer.clear editor.frame_buffer ;
+      Framebuffer.clear editor.frame_buffer ;
       default_fill_screen screen ;
       show_header editor screen v2_zero ;
       show_status editor screen (last_last_line editor) ;
       show_user_input editor screen (last_line editor) ;
       print_file_buffer (editor.height - 3) editor.filebuffer screen ;
-      FrameBuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
+      Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
     )
 
