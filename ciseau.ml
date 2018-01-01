@@ -12,9 +12,16 @@
 
 let logs = open_out "/tmp/ciseau.log"
 
-let some x = Some x
-
 let conj ls x = List.cons x ls
+
+(* TODO replace with List.init in ocaml 4.06 *)
+let mk_list size e =
+  let rec loop acc n =
+  if n = 0
+    then acc
+    else loop (e :: acc) (n - 1)
+  in
+    loop [] size
 
 let alen = Array.length ;;
 let blen = Bytes.length ;;
@@ -751,9 +758,7 @@ module type ScreenType = sig
   val init_screen : framebuffer -> v2 -> v2 -> t
   val put_block : t -> v2 -> BlockInfo.t -> v2
   val put_block_text : t -> int -> BlockInfo.t list list -> unit (* todo: add clip mode *)
-  val next_line : t -> v2 -> v2 option (* TODO: remove the need for this *)
   val put_line : Color.color_cell -> v2 -> string -> t -> v2
-  val put_color_string : Color.color_cell -> v2 -> string -> t -> v2
   val set_bg_color : Color.t -> v2 -> int -> t -> unit
 end
 
@@ -1185,11 +1190,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
           |> (+) (slen s)
           |> offset_to_v2 stride
 
-  let next_line screen vec2 =
-    if vec2.y < screen.size.y
-    then mk_v2 0 (vec2.y + 1) |> some
-    else None
-
   (* Write a string to the screen starting at the given position.
    * If the string is longer then the remaining space on the line, then wraps the string to the next line. *)
   let put_string start s screen =
@@ -1229,9 +1229,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     block_lines
       |> BlockInfo.break_block_line_text bounds
       |> List.iteri put_block_line
-
-  let put_color_string colors start s screen =
-    put_block screen start { BlockInfo.text = s ; BlockInfo.colors = colors }
 
   let put_line colors start line screen =
     let stop = stop_of screen start line in
@@ -1733,15 +1730,9 @@ module Ciseau = struct
           (* TODO: fuse selection into the block list *)
           |> Screen.put_block_text screen y_offset
 
-  let default_fill_screen screen =
-    let rec loop = function
-      | Some line ->  Screen.put_color_string Config.default.colors.default_fill line "~" screen
-                        |> Screen.next_line screen
-                        |> loop
-      | None      ->  ()
-    in
-      v2_zero |> some |> loop
-
+  let default_fill_screen maxlines screen =
+    mk_list maxlines [BlockInfo.mk_block "~" Config.default.colors.default_fill]
+      |> Screen.put_block_text screen 0
 
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
@@ -1754,13 +1745,14 @@ module Ciseau = struct
     let cursor_position =
       (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> (<+>) editor.view_offset)
     in
+    let text_height = editor.height - 3 in
     let screen = editor.screen in (
       Framebuffer.clear editor.frame_buffer ;
-      default_fill_screen screen ;
+      default_fill_screen (text_height + 1) screen ;
       show_header editor screen v2_zero ;
       show_status editor screen (last_last_line editor) ;
       show_user_input editor screen (last_line editor) ;
-      print_file_buffer (editor.height - 3) editor.filebuffer screen ;
+      print_file_buffer text_height editor.filebuffer screen ;
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
     )
