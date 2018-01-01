@@ -857,8 +857,8 @@ module type ScreenType = sig
   type framebuffer
 
   val init_screen : framebuffer -> v2 -> v2 -> t
-  val put_block : v2 -> BlockInfo.t -> t -> v2
-  val put_block_text : int -> BlockInfo.t list list -> t -> v2 (* todo: add clip mode *)
+  val put_block : t -> v2 -> BlockInfo.t -> v2
+  val put_block_text : t -> int -> BlockInfo.t list list -> unit (* todo: add clip mode *)
   val next_line : t -> v2 -> v2 option
   val put_line : Color.color_cell -> v2 -> string -> t -> v2
   val put_color_string : Color.color_cell -> v2 -> string -> t -> v2
@@ -1320,23 +1320,26 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     let stop = start <+> (line_size_vec screen) in
     put_color_segment colors start stop screen
 
-  let put_block start { BlockInfo.text ; BlockInfo.colors } screen =
+  let put_block screen start { BlockInfo.text ; BlockInfo.colors } =
     let stop = stop_of screen start text
     in
       put_string start text screen ;
       put_color_segment colors start stop screen ;
       stop
 
-  let put_block_text y_offset block_lines screen =
+  let put_block_text screen y_offset block_lines =
     let start = mk_v2 0 y_offset in
     let bounds = screen.size <-> start in
+    let mk_line_start i = mk_v2 0 (y_offset + i) in
+    let put_block_line i blks =
+      blks |> List.fold_left (put_block screen) (mk_line_start i) |> ignore
+    in
     block_lines
       |> BlockInfo.break_block_line_text bounds
-      |> List.flatten
-      |> List.fold_left (fun vec2 blk -> put_block vec2 blk screen) start
+      |> List.iteri put_block_line
 
   let put_color_string colors start s screen =
-    put_block start { BlockInfo.text = s ; BlockInfo.colors = colors } screen
+    put_block screen start { BlockInfo.text = s ; BlockInfo.colors = colors }
 
   let put_line colors start line screen =
     let stop = stop_of screen start line in
@@ -1878,7 +1881,8 @@ module Ciseau = struct
           print_selections t
     in
       let TextView { offset ; lines ; selections } = Filebuffer.get_view max_line filebuffer in
-      lines |> prepend_line_numbers offset |> print_lines screen stop_offset (mk_v2 0 y_offset |> some) ;
+      lines |> prepend_line_numbers offset
+            |> Screen.put_block_text screen y_offset ;
       print_selections selections
 
   let default_fill_screen screen =
