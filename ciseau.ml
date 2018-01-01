@@ -655,7 +655,7 @@ module BlockInfo = struct
         let t2 = String.sub b.text l (blen - l) in
         ({ text = t1 ; colors = b.colors }, Some { text = t2 ; colors = b.colors })
 
-  let break_block_list left ls =
+  let break_block_line left ls =
     let rec loop left acc ls =
       match ls with
         | [] -> (acc, ls)
@@ -667,6 +667,34 @@ module BlockInfo = struct
     in
       let (rev_first_line, remainder) = loop left [] ls
       in  (List.rev rev_first_line, remainder)
+
+  let rec drop n ls =
+    if n = 0
+      then []
+      else match ls with
+        | [] -> []
+        | h :: t -> h :: (drop (n - 1) t)
+
+  let break_block_line_text bounds block_lines =
+    let rec loop acc =
+      function
+      | [] -> acc
+      | blocks :: rest_lines ->
+          match break_block_line bounds.x blocks with
+          | (blocks', [])         -> loop (blocks' :: acc) rest_lines
+          | (blocks', remainder)  -> loop (blocks' :: acc) (remainder :: rest_lines)
+    in
+      block_lines |> loop [] |> List.rev |> drop bounds.y
+
+  let clip_block_line_text bounds block_lines =
+    let rec loop acc =
+      function
+      | [] -> acc
+      | blocks :: rest_lines ->
+          let (blocks', _) = break_block_line bounds.x blocks in
+          loop (blocks' :: acc) rest_lines
+    in
+      block_lines |> loop [] |> List.rev |> drop bounds.y
 
   let test () =
     let c = {
@@ -700,19 +728,26 @@ module BlockInfo = struct
       let pr_ls ls = ls |> List.map (fun { text ; _ } -> text) |> String.concat " " in
       let pr_break (ls1, ls2) = Printf.printf "( [ %s ] ; [ %s ] )\n" (pr_ls ls1) (pr_ls ls2) in
       let ls = [ mk_block "abc" c ; mk_block "def" c ; mk_block "ghi" c ] in
-      ls |> break_block_list 0 |> pr_break ;
-      ls |> break_block_list 1 |> pr_break ;
-      ls |> break_block_list 2 |> pr_break ;
-      ls |> break_block_list 3 |> pr_break ;
-      ls |> break_block_list 4 |> pr_break ;
-      ls |> break_block_list 5 |> pr_break ;
-      ls |> break_block_list 6 |> pr_break ;
-      ls |> break_block_list 7 |> pr_break ;
-      ls |> break_block_list 8 |> pr_break ;
-      ls |> break_block_list 9 |> pr_break ;
-      ls |> break_block_list 10 |> pr_break ;
-      ls |> break_block_list 11 |> pr_break ;
-      ls |> break_block_list 12 |> pr_break ;
+      ls |> break_block_line 0 |> pr_break ;
+      ls |> break_block_line 1 |> pr_break ;
+      ls |> break_block_line 2 |> pr_break ;
+      ls |> break_block_line 3 |> pr_break ;
+      ls |> break_block_line 4 |> pr_break ;
+      ls |> break_block_line 5 |> pr_break ;
+      ls |> break_block_line 6 |> pr_break ;
+      ls |> break_block_line 7 |> pr_break ;
+      ls |> break_block_line 8 |> pr_break ;
+      ls |> break_block_line 9 |> pr_break ;
+      ls |> break_block_line 10 |> pr_break ;
+      ls |> break_block_line 11 |> pr_break ;
+      ls |> break_block_line 12 |> pr_break ;
+
+      print_newline () ;
+
+      [ls ; ls ; ls ] |> clip_block_line_text (mk_v2 7 5) |> List.iter (pr_ls >> Printf.printf "[ %s ]\n");
+
+      print_newline ();
+      [ls ; ls ; ls ] |> break_block_line_text (mk_v2 4 5) |> List.iter (pr_ls >> Printf.printf "[ %s ]\n");
 
       ()
 
