@@ -651,7 +651,6 @@ type range_info = RangeInfo of {
 }
 
 module Range = struct
-  type overflow = Clip | Overflow
 
   type segment = { pos : v2 ; len : int }
 
@@ -726,16 +725,15 @@ end
 module type FramebufferType = sig
   type t
   type bytevector
+  type segment
 
   val init_frame_buffer : v2 -> t
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
   val set_text          : v2 -> string -> t -> unit
-  val set_color         : v2 -> int -> Color.color_cell -> t -> unit
-  val set_color_fg      : v2 -> int -> Color.t -> t -> unit
-  val set_color_bg      : v2 -> int -> Color.t -> t -> unit
-
-  val set_color_by_range : Range.overflow -> Range.t -> Color.t -> t -> unit
+  val set_color         : segment -> Color.color_cell -> t -> unit
+  val set_color_fg      : segment -> Color.t -> t -> unit
+  val set_color_bg      : segment -> Color.t -> t -> unit
 end
 
 
@@ -745,19 +743,11 @@ module type ScreenType = sig
 
   val init_screen : framebuffer -> v2 -> v2 -> t
   val next_line : t -> v2 -> v2 option
-
-  (* TODO: Refactor these signatures to work with a range_info type
-   * this should boild down to:
-  val put_block : Range.t -> string -> t -> Range.t
-  val set_bg_color : Range.t -> color -> t -> unit
-
-  warning: it might be convenient to add an overflow parameter for put_block, so that the next Range.t can
-  be controlled to next line or to next slot in the current line
-   *)
-
   val put_line : Color.color_cell -> v2 -> string -> t -> v2
   val put_color_string : Color.color_cell -> v2 -> string -> t -> v2
   val set_bg_color : Color.t -> v2 -> int -> t -> unit
+
+  val put_text : text_view -> v2 -> t -> v2
 end
 
 
@@ -1007,7 +997,7 @@ end
 open Config
 
 
-module Framebuffer : (FramebufferType with type bytevector = Bytevector.t) = struct
+module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and type segment = Range.segment) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -1019,6 +1009,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t) = str
   end
 
   type bytevector = Bytevector.t
+  type segment    = Range.segment
 
   type t = {
     text        : Bytes.t ;
@@ -1114,31 +1105,31 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t) = str
                   |> Bytevector.write Unix.stdout
 
   (* TODO: strip \r\n, do tab to space expansion *)
-  let set_text vec2 s t =
-    let start = v2_to_offset t.window.x vec2 in
+  let set_text pos s t =
+    let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let len = slen s in
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
-  let set_color vec2 len { Color.fg ; Color.bg } t =
-    let start = v2_to_offset t.window.x vec2 in
+  let set_color { Range.pos ; Range.len } { Color.fg ; Color.bg } t =
+    let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
       Array.fill t.fg_colors start stoplen fg ;
       Array.fill t.bg_colors start stoplen bg
 
-  let set_color_fg vec2 len fg t =
-    let start = v2_to_offset t.window.x vec2 in
+  let set_color_fg { Range.pos ; Range.len } fg t =
+    let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
       Array.fill t.fg_colors start stoplen fg
 
-  let set_color_bg vec2 len bg t =
-    let start = v2_to_offset t.window.x vec2 in
+  let set_color_bg { Range.pos ; Range.len } bg t =
+    let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
@@ -1205,7 +1196,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     let stop_p  = v2_to_offset stride stop in
     let len = stop_p - start_p in
     if len > 0 then
-      Framebuffer.set_color start len colors screen.frame_buffer
+      Framebuffer.set_color { Range.pos = start ; Range.len = len } colors screen.frame_buffer
 
   (* Set the foreground and background colors of the line pointed to by the current position. *)
   (* TODO: migrate all callers to put_line and kill this *)
@@ -1230,7 +1221,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
       line_stop
 
   let set_bg_color bg vec2 len screen =
-    Framebuffer.set_color_bg vec2 len bg screen.frame_buffer
+    Framebuffer.set_color_bg { Range.pos = vec2 ; Range.len = len } bg screen.frame_buffer
+
+  let put_text (TextView { lines ; selections ; cursor }) start screen = start
 end
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = BlockInfo {
