@@ -751,7 +751,7 @@ module BlockInfo = struct
 
       ()
 
-  let _ = test ()
+  (* let _ = test () *)
 end
 
 (* Represents the result of projecting a line of text inside a drawing view rectangle *)
@@ -857,12 +857,12 @@ module type ScreenType = sig
   type framebuffer
 
   val init_screen : framebuffer -> v2 -> v2 -> t
+  val put_block : v2 -> BlockInfo.t -> t -> v2
+  val put_block_text : int -> BlockInfo.t list list -> t -> v2 (* todo: add clip mode *)
   val next_line : t -> v2 -> v2 option
   val put_line : Color.color_cell -> v2 -> string -> t -> v2
   val put_color_string : Color.color_cell -> v2 -> string -> t -> v2
   val set_bg_color : Color.t -> v2 -> int -> t -> unit
-
-  val put_text : text_view -> v2 -> t -> v2
 end
 
 
@@ -1320,12 +1320,23 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     let stop = start <+> (line_size_vec screen) in
     put_color_segment colors start stop screen
 
-  let put_color_string colors start s screen =
-    let stop = stop_of screen start s
+  let put_block start { BlockInfo.text ; BlockInfo.colors } screen =
+    let stop = stop_of screen start text
     in
-      put_string start s screen ;
+      put_string start text screen ;
       put_color_segment colors start stop screen ;
       stop
+
+  let put_block_text y_offset block_lines screen =
+    let start = mk_v2 0 y_offset in
+    let bounds = screen.size <-> start in
+    block_lines
+      |> BlockInfo.break_block_line_text bounds
+      |> List.flatten
+      |> List.fold_left (fun vec2 blk -> put_block vec2 blk screen) start
+
+  let put_color_string colors start s screen =
+    put_block start { BlockInfo.text = s ; BlockInfo.colors = colors } screen
 
   let put_line colors start line screen =
     let stop = stop_of screen start line in
@@ -1337,8 +1348,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
 
   let set_bg_color bg vec2 len screen =
     Framebuffer.set_color_bg { Range.pos = vec2 ; Range.len = len } bg screen.frame_buffer
-
-  let put_text (TextView { lines ; selections ; cursor }) start screen = start
 
 end
 
@@ -1823,6 +1832,25 @@ module Ciseau = struct
     in
       loop index blocks
 
+  let rec print_lines screen line_stop line_start lines =
+    match (lines, line_start) with
+    | (blocks :: next_lines, Some start) ->
+      (* BUG: this stop_offset guard is still necessary because the filebuffer
+       * has no way currently to tell which lines are going to overflow.
+       *  -> this causes problems when the cursors are in the last lines of the pseudo view
+       *     inside the filebuffer. For instance if cursor is on last line and one previous line overflow,
+       *     the cursor should be hidden.
+       *     -> the conclusion is that the Filebuffer (or the ting aware of cursor into the file and doing
+       *        view adjust) needs to know about which line overflows.
+       *        -> the view could be actually calculated here and passed back to the filebuffer.
+       *           this would require removing all the view adjust code from the filebuffer.
+       *)
+      if start.y < line_stop then
+        let stop = print_blocks screen start blocks in
+        let next_start = Screen.next_line screen stop in
+        print_lines screen line_stop next_start next_lines
+    | _ -> ()
+
   let mk_line_number_block n = {
     BlockInfo.text = Printf.sprintf "%4d " n ;
     BlockInfo.colors = Config.default.colors.line_numbers ;
@@ -1843,25 +1871,6 @@ module Ciseau = struct
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
-    let rec print_lines line_start lines =
-      match (lines, line_start) with
-      | (blocks :: next_lines, Some start) ->
-        (* BUG: this stop_offset guard is still necessary because the filebuffer
-         * has no way currently to tell which lines are going to overflow.
-         *  -> this causes problems when the cursors are in the last lines of the pseudo view
-         *     inside the filebuffer. For instance if cursor is on last line and one previous line overflow,
-         *     the cursor should be hidden.
-         *     -> the conclusion is that the Filebuffer (or the ting aware of cursor into the file and doing
-         *        view adjust) needs to know about which line overflows.
-         *        -> the view could be actually calculated here and passed back to the filebuffer.
-         *           this would require removing all the view adjust code from the filebuffer.
-         *)
-        if start.y < stop_offset then
-          let stop = print_blocks screen start blocks in
-          let next_start = Screen.next_line screen stop in
-          print_lines next_start next_lines
-      | _ -> ()
-    in
     let rec print_selections = function
       | [] -> ()
       | SelectionInfo { bg ; ranges } :: t ->
@@ -1869,7 +1878,7 @@ module Ciseau = struct
           print_selections t
     in
       let TextView { offset ; lines ; selections } = Filebuffer.get_view max_line filebuffer in
-      lines |> prepend_line_numbers offset |> print_lines (mk_v2 0 y_offset |> some) ;
+      lines |> prepend_line_numbers offset |> print_lines screen stop_offset (mk_v2 0 y_offset |> some) ;
       print_selections selections
 
   let default_fill_screen screen =
@@ -1983,5 +1992,5 @@ module Ciseau = struct
 end
 
 let () =
-  (* Ciseau.main () ; *)
+  Ciseau.main () ;
   close_out logs
