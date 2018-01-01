@@ -14,6 +14,8 @@ let logs = open_out "/tmp/ciseau.log"
 
 let some x = Some x
 
+let conj ls x = List.cons x ls
+
 let alen = Array.length ;;
 let blen = Bytes.length ;;
 let slen = String.length ;;
@@ -641,7 +643,6 @@ type block_info = BlockInfo of {
 
 (* Represents the result of projecting a line of text inside a drawing view rectangle *)
 type line_info = LineInfo of {
-  number      : int ;
   blocks      : block_info list ;
 }
 
@@ -705,6 +706,7 @@ type selection_info = SelectionInfo of {
 }
 
 type text_view = TextView of {
+  offset      : int ;
   lines       : line_info list ;
   selections  : selection_info list ;
   cursor      : v2 ;
@@ -1254,10 +1256,10 @@ end
 module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = text_view) = struct
   open FilebufferUtil
 
-  type numbering_mode = Absolute | CursorRelative
-
   type atom = Atom.atom
   type view = text_view
+
+  type numbering_mode = Absolute | CursorRelative
 
   type t = {
       buffer      : string array ;  (* the file data, line per line *)
@@ -1272,7 +1274,7 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
                               (* index of last row in view is view_start + view_diff *)
 
   (* TODO: move to FileView *)
-      line_number_m : numbering_mode ;
+      numbering : numbering_mode ;
   }
 
   let init_filebuffer lines view_h =
@@ -1284,7 +1286,7 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
       cursor        = v2_zero ;
       view_start    = 0 ;
       view_diff     = view_h - 1;
-      line_number_m = CursorRelative ;
+      numbering     = CursorRelative ;
     }
 
   let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
@@ -1311,10 +1313,10 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     t |> adjust_cursor (fn t) |> adjust_view
 
   let swap_line_number_mode t =
-    let new_mode = match t.line_number_m with
+    let new_mode = match t.numbering with
     | Absolute        -> CursorRelative
     | CursorRelative  -> Absolute
-    in { t with line_number_m = new_mode }
+    in { t with numbering = new_mode }
 
   let recenter_view t =
     let new_start = t.cursor.y - t.view_diff / 2 in
@@ -1374,21 +1376,27 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
   let line_len i t =
     slen t.buffer.(i)
 
+  let get_line_numbering_offset t =
+    t.view_start + match t.numbering with
+    | Absolute        -> 1 ;
+    | CursorRelative  -> -t.cursor.y
+
+  let get_lines stop t =
+    let rec loop i =
+      if i < stop
+        then LineInfo {
+          blocks  = List.map atom_to_block t.atom_buffer.(i) ;
+        } :: loop (i + 1)
+        else []
+    in
+      loop t.view_start
+
   let get_view max_line t =
     let view_size = min (t.view_diff + 1) max_line in
     let stop = min t.buflen (t.view_start + view_size) in
-    let offset = match t.line_number_m with
-    | Absolute        -> 1 ;
-    | CursorRelative  -> -t.cursor.y
-    in let rec get_line i =
-      if i < stop
-      then LineInfo {
-        number  = i + offset ;
-        blocks  = List.map atom_to_block t.atom_buffer.(i) ;
-      } :: get_line (i + 1)
-      else []
-    in TextView {
-      lines         = get_line t.view_start ;
+    TextView {
+      offset        = get_line_numbering_offset t ;
+      lines         = get_lines stop t ;
       selections    = [
         SelectionInfo {
           bg      = Config.default.colors.cursor_line.Color.bg ;
@@ -1709,14 +1717,25 @@ module Ciseau = struct
     colors = Config.default.colors.line_numbers ;
   }
 
+  let prepend_line_numbers offset lines =
+    let rec loop n acc =
+      function
+      | [] -> List.rev acc
+      | LineInfo { blocks } :: t ->
+          let acc' = mk_line_number_block n |> conj blocks |> conj acc
+          in
+            loop (n + 1) acc' t
+    in
+      loop offset [] lines
+
   let print_file_buffer max_line filebuffer screen =
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let rec print_lines lines line_start =
+    let rec print_lines line_start lines =
       match (lines, line_start) with
-      | (LineInfo { number ; blocks } :: next_lines, Some start) ->
+      | (blocks :: next_lines, Some start) ->
         (* BUG: this stop_offset guard is still necessary because the filebuffer
          * has no way currently to tell which lines are going to overflow.
          *  -> this causes problems when the cursors are in the last lines of the pseudo view
@@ -1728,10 +1747,9 @@ module Ciseau = struct
          *           this would require removing all the view adjust code from the filebuffer.
          *)
         if start.y < stop_offset then
-          let blocks' = (mk_line_number_block number) :: blocks in
-          let stop = print_blocks screen start blocks' in
+          let stop = print_blocks screen start blocks in
           let next_start = Screen.next_line screen stop in
-          print_lines next_lines next_start
+          print_lines next_start next_lines
       | _ -> ()
     in
     let rec print_selections = function
@@ -1740,8 +1758,8 @@ module Ciseau = struct
           List.iter (fun (RangeInfo { start ; len }) -> Screen.set_bg_color bg start len screen) ranges ;
           print_selections t
     in
-      let TextView { lines ; selections } = get_view max_line filebuffer in
-      print_lines lines (mk_v2 0 y_offset |> some) ;
+      let TextView { offset ; lines ; selections } = get_view max_line filebuffer in
+      lines |> prepend_line_numbers offset |> print_lines (mk_v2 0 y_offset |> some) ;
       print_selections selections
 
   let default_fill_screen screen =
