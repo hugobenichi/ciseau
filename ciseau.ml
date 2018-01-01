@@ -757,9 +757,8 @@ module type ScreenType = sig
 
   val init_screen : framebuffer -> v2 -> v2 -> t
   val put_block : t -> v2 -> BlockInfo.t -> v2
-  val put_block_text : t -> int -> BlockInfo.t list list -> unit (* todo: add clip mode *)
-  val put_line : Color.color_cell -> v2 -> string -> t -> v2
-  val set_bg_color : Color.t -> v2 -> int -> t -> unit
+  val put_block_text : t -> int -> BlockInfo.t list list -> unit (* TODO: add clip mode *)
+  val put_line : t -> v2 -> BlockInfo.t -> unit (* TODO: refactor to use put_block instead *)
 end
 
 
@@ -1190,11 +1189,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
           |> (+) (slen s)
           |> offset_to_v2 stride
 
-  (* Write a string to the screen starting at the given position.
-   * If the string is longer then the remaining space on the line, then wraps the string to the next line. *)
-  let put_string start s screen =
-    Framebuffer.set_text start s screen.frame_buffer
-
   (* Set the foreground and background colors of a given segment of the screen delimited by the given start
    * and end positions. *)
   let put_color_segment colors start stop screen =
@@ -1205,17 +1199,10 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     if len > 0 then
       Framebuffer.set_color { Range.pos = start ; Range.len = len } colors screen.frame_buffer
 
-  (* Set the foreground and background colors of the line pointed to by the current position. *)
-  (* TODO: migrate all callers to put_line and kill this *)
-  let put_color_line colors vec2 screen =
-    let start = shift_left vec2 in
-    let stop = start <+> (line_size_vec screen) in
-    put_color_segment colors start stop screen
-
   let put_block screen start { BlockInfo.text ; BlockInfo.colors } =
     let stop = stop_of screen start text
     in
-      put_string start text screen ;
+      Framebuffer.set_text start text screen.frame_buffer ;
       put_color_segment colors start stop screen ;
       stop
 
@@ -1230,17 +1217,12 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
       |> BlockInfo.break_block_line_text bounds
       |> List.iteri put_block_line
 
-  let put_line colors start line screen =
-    let stop = stop_of screen start line in
+  let put_line screen start { BlockInfo.text ; BlockInfo.colors } =
+    let stop = stop_of screen start text in
     let line_stop = mk_v2 screen.size.x stop.y
     in
-      put_string start line screen ;
-      put_color_segment colors start line_stop screen ;
-      line_stop
-
-  let set_bg_color bg vec2 len screen =
-    Framebuffer.set_color_bg { Range.pos = vec2 ; Range.len = len } bg screen.frame_buffer
-
+      Framebuffer.set_text start text screen.frame_buffer ;
+      put_color_segment colors start line_stop screen
 end
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
@@ -1687,7 +1669,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      Screen.put_line Config.default.colors.header vec2 s screen |> ignore
+      Screen.put_line screen vec2 (BlockInfo.mk_block s Config.default.colors.header)
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
@@ -1697,19 +1679,17 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.put_line Config.default.colors.status vec2' s screen |> ignore
+      Screen.put_line screen vec2' (BlockInfo.mk_block s Config.default.colors.status)
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = vec2 <-> v2_x0y1 in
     let s =  editor.user_input
     in
-      Screen.put_line Config.default.colors.user_input vec2' s screen |> ignore
+      Screen.put_line screen vec2' (BlockInfo.mk_block s Config.default.colors.user_input)
 
-  let mk_line_number_block n = {
-    BlockInfo.text = Printf.sprintf "%4d " n ;
-    BlockInfo.colors = Config.default.colors.line_numbers ;
-  }
+  let mk_line_number_block n =
+    BlockInfo.mk_block (Printf.sprintf "%4d " n) Config.default.colors.line_numbers
 
   let prepend_line_numbers offset lines =
     let rec loop n acc =
