@@ -1381,22 +1381,20 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     | Absolute        -> 1 ;
     | CursorRelative  -> -t.cursor.y
 
-  let get_lines stop t =
-    let rec loop i =
-      if i < stop
-        then LineInfo {
-          blocks  = List.map atom_to_block t.atom_buffer.(i) ;
-        } :: loop (i + 1)
-        else []
-    in
-      loop t.view_start
+  let get_line t offset i =
+    LineInfo {
+      blocks  = List.map atom_to_block t.atom_buffer.(offset + i) ;
+    }
 
-  let get_view max_line t =
-    let view_size = min (t.view_diff + 1) max_line in
-    let stop = min t.buflen (t.view_start + view_size) in
+  let get_lines view_start view_max t =
+    let start = t.view_start in
+    let stop = min t.buflen (start + view_max) in
+    Array.init (stop - start) (get_line t start) |> Array.to_list
+
+  let get_view maxlines t =
     TextView {
       offset        = get_line_numbering_offset t ;
-      lines         = get_lines stop t ;
+      lines         = get_lines t.view_start maxlines t ;
       selections    = [
         SelectionInfo {
           bg      = Config.default.colors.cursor_line.Color.bg ;
@@ -1732,7 +1730,6 @@ module Ciseau = struct
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
-    let open Filebuffer in
     let rec print_lines line_start lines =
       match (lines, line_start) with
       | (blocks :: next_lines, Some start) ->
@@ -1758,7 +1755,7 @@ module Ciseau = struct
           List.iter (fun (RangeInfo { start ; len }) -> Screen.set_bg_color bg start len screen) ranges ;
           print_selections t
     in
-      let TextView { offset ; lines ; selections } = get_view max_line filebuffer in
+      let TextView { offset ; lines ; selections } = Filebuffer.get_view max_line filebuffer in
       lines |> prepend_line_numbers offset |> print_lines (mk_v2 0 y_offset |> some) ;
       print_selections selections
 
