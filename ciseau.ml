@@ -643,7 +643,7 @@ module Keys = struct
 end
 
 
-module BlockInfo = struct
+module Block = struct
   type t = {
     text    : string ;
     colors  : Color.color_cell ;
@@ -704,13 +704,8 @@ module BlockInfo = struct
       block_lines |> loop [] |> List.rev |> drop bounds.y
 end
 
-(* Represents the result of projecting a line of text inside a drawing view rectangle *)
-type line_info = LineInfo of {
-  blocks      : BlockInfo.t list ;
-}
-
-module Range = struct
-  type segment = { pos : v2 ; len : int }
+module Segment = struct
+  type t = { pos : v2 ; len : int }
 
   let mk_segment x y l = {
     pos = mk_v2 x y ;
@@ -718,12 +713,16 @@ module Range = struct
   }
 end
 
+(* Represents the result of projecting a line of text inside a drawing view rectangle *)
+type line_info = LineInfo of {
+  blocks      : Block.t list ;
+}
+
 type text_view = TextView of {
   offset      : int ;
   lines       : line_info list ;
   cursor      : v2 ;
 }
-
 
 module type BytevectorType = sig
   type t
@@ -754,11 +753,12 @@ end
 module type ScreenType = sig
   type t
   type framebuffer
+  type block
 
   val init_screen : framebuffer -> v2 -> v2 -> t
-  val put_block : t -> v2 -> BlockInfo.t -> v2
-  val put_block_text : t -> int -> BlockInfo.t list list -> unit (* TODO: add clip mode *)
-  val put_line : t -> v2 -> BlockInfo.t -> unit (* TODO: refactor to use put_block instead *)
+  val put_block : t -> v2 -> block -> v2
+  val put_block_text : t -> int -> block list list -> unit (* TODO: add clip mode *)
+  val put_line : t -> v2 -> block -> unit (* TODO: refactor to use put_block instead *)
 end
 
 
@@ -1008,7 +1008,7 @@ end
 open Config
 
 
-module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and type segment = Range.segment) = struct
+module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and type segment = Segment.t) = struct
   (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
    *       and use them for set_text and set_color *)
 
@@ -1020,7 +1020,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
   end
 
   type bytevector = Bytevector.t
-  type segment    = Range.segment
+  type segment    = Segment.t
 
   type t = {
     text        : Bytes.t ;
@@ -1124,7 +1124,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       let stoplen = min len maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
-  let set_color { Range.pos ; Range.len } { Color.fg ; Color.bg } t =
+  let set_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
     let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let maxlen = t.len - start in
@@ -1132,14 +1132,14 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.fg_colors start stoplen fg ;
       Array.fill t.bg_colors start stoplen bg
 
-  let set_color_fg { Range.pos ; Range.len } fg t =
+  let set_color_fg { Segment.pos ; Segment.len } fg t =
     let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let maxlen = t.len - start in
       let stoplen = min len maxlen in
       Array.fill t.fg_colors start stoplen fg
 
-  let set_color_bg { Range.pos ; Range.len } bg t =
+  let set_color_bg { Segment.pos ; Segment.len } bg t =
     let start = v2_to_offset t.window.x pos in
     if start < t.len then
       let maxlen = t.len - start in
@@ -1151,9 +1151,10 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
 end
 
 
-module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
+module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block = Block.t) = struct
 
   type framebuffer  = Framebuffer.t
+  type block        = Block.t
 
   type t = {
     size            : v2 ;
@@ -1197,9 +1198,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     let stop_p  = v2_to_offset stride stop in
     let len = stop_p - start_p in
     if len > 0 then
-      Framebuffer.set_color { Range.pos = start ; Range.len = len } colors screen.frame_buffer
+      Framebuffer.set_color { Segment.pos = start ; Segment.len = len } colors screen.frame_buffer
 
-  let put_block screen start { BlockInfo.text ; BlockInfo.colors } =
+  let put_block screen start { Block.text ; Block.colors } =
     let stop = stop_of screen start text
     in
       Framebuffer.set_text start text screen.frame_buffer ;
@@ -1214,10 +1215,10 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
       blks |> List.fold_left (put_block screen) (mk_line_start i) |> ignore
     in
     block_lines
-      |> BlockInfo.break_block_line_text bounds
+      |> Block.break_block_line_text bounds
       |> List.iteri put_block_line
 
-  let put_line screen start { BlockInfo.text ; BlockInfo.colors } =
+  let put_line screen start { Block.text ; Block.colors } =
     let stop = stop_of screen start text in
     let line_stop = mk_v2 screen.size.x stop.y
     in
@@ -1226,8 +1227,8 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
 end
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
-  BlockInfo.text    = String.sub line start (stop - start) ;
-  BlockInfo.colors  = Config.color_for_atom Config.default kind ;
+  Block.text    = String.sub line start (stop - start) ;
+  Block.colors  = Config.color_for_atom Config.default kind ;
 }
 
 module FilebufferUtil = struct
@@ -1669,7 +1670,7 @@ module Ciseau = struct
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      Screen.put_line screen vec2 (BlockInfo.mk_block s Config.default.colors.header)
+      Screen.put_line screen vec2 (Block.mk_block s Config.default.colors.header)
 
   let show_status editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
@@ -1679,17 +1680,17 @@ module Ciseau = struct
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.put_line screen vec2' (BlockInfo.mk_block s Config.default.colors.status)
+      Screen.put_line screen vec2' (Block.mk_block s Config.default.colors.status)
 
   let show_user_input editor screen vec2 =
     (* BUG: fix this -1 offset issue *)
     let vec2' = vec2 <-> v2_x0y1 in
     let s =  editor.user_input
     in
-      Screen.put_line screen vec2' (BlockInfo.mk_block s Config.default.colors.user_input)
+      Screen.put_line screen vec2' (Block.mk_block s Config.default.colors.user_input)
 
   let mk_line_number_block n =
-    BlockInfo.mk_block (Printf.sprintf "%4d " n) Config.default.colors.line_numbers
+    Block.mk_block (Printf.sprintf "%4d " n) Config.default.colors.line_numbers
 
   let prepend_line_numbers offset lines =
     let rec loop n acc =
@@ -1711,7 +1712,7 @@ module Ciseau = struct
           |> Screen.put_block_text screen y_offset
 
   let default_fill_screen maxlines screen =
-    mk_list maxlines [BlockInfo.mk_block "~" Config.default.colors.default_fill]
+    mk_list maxlines [Block.mk_block "~" Config.default.colors.default_fill]
       |> Screen.put_block_text screen 0
 
   let refresh_screen editor =
