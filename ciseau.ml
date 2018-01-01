@@ -1224,6 +1224,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
     Framebuffer.set_color_bg { Range.pos = vec2 ; Range.len = len } bg screen.frame_buffer
 
   let put_text (TextView { lines ; selections ; cursor }) start screen = start
+
 end
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = BlockInfo {
@@ -1703,20 +1704,19 @@ module Ciseau = struct
     in
       loop index blocks
 
+  let mk_line_number_block n = BlockInfo {
+    text = Printf.sprintf "%4d " n ;
+    colors = Config.default.colors.line_numbers ;
+  }
+
   let print_file_buffer max_line filebuffer screen =
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
     let y_offset = 1 in
     let stop_offset = y_offset + max_line in
     let open Filebuffer in
-    let print_line start (LineInfo { number ; blocks }) =
-      let num = Printf.sprintf "%4d " number in
-      let next = Screen.put_color_string Config.default.colors.line_numbers start num screen in
-      let stop = print_blocks screen next blocks in
-      Screen.next_line screen stop
-    in
     let rec print_lines lines line_start =
       match (lines, line_start) with
-      | (info :: rest_lines, Some start) ->
+      | (LineInfo { number ; blocks } :: next_lines, Some start) ->
         (* BUG: this stop_offset guard is still necessary because the filebuffer
          * has no way currently to tell which lines are going to overflow.
          *  -> this causes problems when the cursors are in the last lines of the pseudo view
@@ -1727,8 +1727,11 @@ module Ciseau = struct
          *        -> the view could be actually calculated here and passed back to the filebuffer.
          *           this would require removing all the view adjust code from the filebuffer.
          *)
-        if start.y < stop_offset
-        then print_line start info |> print_lines rest_lines
+        if start.y < stop_offset then
+          let blocks' = (mk_line_number_block number) :: blocks in
+          let stop = print_blocks screen start blocks' in
+          let next_start = Screen.next_line screen stop in
+          print_lines next_lines next_start
       | _ -> ()
     in
     let rec print_selections = function
