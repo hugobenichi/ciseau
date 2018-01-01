@@ -695,63 +695,6 @@ module BlockInfo = struct
           loop (blocks' :: acc) rest_lines
     in
       block_lines |> loop [] |> List.rev |> drop bounds.y
-
-  let test () =
-    let c = {
-        Color.fg    = Color.green ;
-        Color.bg    = Color.black ;
-      }
-    in
-    let b = mk_block "helloworld" c in
-    let pr =
-      function
-        | (b1, Some b2) -> Printf.printf "b1: %s ; b2 : some %s\n" b1.text b2.text
-        | (b1, None)    -> Printf.printf "b1: %s ; b2 : none\n" b1.text
-    in
-      b |> split_at 0 |> pr ;
-      b |> split_at 1 |> pr ;
-      b |> split_at 2 |> pr ;
-      b |> split_at 3 |> pr ;
-      b |> split_at 4 |> pr ;
-      b |> split_at 5 |> pr ;
-      b |> split_at 6 |> pr ;
-      b |> split_at 7 |> pr ;
-      b |> split_at 8 |> pr ;
-      b |> split_at 9 |> pr ;
-      b |> split_at 10 |> pr ;
-      b |> split_at 11 |> pr ;
-      b |> split_at 12 |> pr ;
-      b |> split_at 13 |> pr ;
-
-      print_newline () ;
-
-      let pr_ls ls = ls |> List.map (fun { text ; _ } -> text) |> String.concat " " in
-      let pr_break (ls1, ls2) = Printf.printf "( [ %s ] ; [ %s ] )\n" (pr_ls ls1) (pr_ls ls2) in
-      let ls = [ mk_block "abc" c ; mk_block "def" c ; mk_block "ghi" c ] in
-      ls |> break_block_line 0 |> pr_break ;
-      ls |> break_block_line 1 |> pr_break ;
-      ls |> break_block_line 2 |> pr_break ;
-      ls |> break_block_line 3 |> pr_break ;
-      ls |> break_block_line 4 |> pr_break ;
-      ls |> break_block_line 5 |> pr_break ;
-      ls |> break_block_line 6 |> pr_break ;
-      ls |> break_block_line 7 |> pr_break ;
-      ls |> break_block_line 8 |> pr_break ;
-      ls |> break_block_line 9 |> pr_break ;
-      ls |> break_block_line 10 |> pr_break ;
-      ls |> break_block_line 11 |> pr_break ;
-      ls |> break_block_line 12 |> pr_break ;
-
-      print_newline () ;
-
-      [ls ; ls ; ls ] |> clip_block_line_text (mk_v2 7 5) |> List.iter (pr_ls >> Printf.printf "[ %s ]\n");
-
-      print_newline ();
-      [ls ; ls ; ls ] |> break_block_line_text (mk_v2 4 5) |> List.iter (pr_ls >> Printf.printf "[ %s ]\n");
-
-      ()
-
-  (* let _ = test () *)
 end
 
 (* Represents the result of projecting a line of text inside a drawing view rectangle *)
