@@ -859,7 +859,7 @@ module type ScreenType = sig
   val init_screen : framebuffer -> v2 -> v2 -> t
   val put_block : t -> v2 -> BlockInfo.t -> v2
   val put_block_text : t -> int -> BlockInfo.t list list -> unit (* todo: add clip mode *)
-  val next_line : t -> v2 -> v2 option
+  val next_line : t -> v2 -> v2 option (* TODO: remove the need for this *)
   val put_line : Color.color_cell -> v2 -> string -> t -> v2
   val put_color_string : Color.color_cell -> v2 -> string -> t -> v2
   val set_bg_color : Color.t -> v2 -> int -> t -> unit
@@ -1826,34 +1826,6 @@ module Ciseau = struct
     in
       Screen.put_line Config.default.colors.user_input vec2' s screen |> ignore
 
-  let print_blocks screen index blocks =
-    let rec loop index = function
-      | []      -> index
-      | { BlockInfo.text ; BlockInfo.colors } :: t  ->
-          let next = Screen.put_color_string colors index text screen in
-          loop next t
-    in
-      loop index blocks
-
-  let rec print_lines screen line_stop line_start lines =
-    match (lines, line_start) with
-    | (blocks :: next_lines, Some start) ->
-      (* BUG: this stop_offset guard is still necessary because the filebuffer
-       * has no way currently to tell which lines are going to overflow.
-       *  -> this causes problems when the cursors are in the last lines of the pseudo view
-       *     inside the filebuffer. For instance if cursor is on last line and one previous line overflow,
-       *     the cursor should be hidden.
-       *     -> the conclusion is that the Filebuffer (or the ting aware of cursor into the file and doing
-       *        view adjust) needs to know about which line overflows.
-       *        -> the view could be actually calculated here and passed back to the filebuffer.
-       *           this would require removing all the view adjust code from the filebuffer.
-       *)
-      if start.y < line_stop then
-        let stop = print_blocks screen start blocks in
-        let next_start = Screen.next_line screen stop in
-        print_lines screen line_stop next_start next_lines
-    | _ -> ()
-
   let mk_line_number_block n = {
     BlockInfo.text = Printf.sprintf "%4d " n ;
     BlockInfo.colors = Config.default.colors.line_numbers ;
@@ -1871,9 +1843,8 @@ module Ciseau = struct
       loop offset [] lines
 
   let print_file_buffer max_line filebuffer screen =
-    (* TODO: handle view_offset inside nested screen and remove max_line, y_offset, and stop_offset *)
+    (* TODO: handle view_offset inside nested screen and remove max_line, y_offset *)
     let y_offset = 1 in
-    let stop_offset = y_offset + max_line in
     let rec print_selections = function
       | [] -> ()
       | SelectionInfo { bg ; ranges } :: t ->
@@ -1882,6 +1853,7 @@ module Ciseau = struct
     in
       let TextView { offset ; lines ; selections } = Filebuffer.get_view max_line filebuffer in
       lines |> prepend_line_numbers offset
+            (* TODO: fuse selection into the block list *)
             |> Screen.put_block_text screen y_offset ;
       print_selections selections
 
