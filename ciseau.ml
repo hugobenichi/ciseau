@@ -636,14 +636,92 @@ module Keys = struct
 end
 
 
-type block_info = BlockInfo of {
-  text    : string ;
-  colors  : Color.color_cell ;
-}
+module BlockInfo = struct
+  type t = {
+    text    : string ;
+    colors  : Color.color_cell ;
+  }
+
+  let mk_block t c = { text = t ; colors = c }
+
+  let len { text } = slen text
+
+  let split_at l b =
+    let blen = len b in
+    if blen <= l
+      then (b, None)
+      else
+        let t1 = String.sub b.text 0 l in
+        let t2 = String.sub b.text l (blen - l) in
+        ({ text = t1 ; colors = b.colors }, Some { text = t2 ; colors = b.colors })
+
+  let break_block_list left ls =
+    let rec loop left acc ls =
+      match ls with
+        | [] -> (acc, ls)
+        | _ when left < 1 -> (acc, ls)
+        | b :: r ->
+            match split_at left b with
+            | (b1, Some b2) -> (b1 :: acc, b2 :: r)
+            | (_, None) -> loop (left - (len b)) (b :: acc) r
+    in
+      let (rev_first_line, remainder) = loop left [] ls
+      in  (List.rev rev_first_line, remainder)
+
+  let test () =
+    let c = {
+        Color.fg    = Color.green ;
+        Color.bg    = Color.black ;
+      }
+    in
+    let b = mk_block "helloworld" c in
+    let pr =
+      function
+        | (b1, Some b2) -> Printf.printf "b1: %s ; b2 : some %s\n" b1.text b2.text
+        | (b1, None)    -> Printf.printf "b1: %s ; b2 : none\n" b1.text
+    in
+      b |> split_at 0 |> pr ;
+      b |> split_at 1 |> pr ;
+      b |> split_at 2 |> pr ;
+      b |> split_at 3 |> pr ;
+      b |> split_at 4 |> pr ;
+      b |> split_at 5 |> pr ;
+      b |> split_at 6 |> pr ;
+      b |> split_at 7 |> pr ;
+      b |> split_at 8 |> pr ;
+      b |> split_at 9 |> pr ;
+      b |> split_at 10 |> pr ;
+      b |> split_at 11 |> pr ;
+      b |> split_at 12 |> pr ;
+      b |> split_at 13 |> pr ;
+
+      print_newline () ;
+
+      let pr_ls ls = ls |> List.map (fun { text ; _ } -> text) |> String.concat " " in
+      let pr_break (ls1, ls2) = Printf.printf "( [ %s ] ; [ %s ] )\n" (pr_ls ls1) (pr_ls ls2) in
+      let ls = [ mk_block "abc" c ; mk_block "def" c ; mk_block "ghi" c ] in
+      ls |> break_block_list 0 |> pr_break ;
+      ls |> break_block_list 1 |> pr_break ;
+      ls |> break_block_list 2 |> pr_break ;
+      ls |> break_block_list 3 |> pr_break ;
+      ls |> break_block_list 4 |> pr_break ;
+      ls |> break_block_list 5 |> pr_break ;
+      ls |> break_block_list 6 |> pr_break ;
+      ls |> break_block_list 7 |> pr_break ;
+      ls |> break_block_list 8 |> pr_break ;
+      ls |> break_block_list 9 |> pr_break ;
+      ls |> break_block_list 10 |> pr_break ;
+      ls |> break_block_list 11 |> pr_break ;
+      ls |> break_block_list 12 |> pr_break ;
+
+      ()
+
+  let _ = test ()
+end
 
 (* Represents the result of projecting a line of text inside a drawing view rectangle *)
 type line_info = LineInfo of {
-  blocks      : block_info list ;
+  blocks      : BlockInfo.t list ;
 }
 
 type range_info = RangeInfo of {
@@ -1229,9 +1307,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t) = struct
 
 end
 
-let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = BlockInfo {
-  text    = String.sub line start (stop - start) ;
-  colors  = Config.color_for_atom Config.default kind ;
+let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
+  BlockInfo.text    = String.sub line start (stop - start) ;
+  BlockInfo.colors  = Config.color_for_atom Config.default kind ;
 }
 
 module FilebufferUtil = struct
@@ -1704,15 +1782,15 @@ module Ciseau = struct
   let print_blocks screen index blocks =
     let rec loop index = function
       | []      -> index
-      | BlockInfo { text ; colors } :: t  ->
+      | { BlockInfo.text ; BlockInfo.colors } :: t  ->
           let next = Screen.put_color_string colors index text screen in
           loop next t
     in
       loop index blocks
 
-  let mk_line_number_block n = BlockInfo {
-    text = Printf.sprintf "%4d " n ;
-    colors = Config.default.colors.line_numbers ;
+  let mk_line_number_block n = {
+    BlockInfo.text = Printf.sprintf "%4d " n ;
+    BlockInfo.colors = Config.default.colors.line_numbers ;
   }
 
   let prepend_line_numbers offset lines =
@@ -1870,5 +1948,5 @@ module Ciseau = struct
 end
 
 let () =
-  Ciseau.main () ;
+  (* Ciseau.main () ; *)
   close_out logs
