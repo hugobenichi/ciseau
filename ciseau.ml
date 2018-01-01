@@ -702,69 +702,18 @@ type line_info = LineInfo of {
   blocks      : BlockInfo.t list ;
 }
 
-type range_info = RangeInfo of {
-  start : v2 ;
-  len   : int ;
-}
-
 module Range = struct
-
   type segment = { pos : v2 ; len : int }
 
   let mk_segment x y l = {
     pos = mk_v2 x y ;
     len = l ;
   }
-
-  type t =
-    | Row of { y : int }                                (* complete row from x=0 to x=width *)
-    | Segment of segment               (* segment of a row from (x,y) to (x+len,y), no overflow *)
-    | Rectangle of { topleft : v2 ; bottomright : v2 }  (* rectanble, with bottom right included *)
-    | Multi of t list
-
-  let row0 = Row { y = 0 }
-
-  let clip_x v2_max x =
-    max v2_max.x x
-
-  let clip_y v2_max y =
-    max v2_max.y y
-
-  let clip_v2 v2_max { x ; y } = {
-    x = clip_x v2_max x ;
-    y = clip_y v2_max y ;
-  }
-
-  let clip_segment { x ; y } { pos ; len } =
-    let x' = max x pos.x in
-    let y' = max y pos.y in
-    let l' = max (pos.x - x') len in
-    mk_segment x' y' l'
-
-  let rec reduce_range bounds =
-    function
-      | Row { y } ->
-          [ mk_segment 0 y bounds.x |> clip_segment bounds ]
-      | Segment s ->
-          [ clip_segment bounds s ]
-      | Rectangle { topleft ; bottomright } ->
-          let { x = x0 ; y = y0 } = clip_v2 bounds topleft in
-          let { x = x1 ; y = y1 } = clip_v2 bounds bottomright in
-          let dx = x1 - x0 in
-          let dy = y1 - y0 in
-          Array.init dy (fun i -> mk_segment x0 (y0 + i) dx) |> Array.to_list
-      | Multi ls -> ls |> List.map (reduce_range bounds) |> List.flatten
 end
-
-type selection_info = SelectionInfo of {
-  bg      : Color.t ;
-  ranges  : range_info list ;
-}
 
 type text_view = TextView of {
   offset      : int ;
   lines       : line_info list ;
-  selections  : selection_info list ;
   cursor      : v2 ;
 }
 
@@ -1463,15 +1412,6 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     TextView {
       offset        = get_line_numbering_offset t ;
       lines         = get_lines t.view_start maxlines t ;
-      selections    = [
-        SelectionInfo {
-          bg      = Config.default.colors.cursor_line.Color.bg ;
-          ranges  = [
-            (* TODO: switch to a full line descr when available *)
-            RangeInfo { start = mk_v2 0 t.cursor.y ; len = line_len t.cursor.y t }
-          ]
-        }
-      ] ;
       cursor        = t.cursor ;
     }
 
@@ -1788,17 +1728,10 @@ module Ciseau = struct
   let print_file_buffer max_line filebuffer screen =
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset *)
     let y_offset = 1 in
-    let rec print_selections = function
-      | [] -> ()
-      | SelectionInfo { bg ; ranges } :: t ->
-          List.iter (fun (RangeInfo { start ; len }) -> Screen.set_bg_color bg start len screen) ranges ;
-          print_selections t
-    in
-      let TextView { offset ; lines ; selections } = Filebuffer.get_view max_line filebuffer in
-      lines |> prepend_line_numbers offset
-            (* TODO: fuse selection into the block list *)
-            |> Screen.put_block_text screen y_offset ;
-      print_selections selections
+    let TextView { offset ; lines } = Filebuffer.get_view max_line filebuffer in
+    lines |> prepend_line_numbers offset
+          (* TODO: fuse selection into the block list *)
+          |> Screen.put_block_text screen y_offset
 
   let default_fill_screen screen =
     let rec loop = function
