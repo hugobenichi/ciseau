@@ -1,12 +1,12 @@
 (* next TODOs:
- *  a) add more sophisticated RangeInfo type
- *       that can describe a line segment, a non-bounded segment, or a full ine
- *       and use it from the and screen types up
- *  b) introduce iterator in TextView and in print_file_buffer
- *  c) correctly manage the cursor position in text coordinates and in screen coordinates
+ *  - correctly manage the cursor position in text coordinates and in screen coordinates
+ *  - optimize a bit memory usage
+ *      - Block.t should take a string range instead of a string
+ *      - Atom should use Block.t
+ *      - introduce an array slice type and replace a bunch of list with arrays or array slices
  *
- *  once a) is done, that should allow to implement b) by taking out the print_file_buffer function from the
- *  Ciseau module and move it to ScreenType module, and that should achieve c) easily
+ *  - correctly parse control sequences from terminal and handle SIGWINCH
+ *  - add selection fusion to get_view
  *)
 
 
@@ -22,6 +22,9 @@ let mk_list size e =
     else loop (e :: acc) (n - 1)
   in
     loop [] size
+
+let expand_tabs s =
+  s |> String.split_on_char '\t' |> String.concat "  "
 
 let alen = Array.length ;;
 let blen = Bytes.length ;;
@@ -768,7 +771,7 @@ module type ScreenType = sig
 
   val init_screen : framebuffer -> v2 -> v2 -> t
   val put_block : t -> v2 -> block -> v2
-  val put_block_text : t -> Block.linebreak -> int -> block list list -> unit (* TODO: add clip mode *)
+  val put_block_text : t -> Block.linebreak -> int -> block list list -> unit
   val put_line : t -> v2 -> block -> unit (* TODO: refactor to use put_block instead *)
 end
 
@@ -1021,8 +1024,6 @@ open Config
 
 
 module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and type segment = Segment.t) = struct
-  (* TODO: define types for bounding box, area, wrapping mode for text, blending mode for color, ...
-   *       and use them for set_text and set_color *)
 
   module Default = struct
     let fg    = Color.white ;;
@@ -1127,7 +1128,6 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
-  (* TODO: strip \r\n, do tab to space expansion *)
   let set_text pos s t =
     let start = v2_to_offset t.window.x pos in
     if start < t.len then
@@ -1239,7 +1239,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 end
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
-  Block.text    = String.sub line start (stop - start) ;
+  Block.text    = String.sub line start (stop - start) |> expand_tabs ;
   Block.colors  = Config.color_for_atom Config.default kind ;
 }
 
@@ -1251,9 +1251,7 @@ end
 (* This represents a file currently edited
  * It contains both file information, and windowing information
  * TODO: to properly support multiple editing views into the same file, I need to split these into two
- * TODO: handle long lines: need to wrap line correctly, but need to detect in advance at creation and track correspondly *)
-(* TODO: add line number *)
-(* TODO: Some of the first cracks in this reprensentation are already showing up.
+ * TODO: Some of the first cracks in this reprensentation are already showing up.
          For instance, empty lines are empty strings, but in the file they take characters
          this requires special handling in the editor, because we still need to restore these empty lines at save
          and need to display them.
@@ -1275,14 +1273,11 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
       atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
       buflen      : int ;           (* number of lines in the buffer, may be less than buffer array length *)
 
-      cursor      : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
-
       (* TODO: move to FileView *)
+      cursor      : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
       view_start  : int ;      (* index of first row in view *)
       view_diff   : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                               (* index of last row in view is view_start + view_diff *)
-
-      (* TODO: move to FileView *)
       numbering     : numbering_mode ;
       linebreaking  : Block.linebreak ;
   }
