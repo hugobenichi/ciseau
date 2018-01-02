@@ -546,10 +546,6 @@ module Color = struct
 end
 
 
-(* Mappings of character codes
- * char code -> char enum
- * char code -> char string repr
- *)
 module Keys = struct
 
   type key_symbol = Unknown
@@ -595,55 +591,56 @@ module Keys = struct
     code    : int ;
   }
 
-  let unknown_key = {
-    symbol  = Unknown ;
-    repr    = "unknown" ;
-    code    = 0 ;
+  let mk_key s r c = {
+    symbol  = s ;
+    repr    = r ;
+    code    = c ;
   }
 
-  let make_key s r c = { symbol = s; repr = r; code = c }
+  let mk_unknown_key =
+    mk_key Unknown "unknown"
 
-  let code_to_key_table = Array.make 256 unknown_key ;;
-  code_to_key_table.(3)   <- make_key Ctrl_c      "Ctrl_c"        3 ;;
-  code_to_key_table.(4)   <- make_key Ctrl_d      "Ctrl_d"        4 ;;
-  code_to_key_table.(10)  <- make_key Ctrl_j      "Ctrl_j"        10 ;;
-  code_to_key_table.(11)  <- make_key Ctrl_k      "Ctrl_k"        11 ;;
-  code_to_key_table.(21)  <- make_key Ctrl_u      "Ctrl_u"        21 ;;
-  code_to_key_table.(26)  <- make_key Ctrl_z      "Ctrl_z"        26 ;;
-  code_to_key_table.(32)  <- make_key Space       "Space"         32 ;;
-  code_to_key_table.(65)  <- make_key ArrowUp     "ArrowUp"       65 ;;
-  code_to_key_table.(66)  <- make_key ArrowDown   "ArrowDown"     66 ;;
-  code_to_key_table.(67)  <- make_key ArrowRight  "ArrowRight"    67 ;;
-  code_to_key_table.(68)  <- make_key ArrowLeft   "ArrowLeft"     68 ;;
-  code_to_key_table.(66)  <- make_key Upper_b     "W"             66 ;;
-  code_to_key_table.(87)  <- make_key Upper_w     "B"             87 ;;
-  code_to_key_table.(98)  <- make_key Lower_b     "w"             98 ;;
-  code_to_key_table.(104) <- make_key Lower_h     "h"             104 ;;
-  code_to_key_table.(106) <- make_key Lower_j     "j"             106 ;;
-  code_to_key_table.(107) <- make_key Lower_k     "k"             107 ;;
-  code_to_key_table.(108) <- make_key Lower_l     "l"             108 ;;
-  code_to_key_table.(119) <- make_key Lower_w     "w"             119 ;;
-  code_to_key_table.(153) <- make_key Alt_h       "Alt_h"         153 ;;
-  code_to_key_table.(134) <- make_key Alt_j       "Alt_j"         134 ;;
-  code_to_key_table.(154) <- make_key Alt_k       "Alt_k"         154 ;;
-  code_to_key_table.(172) <- make_key Alt_l       "Alt_l"         172 ;;
-  code_to_key_table.(48)  <- make_key Digit_0     "0"             48 ;;
-  code_to_key_table.(49)  <- make_key Digit_1     "1"             49 ;;
-  code_to_key_table.(50)  <- make_key Digit_2     "2"             50 ;;
-  code_to_key_table.(51)  <- make_key Digit_3     "3"             51 ;;
-  code_to_key_table.(52)  <- make_key Digit_4     "4"             52 ;;
-  code_to_key_table.(53)  <- make_key Digit_5     "5"             53 ;;
-  code_to_key_table.(54)  <- make_key Digit_6     "6"             54 ;;
-  code_to_key_table.(55)  <- make_key Digit_7     "7"             55 ;;
-  code_to_key_table.(56)  <- make_key Digit_8     "8"             56 ;;
-  code_to_key_table.(57)  <- make_key Digit_9     "9"             57 ;;
-  code_to_key_table.(92)  <- make_key Backslash   "\\"            92 ;;
-  code_to_key_table.(124) <- make_key Pipe        "|"             124 ;;
+  let code_to_key_table = Array.init 256 mk_unknown_key
 
-  let code_to_key code =
-    match code_to_key_table.(code) with
-    | unknown when unknown.symbol = Unknown -> { unknown with code = code }
-    | found                                 -> found
+  let _ = [
+    mk_key Ctrl_c      "Ctrl_c"        3 ;
+    mk_key Ctrl_d      "Ctrl_d"        4 ;
+    mk_key Ctrl_j      "Ctrl_j"        10 ;
+    mk_key Ctrl_k      "Ctrl_k"        11 ;
+    mk_key Ctrl_u      "Ctrl_u"        21 ;
+    mk_key Ctrl_z      "Ctrl_z"        26 ;
+    mk_key Space       "Space"         32 ;
+    mk_key ArrowUp     "ArrowUp"       65 ;
+    mk_key ArrowDown   "ArrowDown"     66 ;
+    mk_key ArrowRight  "ArrowRight"    67 ;
+    mk_key ArrowLeft   "ArrowLeft"     68 ;
+    mk_key Upper_b     "W"             66 ;
+    mk_key Upper_w     "B"             87 ;
+    mk_key Lower_b     "w"             98 ;
+    mk_key Lower_h     "h"             104 ;
+    mk_key Lower_j     "j"             106 ;
+    mk_key Lower_k     "k"             107 ;
+    mk_key Lower_l     "l"             108 ;
+    mk_key Lower_w     "w"             119 ;
+    mk_key Alt_h       "Alt_h"         153 ;
+    mk_key Alt_j       "Alt_j"         134 ;
+    mk_key Alt_k       "Alt_k"         154 ;
+    mk_key Alt_l       "Alt_l"         172 ;
+    mk_key Digit_0     "0"             48 ;
+    mk_key Digit_1     "1"             49 ;
+    mk_key Digit_2     "2"             50 ;
+    mk_key Digit_3     "3"             51 ;
+    mk_key Digit_4     "4"             52 ;
+    mk_key Digit_5     "5"             53 ;
+    mk_key Digit_6     "6"             54 ;
+    mk_key Digit_7     "7"             55 ;
+    mk_key Digit_8     "8"             56 ;
+    mk_key Digit_9     "9"             57 ;
+    mk_key Backslash   "\\"            92 ;
+    mk_key Pipe        "|"             124 ;
+  ] |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
+
+  let code_to_key = Array.get code_to_key_table
 
 end
 
