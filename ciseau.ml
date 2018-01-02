@@ -584,6 +584,7 @@ module Keys = struct
                   | Digit_8
                   | Digit_9
                   | Backslash
+                  | Pipe
 
   type key = {
     symbol  : key_symbol ;
@@ -634,6 +635,7 @@ module Keys = struct
   code_to_key_table.(56)  <- make_key Digit_8     "8"             56 ;;
   code_to_key_table.(57)  <- make_key Digit_9     "9"             57 ;;
   code_to_key_table.(92)  <- make_key Backslash   "\\"            92 ;;
+  code_to_key_table.(124) <- make_key Pipe        "|"             124 ;;
 
   let code_to_key code =
     match code_to_key_table.(code) with
@@ -702,6 +704,14 @@ module Block = struct
           loop (blocks' :: acc) rest_lines
     in
       block_lines |> loop [] |> List.rev |> drop bounds.y
+
+  type linebreak    = Clip | Overflow
+
+  let get_line_breaker =
+    function
+    | Clip      -> clip_block_line_text
+    | Overflow  -> break_block_line_text
+
 end
 
 module Segment = struct
@@ -719,9 +729,10 @@ type line_info = LineInfo of {
 }
 
 type text_view = TextView of {
-  offset      : int ;
-  lines       : line_info list ;
-  cursor      : v2 ;
+  offset        : int ;
+  lines         : line_info list ;
+  cursor        : v2 ;
+  linebreaking  : Block.linebreak ;
 }
 
 module type BytevectorType = sig
@@ -757,7 +768,7 @@ module type ScreenType = sig
 
   val init_screen : framebuffer -> v2 -> v2 -> t
   val put_block : t -> v2 -> block -> v2
-  val put_block_text : t -> int -> block list list -> unit (* TODO: add clip mode *)
+  val put_block_text : t -> Block.linebreak -> int -> block list list -> unit (* TODO: add clip mode *)
   val put_line : t -> v2 -> block -> unit (* TODO: refactor to use put_block instead *)
 end
 
@@ -781,6 +792,7 @@ module type FilebufferType = sig
   val buflen : t -> int
   val view_diff : t -> int
   val swap_line_number_mode : t -> t
+  val swap_linebreaking_mode : t -> t
   val recenter_view : t -> t
   val cursor_relative_to_view : t -> v2
   val file_length_string : t -> string
@@ -1207,7 +1219,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       put_color_segment colors start stop screen ;
       stop
 
-  let put_block_text screen y_offset block_lines =
+  let put_block_text screen linebreak y_offset block_lines =
     let start = mk_v2 0 y_offset in
     let bounds = screen.size <-> start in
     let mk_line_start i = mk_v2 0 (y_offset + i) in
@@ -1215,7 +1227,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       blks |> List.fold_left (put_block screen) (mk_line_start i) |> ignore
     in
     block_lines
-      |> Block.break_block_line_text bounds
+      |> (Block.get_line_breaker linebreak) bounds
       |> List.iteri put_block_line
 
   let put_line screen start { Block.text ; Block.colors } =
@@ -1265,13 +1277,14 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
 
       cursor      : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
 
-  (* TODO: move to FileView *)
+      (* TODO: move to FileView *)
       view_start  : int ;      (* index of first row in view *)
       view_diff   : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
                               (* index of last row in view is view_start + view_diff *)
 
-  (* TODO: move to FileView *)
-      numbering : numbering_mode ;
+      (* TODO: move to FileView *)
+      numbering     : numbering_mode ;
+      linebreaking  : Block.linebreak ;
   }
 
   let init_filebuffer lines view_h =
@@ -1284,6 +1297,7 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
       view_start    = 0 ;
       view_diff     = view_h - 1;
       numbering     = CursorRelative ;
+      linebreaking  = Block.Clip ;
     }
 
   let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
@@ -1314,6 +1328,13 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     | Absolute        -> CursorRelative
     | CursorRelative  -> Absolute
     in { t with numbering = new_mode }
+
+  let swap_linebreaking_mode t =
+    let open Block in
+    let new_mode = match t.linebreaking with
+    | Clip      -> Overflow
+    | Overflow  -> Clip
+    in { t with linebreaking = new_mode }
 
   let recenter_view t =
     let new_start = t.cursor.y - t.view_diff / 2 in
@@ -1393,6 +1414,7 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
       offset        = get_line_numbering_offset t ;
       lines         = get_lines t.view_start maxlines t ;
       cursor        = t.cursor ;
+      linebreaking  = t.linebreaking ;
     }
 
 end
@@ -1706,14 +1728,14 @@ module Ciseau = struct
   let print_file_buffer max_line filebuffer screen =
     (* TODO: handle view_offset inside nested screen and remove max_line, y_offset *)
     let y_offset = 1 in
-    let TextView { offset ; lines } = Filebuffer.get_view max_line filebuffer in
+    let TextView { offset ; lines ; linebreaking } = Filebuffer.get_view max_line filebuffer in
     lines |> prepend_line_numbers offset
           (* TODO: fuse selection into the block list *)
-          |> Screen.put_block_text screen y_offset
+          |> Screen.put_block_text screen linebreaking y_offset
 
   let default_fill_screen maxlines screen =
     mk_list maxlines [Block.mk_block "~" Config.default.colors.default_fill]
-      |> Screen.put_block_text screen 0
+      |> Screen.put_block_text screen Block.Overflow 0
 
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
@@ -1742,6 +1764,7 @@ module Ciseau = struct
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Filebuffer.swap_line_number_mode
+    | Keys.Pipe         -> View Filebuffer.swap_linebreaking_mode
     | Keys.Ctrl_z       -> View Filebuffer.recenter_view
     | Keys.Space        -> View Filebuffer.recenter_view
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
