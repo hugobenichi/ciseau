@@ -758,8 +758,6 @@ module type FramebufferType = sig
   val init_frame_buffer : v2 -> t
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
-  val set_text          : v2 -> string -> t -> unit (* TODO: delete me *)
-  val set_color         : segment -> Color.color_cell -> t -> unit (* TODO: delete me *)
   val put_block         : v2 -> Block.t -> t -> unit
 end
 
@@ -1128,20 +1126,6 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
-  let set_text pos s t =
-    let start = v2_to_offset t.window.x pos in
-    if start < t.len then
-      let maxlen = t.len - start in
-      let stoplen = min (slen s) maxlen in
-      Bytes.blit_string s 0 t.text start stoplen
-
-  let set_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
-    let offset = v2_to_offset t.window.x pos in
-    let len' = min len (t.len - offset) in
-    if offset < t.len then
-      Array.fill t.fg_colors offset len' fg ;
-      Array.fill t.bg_colors offset len' bg
-
   let put_block pos { Block.text ; Block.offset ; Block.len ; Block.colors } t =
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
@@ -1189,14 +1173,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     start |> v2_to_offset stride
           |> (+) (slen s)
           |> offset_to_v2 stride
-
-  let put_color_segment colors start stop screen =
-    let stride = screen_stride screen in
-    let start_p = v2_to_offset stride start in
-    let stop_p  = v2_to_offset stride stop in
-    let len = stop_p - start_p in
-    if len > 0 then
-      Framebuffer.set_color { Segment.pos = start ; Segment.len = len } colors screen.frame_buffer
 
   let put_block screen start blk =
     Framebuffer.put_block start blk screen.frame_buffer ;
