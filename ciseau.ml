@@ -96,9 +96,6 @@ let dir_ls path =
     Unix.closedir handle ;
     entries
 
-let test_dir_ls () =
-  "." |> dir_ls |> List.iteri (Printf.printf "%d: %s\n")
-
 
 module Iter = struct
 
@@ -1707,7 +1704,6 @@ module Ciseau = struct
 
   let mk_line_number_block n =
     LineNumberCache.get n
-    (* Block.mk_block (Printf.sprintf "%4d " n) Config.default.colors.line_numbers *)
 
   let prepend_line_numbers offset lines =
     let rec loop n acc =
