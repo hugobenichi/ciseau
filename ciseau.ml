@@ -1221,12 +1221,14 @@ let count_tabs s start stop =
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } =
   let colors = Config.color_for_atom Config.default kind in
-  let text =
-    match kind with
-    | Atom.Tab -> tab_to_spaces
-    | _   -> String.sub line start (stop - start)
-  in
-    Block.mk_block text colors
+  match kind with
+  | Atom.Tab -> Block.mk_block tab_to_spaces colors
+  | _   -> {
+      Block.text    = line ;
+      Block.offset  = start ;
+      Block.len     = stop - start ;
+      Block.colors  = colors ;
+    }
 
 module FilebufferUtil = struct
   let saturate_up length x = min (max (length - 1) 0) x
