@@ -883,8 +883,17 @@ module Term = struct
       let {x ; y } = cursor_offset <+> vec2 in
       Printf.sprintf "%s%d;%dH" start y x
 
-    let color_control_string { Color.fg ; Color.bg } =
-      Printf.sprintf "38;5;%d;48;5;%dm" (Color.color_control_code fg) (Color.color_control_code bg)
+    let color_control_string_table : (Color.color_cell, string) Hashtbl.t = Hashtbl.create 1000
+
+    let color_control_string colors =
+      match Hashtbl.find color_control_string_table colors with
+      | control_string -> control_string
+      | exception Not_found ->
+          let fg_code = Color.color_control_code colors.Color.fg in
+          let bg_code = Color.color_control_code colors.Color.bg in
+          let control_string = Printf.sprintf "38;5;%d;48;5;%dm" fg_code bg_code in
+          Hashtbl.add color_control_string_table colors control_string ;
+          control_string
 
   end
 
