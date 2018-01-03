@@ -10,6 +10,7 @@
  *)
 
 
+let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
 let conj ls x = List.cons x ls
@@ -1496,6 +1497,31 @@ end
 
 module Ciseau = struct
 
+  let line_number_cache_t1 = Sys.time () ;;
+
+  module LineNumberCache = struct
+    (* TODO: - dynmically populate cache as needed by resizing the cache array if needed *)
+
+    let negative_offset = 200
+    let hardcoded_size  = 10000 + negative_offset
+
+    let format_n n =
+      Printf.sprintf "%4d " (n - negative_offset)
+
+    let mk_block n =
+      Block.mk_block (format_n n) Config.default.colors.line_numbers
+
+    let cache =
+      Array.init hardcoded_size mk_block
+
+    let get n =
+      Array.get cache (n + negative_offset)
+  end
+
+  let line_number_cache_t2 = Sys.time () ;;
+
+  Printf.fprintf logs "cache %f\n" (line_number_cache_t2 -. line_number_cache_t1) ;;
+
   type pending_command_atom = Digit of int
 
   type pending_command = None
@@ -1673,7 +1699,8 @@ module Ciseau = struct
       Screen.put_line screen y_offset (Block.mk_block s Config.default.colors.user_input)
 
   let mk_line_number_block n =
-    Block.mk_block (Printf.sprintf "%4d " n) Config.default.colors.line_numbers
+    LineNumberCache.get n
+    (* Block.mk_block (Printf.sprintf "%4d " n) Config.default.colors.line_numbers *)
 
   let prepend_line_numbers offset lines =
     let rec loop n acc =
