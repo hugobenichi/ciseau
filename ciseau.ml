@@ -1168,15 +1168,15 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let line_offset =
     mk_v2 0 1
 
-  let stop_of screen start s =
+  let stop_of screen start len =
     let stride = screen_stride screen in
     start |> v2_to_offset stride
-          |> (+) (slen s)
+          |> (+) len
           |> offset_to_v2 stride
 
   let put_block screen start blk =
     Framebuffer.put_block start blk screen.frame_buffer ;
-    stop_of screen start blk.Block.text
+    stop_of screen start blk.Block.len
 
   let put_block_lines screen linebreak y_offset block_lines =
     let start = mk_v2 0 y_offset in
@@ -1194,14 +1194,23 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     put_block_lines screen Block.Clip y_offset [[ blk ; pad_blk ]]
 end
 
+let count_tabs s start stop =
+  let rec loop acc i l =
+    if i < l
+      then loop (acc + if String.get s i = '\t' then 1 else 0) (i + 1) l
+      else acc
+  in
+    loop 0 start stop
+
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } =
-  let open Block in {
-  text    = String.sub line start (stop - start) |> expand_tabs ;
-  offset  = 0 ;
-  (* offset  = start ; *)
-  len     = stop - start ;
-  colors  = Config.color_for_atom Config.default kind ;
-}
+  let open Block in
+  let tab_count = count_tabs line start stop in
+  let text = String.sub line start (stop - start) in {
+    text    = if tab_count = 0 then text else expand_tabs text ;
+    offset  = 0 ;
+    len     = stop - start ;
+    colors  = Config.color_for_atom Config.default kind ;
+  }
 
 module FilebufferUtil = struct
   let saturate_up length x = min (max (length - 1) 0) x
