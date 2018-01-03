@@ -24,8 +24,7 @@ let mk_list size e =
   in
     loop [] size
 
-let expand_tabs s =
-  s |> String.split_on_char '\t' |> String.concat "  "
+let tab_to_spaces = "  "
 
 let alen = Array.length ;;
 let blen = Bytes.length ;;
@@ -261,7 +260,7 @@ end
 
 module Atom = struct
 
-  type atom_kind = Text | Digit | Spacing | Operator | Structure | Line | Control | Other | Ending
+  type atom_kind = Text | Digit | Spacing | Operator | Structure | Line | Control | Other | Ending | Tab
 
   let atom_kind_to_string = function
     | Text      -> "Text"
@@ -273,6 +272,7 @@ module Atom = struct
     | Control   -> "Control"
     | Other     -> "Other"
     | Ending    -> "Ending"
+    | Tab       -> "Tab"
 
   let atom_kind_to_string_padded = function
     | Text      -> "Text      "
@@ -284,11 +284,12 @@ module Atom = struct
     | Control   -> "Control   "
     | Other     -> "Other     "
     | Ending    -> "Ending    "
+    | Tab       -> "Tab       "
 
   let atom_kind_table = Array.make 128 Other ;;
   (* control codes *)
   for c = 0 to 31 do Array.set atom_kind_table c Control done ;;
-  atom_kind_table.(009 (* horizontal tab *) ) = Spacing ;;
+  atom_kind_table.(009 (* horizontal tab *) ) = Tab ;;
   atom_kind_table.(010 (* line feed *) ) = Line ;;
   atom_kind_table.(013 (* carriage return *) ) = Line ;;
   (* printable codes *)
@@ -401,6 +402,11 @@ module Atom = struct
     stop  : int;
   }
 
+  let len { kind ; start ; stop } =
+    match kind with
+    | Tab -> slen tab_to_spaces
+    | _   -> stop - start
+
   let atom_to_string a =
     String.sub a.line a.start (a.stop - a.start)
 
@@ -408,6 +414,7 @@ module Atom = struct
     Printf.sprintf "%s:'%s'" (atom_kind_to_string_padded a.kind) (atom_to_string a)
 
   let should_continue_atom = function
+    | (Tab, _) -> false
     | (_, Ending) -> false
     | (Text , Digit ) -> true
     | (Digit , Text) -> true
@@ -652,12 +659,15 @@ module Block = struct
     colors  : Color.color_cell ;
   }
 
-  let mk_block t c = { text = t ; offset = 0 ; len = slen t ; colors = c }
-
-  let len { text } = slen text
+  let mk_block t c = {
+    text    = t ;
+    offset  = 0 ;
+    len     = slen t ;
+    colors  = c ;
+  }
 
   let split_at l b =
-    let blen = len b in
+    let blen = b.len in
     if blen <= l
       then (b, None)
       else
@@ -673,7 +683,7 @@ module Block = struct
         | b :: r ->
             match split_at left b with
             | (b1, Some b2) -> (b1 :: acc, b2 :: r)
-            | (_, None) -> loop (left - (len b)) (b :: acc) r
+            | (_, None) -> loop (left - b.len) (b :: acc) r
     in
       let (rev_first_line, remainder) = loop left [] ls
       in  (List.rev rev_first_line, remainder)
@@ -1022,6 +1032,7 @@ module Config = struct
       | Control   -> cfg.colors.default
       | Other     -> cfg.colors.default
       | Ending    -> cfg.colors.default
+      | Tab       -> cfg.colors.default
 end
 
 open Config
@@ -1209,14 +1220,13 @@ let count_tabs s start stop =
     loop 0 start stop
 
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } =
-  let open Block in
-  let tab_count = count_tabs line start stop in
-  let text = String.sub line start (stop - start) in {
-    text    = if tab_count = 0 then text else expand_tabs text ;
-    offset  = 0 ;
-    len     = stop - start ;
-    colors  = Config.color_for_atom Config.default kind ;
-  }
+  let colors = Config.color_for_atom Config.default kind in
+  let text =
+    match kind with
+    | Atom.Tab -> tab_to_spaces
+    | _   -> String.sub line start (stop - start)
+  in
+    Block.mk_block text colors
 
 module FilebufferUtil = struct
   let saturate_up length x = min (max (length - 1) 0) x
