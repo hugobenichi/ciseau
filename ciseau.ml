@@ -650,10 +650,12 @@ end
 module Block = struct
   type t = {
     text    : string ;
+    offset  : int ;
+    len     : int ;
     colors  : Color.color_cell ;
   }
 
-  let mk_block t c = { text = t ; colors = c }
+  let mk_block t c = { text = t ; offset = 0 ; len = slen t ; colors = c }
 
   let len { text } = slen text
 
@@ -664,7 +666,7 @@ module Block = struct
       else
         let t1 = String.sub b.text 0 l in
         let t2 = String.sub b.text l (blen - l) in
-        ({ text = t1 ; colors = b.colors }, Some { text = t2 ; colors = b.colors })
+        ( mk_block t1 b.colors, Some (mk_block t2 b.colors) )
 
   let break_block_line left ls =
     let rec loop left acc ls =
@@ -756,8 +758,9 @@ module type FramebufferType = sig
   val init_frame_buffer : v2 -> t
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
-  val set_text          : v2 -> string -> t -> unit
-  val set_color         : segment -> Color.color_cell -> t -> unit
+  val set_text          : v2 -> string -> t -> unit (* TODO: delete me *)
+  val set_color         : segment -> Color.color_cell -> t -> unit (* TODO: delete me *)
+  val put_block         : v2 -> Block.t -> t -> unit
 end
 
 
@@ -845,9 +848,9 @@ module Bytevector : BytevectorType = struct
   }
 
   let append s t =
-    let sl = slen s in
-    let t' = Priv.grow sl t in
-      Bytes.blit_string s 0 t'.bytes t.len sl ;
+    let s_len = slen s in
+    let t' = Priv.grow s_len t in
+      Bytes.blit_string s 0 t'.bytes t.len s_len ;
       t'
 
   let append_bytes srcbytes srcoffset len t =
@@ -1128,9 +1131,8 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
   let set_text pos s t =
     let start = v2_to_offset t.window.x pos in
     if start < t.len then
-      let len = slen s in
       let maxlen = t.len - start in
-      let stoplen = min len maxlen in
+      let stoplen = min (slen s) maxlen in
       Bytes.blit_string s 0 t.text start stoplen
 
   let set_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
@@ -1139,6 +1141,16 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     if offset < t.len then
       Array.fill t.fg_colors offset len' fg ;
       Array.fill t.bg_colors offset len' bg
+
+  let put_block pos { Block.text ; Block.offset ; Block.len ; Block.colors } t =
+    let vec_offset = v2_to_offset t.window.x pos in
+    let len' = min len (t.len - vec_offset) in
+    if vec_offset < t.len then
+      let { Color.fg ; Color.bg } = colors in
+      Array.fill t.fg_colors vec_offset len' fg ;
+      Array.fill t.bg_colors vec_offset len' bg ;
+      Bytes.blit_string text offset t.text vec_offset len'
+
 end
 
 
@@ -1186,12 +1198,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     if len > 0 then
       Framebuffer.set_color { Segment.pos = start ; Segment.len = len } colors screen.frame_buffer
 
-  let put_block screen start { Block.text ; Block.colors } =
-    let stop = stop_of screen start text
-    in
-      Framebuffer.set_text start text screen.frame_buffer ;
-      put_color_segment colors start stop screen ;
-      stop
+  let put_block screen start blk =
+    Framebuffer.put_block start blk screen.frame_buffer ;
+    stop_of screen start blk.Block.text
 
   let put_block_lines screen linebreak y_offset block_lines =
     let start = mk_v2 0 y_offset in
@@ -1209,9 +1218,13 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     put_block_lines screen Block.Clip y_offset [[ blk ; pad_blk ]]
 end
 
-let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } = {
-  Block.text    = String.sub line start (stop - start) |> expand_tabs ;
-  Block.colors  = Config.color_for_atom Config.default kind ;
+let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } =
+  let open Block in {
+  text    = String.sub line start (stop - start) |> expand_tabs ;
+  offset  = 0 ;
+  (* offset  = start ; *)
+  len     = stop - start ;
+  colors  = Config.color_for_atom Config.default kind ;
 }
 
 module FilebufferUtil = struct
