@@ -1656,21 +1656,20 @@ module Ciseau = struct
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
 
   let apply_command_with_repetition n command editor =
-    (* TODO: fallback on apply_command for Noop, Stop, Resize and View *)
     match command with
-    | Noop    -> editor
-    | Stop    -> { editor with running = false }
-    | Resize  -> resize_editor editor
-    | View fn -> { editor with filebuffer = fn editor.filebuffer }
     | Move fn ->
       let rec loop n fb =
-        if (n > 0) then loop (n - 1) (Filebuffer.apply_movement fn fb) else fb
+        if (n > 0)
+          then loop (n - 1) (Filebuffer.apply_movement fn fb)
+          else fb
       in {
         editor with
         filebuffer    = loop n editor.filebuffer ;
         pending_input = None ;
       }
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
+      (* for other command, flush any pending digits *)
+    | _ -> apply_command command { editor with pending_input = None }
 
   let update_stats now input_duration editor =
     let open Gc in
