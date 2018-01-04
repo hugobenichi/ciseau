@@ -1179,7 +1179,8 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   }
 
   let put_block screen start blk =
-    Framebuffer.put_block start blk screen.frame_buffer ;
+    let start' = start <+> screen.screen_offset in
+    Framebuffer.put_block start' blk screen.frame_buffer ;
     mk_v2 (start.x + blk.Block.len) start.y
 
   let put_block_lines screen linebreak y_offset block_lines =
@@ -1588,7 +1589,7 @@ module Ciseau = struct
     Screen.init_screen frame_buffer offset size
 
   let mk_main_screen frame_buffer term_dim =
-    let offset = mk_v2 0 2 in
+    let offset = v2_zero in
     let size = mk_v2 term_dim.x (term_dim.y - 2) in
     Screen.init_screen frame_buffer offset size
 
@@ -1695,8 +1696,6 @@ module Ciseau = struct
       Screen.put_line screen header_offset (Block.mk_block s Config.default.colors.header)
 
   let show_status editor =
-    let y_offset1 = editor.term_dim.y - 2 in
-    let y_offset2 = editor.term_dim.y - 1 in
     let status_text1 = "Ciseau stats: win = "
                       ^ editor.term_dim_descr
                       ^ (format_memory_stats editor)
@@ -1704,8 +1703,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-      Screen.put_line editor.background y_offset1 (Block.mk_block status_text1 Config.default.colors.status) ;
-      Screen.put_line editor.background y_offset2 (Block.mk_block status_text2 Config.default.colors.user_input)
+      Screen.put_line editor.background 0 (Block.mk_block status_text1 Config.default.colors.status) ;
+      Screen.put_line editor.background 1 (Block.mk_block status_text2 Config.default.colors.user_input)
 
   let mk_line_number_block n =
     LineNumberCache.get n
@@ -1730,8 +1729,9 @@ module Ciseau = struct
           |> Screen.put_block_lines screen linebreaking y_offset
 
   let default_fill_screen screen =
+    let fill_y_offset = 1 in
     mk_list (Screen.get_height screen) [Block.mk_block "~" Config.default.colors.default_fill]
-      |> Screen.put_block_lines screen Block.Overflow 0
+      |> Screen.put_block_lines screen Block.Overflow fill_y_offset
 
   let show_filebuffer editor =
     default_fill_screen editor.screen ;
