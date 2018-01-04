@@ -563,6 +563,7 @@ module Keys = struct
                   | Alt_k
                   | Alt_l
                   | Space
+                  | Equal
                   | ArrowUp
                   | ArrowDown
                   | ArrowRight
@@ -613,6 +614,7 @@ module Keys = struct
     mk_key Ctrl_u      "Ctrl_u"        21 ;
     mk_key Ctrl_z      "Ctrl_z"        26 ;
     mk_key Space       "Space"         32 ;
+    mk_key Equal       "Equal"         61 ;
     mk_key ArrowUp     "ArrowUp"       65 ;
     mk_key ArrowDown   "ArrowDown"     66 ;
     mk_key ArrowRight  "ArrowRight"    67 ;
@@ -904,6 +906,10 @@ module Term = struct
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
+
+  let get_terminal_dimensions () =
+    let (term_rows, term_cols) = get_terminal_size () in
+    mk_v2 term_cols term_rows
 
   let do_with_raw_mode action =
     let open Unix in
@@ -1534,6 +1540,7 @@ module Ciseau = struct
   (* Represents an editor command *)
   type command = Noop
                | Stop
+               | Resize
                | Move of (Filebuffer.t -> v2)
                | View of (Filebuffer.t -> Filebuffer.t)
                | Pending of pending_command_atom
@@ -1596,12 +1603,11 @@ module Ciseau = struct
   let mk_window_size_descr { x = w ; y = h } =
     "(" ^ (string_of_int w) ^ " x " ^ (string_of_int h) ^ ")"
 
-  let init_editor file : editor =
-    let (term_rows, term_cols) = Term.get_terminal_size () in
-    let term_dim = mk_v2 term_cols term_rows in
+  let init_editor file =
+    let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    let lines = slurp file in
-    {
+    let lines = slurp file
+    in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
       render_buffer   = Bytevector.init_bytevector 0x1000 ;
@@ -1610,7 +1616,7 @@ module Ciseau = struct
       background      = mk_background_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
 
-      filebuffer      = Filebuffer.init_filebuffer lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
+      filebuffer      = Filebuffer.init_filebuffer lines (term_dim.y - 3) ;   (* 3 lines for header, status, input *)
       file            = file ;
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
@@ -1623,6 +1629,19 @@ module Ciseau = struct
       last_cycle_duration = 0. ;
     }
 
+  let resize_editor editor =
+    let term_dim = Term.get_terminal_dimensions () in
+    let frame_buffer = Framebuffer.init_frame_buffer term_dim
+    in {
+      editor with
+      term_dim        = term_dim ;
+      term_dim_descr  = mk_window_size_descr term_dim ;
+      render_buffer   = Bytevector.init_bytevector 0x1000 ;
+      frame_buffer    = frame_buffer ;
+      background      = mk_background_screen frame_buffer term_dim ;
+      screen          = mk_main_screen frame_buffer term_dim ;
+    }
+
   let queue_pending_command editor = function
     | Digit n -> { editor with pending_input = enqueue_digit n editor.pending_input }
 
@@ -1630,15 +1649,18 @@ module Ciseau = struct
     match command with
     | Noop    -> editor
     | Stop    -> { editor with running = false }
+    | Resize  -> resize_editor editor
     | Move fn -> { editor with filebuffer = Filebuffer.apply_movement fn editor.filebuffer }
     | View fn -> { editor with filebuffer = fn editor.filebuffer }
       (* cannot happen ?? *)
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
 
   let apply_command_with_repetition n command editor =
+    (* TODO: fallback on apply_command for Noop, Stop, Resize and View *)
     match command with
     | Noop    -> editor
     | Stop    -> { editor with running = false }
+    | Resize  -> resize_editor editor
     | View fn -> { editor with filebuffer = fn editor.filebuffer }
     | Move fn ->
       let rec loop n fb =
@@ -1758,6 +1780,7 @@ module Ciseau = struct
     | Keys.Pipe         -> View Filebuffer.swap_linebreaking_mode
     | Keys.Ctrl_z       -> View Filebuffer.recenter_view
     | Keys.Space        -> View Filebuffer.recenter_view
+    | Keys.Equal        -> Resize
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
     | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
     | Keys.Ctrl_k       -> Move FilebufferMovements.move_prev_paragraph
