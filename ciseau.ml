@@ -773,6 +773,8 @@ module type ScreenType = sig
   type block
   type segment
 
+  val get_size        : t -> v2
+  val get_height      : t -> int
   val init_screen     : framebuffer -> v2 -> v2 -> t
   val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
   val put_line        : t -> int -> block -> unit
@@ -1165,6 +1167,12 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     frame_buffer    : Framebuffer.t ;
   }
 
+  let get_size t =
+    t.size
+
+  let get_height t =
+    t.size.y
+
   let init_screen cb offset size = {
     size                = size ;
     screen_offset       = offset ;
@@ -1548,16 +1556,14 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
+    term_dim : v2 ;
+    term_dim_descr : string ;
     background : Screen.t ;
     screen : Screen.t ;
-    (* Fold width and height into Screen.t *)
-    width : int;
-    height : int;
     running : bool ;
 
     file : string ;
     filebuffer : Filebuffer.t ;
-    view_offset : v2 ;
 
     header : string ;
     user_input : string ;
@@ -1578,6 +1584,18 @@ module Ciseau = struct
     frame_buffer        : Framebuffer.t ;
   }
 
+  let mk_background_screen frame_buffer term_dim =
+    let offset = mk_v2 0 (term_dim.y - 2) in
+    let size = mk_v2 term_dim.x 2 in
+    Screen.init_screen frame_buffer offset size
+
+  let mk_main_screen frame_buffer term_dim =
+    let offset = mk_v2 0 2 in
+    let size = mk_v2 term_dim.x (term_dim.y - 2) in
+    Screen.init_screen frame_buffer offset size
+
+  let mk_window_size_descr { x = w ; y = h } =
+    "(" ^ (string_of_int w) ^ " x " ^ (string_of_int h) ^ ")"
 
   let init_editor file : editor =
     let (term_rows, term_cols) = Term.get_terminal_size () in
@@ -1585,16 +1603,14 @@ module Ciseau = struct
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
     let lines = slurp file in
     {
-      background      = Screen.init_screen frame_buffer v2_zero term_dim ;
-      screen          = Screen.init_screen frame_buffer v2_zero term_dim ;
-      width           = term_cols ;
-      height          = term_rows ;
+      term_dim        = term_dim ;
+      term_dim_descr  = mk_window_size_descr term_dim ;
+      background      = mk_background_screen frame_buffer term_dim ;
+      screen          = mk_main_screen frame_buffer term_dim ;
       running         = true ;
 
       file            = file ;
       filebuffer      = Filebuffer.init_filebuffer lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
-      view_offset     = mk_v2 5 1 ; (* +5 for line numbers, +1 for header *)
-
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
 
@@ -1674,32 +1690,27 @@ module Ciseau = struct
   let format_time_stats editor =
     Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
 
-  let window_size editor =
-    "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")"
-
   (* Show header is relative to a file view, not to the background *)
-  let show_header editor screen y_offset =
+  let show_header editor screen =
+    let header_offset = 0 in
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
           ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
     in
-      Screen.put_line screen y_offset (Block.mk_block s Config.default.colors.header)
+      Screen.put_line screen header_offset (Block.mk_block s Config.default.colors.header)
 
   let show_status editor =
-    let y_offset = editor.height - 2 in
-    let s = "Ciseau stats: win = "
-          ^ (window_size editor)
-          ^ (format_memory_stats editor)
-          ^ (format_time_stats editor)
+    let y_offset1 = editor.term_dim.y - 2 in
+    let y_offset2 = editor.term_dim.y - 1 in
+    let status_text1 = "Ciseau stats: win = "
+                      ^ editor.term_dim_descr
+                      ^ (format_memory_stats editor)
+                      ^ (format_time_stats editor)
     in
-      Screen.put_line editor.background y_offset (Block.mk_block s Config.default.colors.status)
-
-  (* user input is relative to a file view, but always show in the bottom editor line *)
-  let show_user_input editor =
-    let y_offset = editor.height - 1 in
-    let s =  editor.user_input
+    let status_text2 = editor.user_input
     in
-      Screen.put_line editor.background y_offset (Block.mk_block s Config.default.colors.user_input)
+      Screen.put_line editor.background y_offset1 (Block.mk_block status_text1 Config.default.colors.status) ;
+      Screen.put_line editor.background y_offset2 (Block.mk_block status_text2 Config.default.colors.user_input)
 
   let mk_line_number_block n =
     LineNumberCache.get n
@@ -1715,36 +1726,35 @@ module Ciseau = struct
     in
       loop offset [] lines
 
-  let print_file_buffer max_line filebuffer screen =
-    (* TODO: handle view_offset inside nested screen and remove max_line, y_offset *)
+  let print_file_buffer filebuffer screen =
     let y_offset = 1 in
-    let TextView { offset ; lines ; linebreaking } = Filebuffer.get_view max_line filebuffer in
+    let n_lines = (Screen.get_height screen) - 1 in
+    let TextView { offset ; lines ; linebreaking } = Filebuffer.get_view n_lines filebuffer in
     lines |> prepend_line_numbers offset
           (* TODO: fuse selection into the block list *)
           |> Screen.put_block_lines screen linebreaking y_offset
 
-  let default_fill_screen maxlines screen =
-    mk_list maxlines [Block.mk_block "~" Config.default.colors.default_fill]
+  let default_fill_screen screen =
+    mk_list (Screen.get_height screen) [Block.mk_block "~" Config.default.colors.default_fill]
       |> Screen.put_block_lines screen Block.Overflow 0
+
+  let show_filebuffer editor =
+    default_fill_screen editor.screen ;
+    show_header editor editor.screen ;
+    print_file_buffer editor.filebuffer editor.screen
 
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
-    let cursor_position =
-      (editor.filebuffer |> Filebuffer.cursor_relative_to_view |> (<+>) editor.view_offset)
+    (* TODO: remove this hack for cursor position management ! *)
+    let cursor_position = editor.filebuffer
+                        |> Filebuffer.cursor_relative_to_view
+                        |> (<+>) (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
     in
-    let text_height = editor.height - 3 in
-    let screen = editor.screen in (
-      Framebuffer.clear editor.frame_buffer ;
-      (* these 3 are file view specific -> TODO: refactor into FileView and add a view manager *)
-      default_fill_screen (text_height + 1) screen ;
-      show_header editor screen 0 ;
-      print_file_buffer text_height editor.filebuffer screen ;
-      (* these 2 are editor specific -> TODO: create a background view that takes the bottom two rows *)
+      Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
+      show_filebuffer editor ;
       show_status editor ;
-      show_user_input editor ;
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
-    )
 
 
   let key_to_command = function
@@ -1800,7 +1810,8 @@ module Ciseau = struct
                        ^ " " ^ editor.user_input
     in {
       editor with
-      user_input = truncate_string editor.width new_user_input ;
+      (* TODO: truncate_string should not be needed anymore *)
+      user_input = truncate_string editor.term_dim.x new_user_input ;
     }
 
   let process_events editor =
