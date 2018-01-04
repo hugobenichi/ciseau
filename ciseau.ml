@@ -470,22 +470,20 @@ module Vec2 = struct
     y = y ;
   }
 
-  let (<+>) t1 t2 = {
-    x = t1.x + t2.x ;
-    y = t1.y + t2.y ;
-  }
+  let (<+>) t1 t2 =
+    mk_v2 (t1.x + t2.x) (t1.y + t2.y)
 
-  let (<->) t1 t2 = {
-    x = t1.x - t2.x ;
-    y = t1.y - t2.y ;
-  }
+  let (<->) t1 t2 =
+    mk_v2 (t1.x - t2.x) (t1.y - t2.y)
 
-  let v2_to_string t = Printf.sprintf "%d,%d" t.y t.x
+  let v2_to_string t =
+    Printf.sprintf "%d,%d" t.y t.x
 
-  let v2_to_offset stride vec2 = vec2.y * stride + vec2.x
+  let v2_to_offset stride vec2 =
+    vec2.y * stride + vec2.x
 
-  let offset_to_v2 stride offset = mk_v2 (offset mod stride) (offset / stride)
-
+  let offset_to_v2 stride offset =
+    mk_v2 (offset mod stride) (offset / stride)
 end
 
 
@@ -1173,28 +1171,11 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     frame_buffer        = cb ;
   }
 
-  let screen_stride screen =
-    screen.size.x
-
-  let line_size_vec screen =
-    mk_v2 screen.size.x 0
-
-  let shift_left vec2 =
-    mk_v2 0 vec2.y
-
-  let line_offset =
-    mk_v2 0 1
-
-  let stop_of screen start len =
-    let stride = screen_stride screen in
-    start |> v2_to_offset stride
-          |> (+) len
-          |> offset_to_v2 stride
-
   let put_block screen start blk =
     Framebuffer.put_block start blk screen.frame_buffer ;
-    stop_of screen start blk.Block.len
+    mk_v2 (start.x + blk.Block.len) start.y
 
+  (* TODO: replace y_offset with screen_offset here *)
   let put_block_lines screen linebreak y_offset block_lines =
     let start = mk_v2 0 y_offset in
     let bounds = screen.size <-> start in
