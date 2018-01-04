@@ -1,12 +1,12 @@
 (* next TODOs:
  *  - correctly manage the cursor position in text coordinates and in screen coordinates
  *  - optimize a bit memory usage
- *      - Block.t should take a string range instead of a string
- *      - Atom should use Block.t
+ *      - The Framebuffer should only be cleared selectively by subrectangles to redraw stuff that needs to be redrawn
  *      - introduce an array slice type and replace a bunch of list with arrays or array slices
  *
+ *  - dynamically resize window and screens
  *  - correctly parse control sequences from terminal and handle SIGWINCH
- *  - add selection fusion to get_view
+ *  - add highlight fusion to get_view and support selections, cursor line highlight, ...
  *)
 
 
@@ -394,7 +394,6 @@ module Atom = struct
   let atom_kind_at s i =
     if i < slen s then (String.get s i) |> atom_kind_of else Ending
 
-  (* TODO: use a Block.t instead *)
   type atom = {
     kind  : atom_kind;
     line  : string;
@@ -1183,7 +1182,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     Framebuffer.put_block start blk screen.frame_buffer ;
     mk_v2 (start.x + blk.Block.len) start.y
 
-  (* TODO: replace y_offset with screen_offset here *)
   let put_block_lines screen linebreak y_offset block_lines =
     let start = mk_v2 0 y_offset in
     let bounds = screen.size <-> start in
@@ -1556,32 +1554,32 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
-    term_dim : v2 ;
-    term_dim_descr : string ;
-    background : Screen.t ;
-    screen : Screen.t ;
-    running : bool ;
+    term_dim        : v2 ;
+    term_dim_descr  : string ;
+    render_buffer   : Bytevector.t ;
+    frame_buffer    : Framebuffer.t ;
+    running         : bool ;
+    background      : Screen.t ;
+    screen          : Screen.t ;
 
-    file : string ;
+    (* TODO: add management code to match multiple fileviews to the same filebuffer *)
     filebuffer : Filebuffer.t ;
 
-    header : string ;
-    user_input : string ;
-
+    (* TODO: regroup into Fileview *)
+    file          : string ;
+    header        : string ;
+    user_input    : string ;
     pending_input : pending_command ;
 
+    (* regroup into a separate EditorStats module *)
     (* TODO: add every X a full stats collection for printing total footprint *)
     (* TODO: keep a rolling buffer of alloc diff per frame and show quantiles *)
     (* TODO: export stats to some log files for doing more offline statistics *)
-    gc_stats : Gc.stat ;
-    gc_stats_diff : float * float ;
-
+    gc_stats            : Gc.stat ;
+    gc_stats_diff       : float * float ;
     timestamp           : float ;
     last_input_duration : float ;
     last_cycle_duration : float ;
-
-    render_buffer       : Bytevector.t ;
-    frame_buffer        : Framebuffer.t ;
   }
 
   let mk_background_screen frame_buffer term_dim =
@@ -1605,26 +1603,23 @@ module Ciseau = struct
     {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
+      render_buffer   = Bytevector.init_bytevector 0x1000 ;
+      frame_buffer    = frame_buffer ;
+      running         = true ;
       background      = mk_background_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
-      running         = true ;
 
-      file            = file ;
       filebuffer      = Filebuffer.init_filebuffer lines (term_rows - 3) ;   (* 3 lines for header, status, input *)
+      file            = file ;
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
-
       pending_input   = None;
 
       gc_stats        = Gc.quick_stat () ;
       gc_stats_diff   = (0., 0.) ;
-
       timestamp           = Sys.time() ;
       last_input_duration = 0. ;
       last_cycle_duration = 0. ;
-
-      render_buffer       = Bytevector.init_bytevector 0x1000 ;
-      frame_buffer        = frame_buffer ;
     }
 
   let queue_pending_command editor = function
