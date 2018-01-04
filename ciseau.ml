@@ -1548,6 +1548,7 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
+    background : Screen.t ;
     screen : Screen.t ;
     (* Fold width and height into Screen.t *)
     width : int;
@@ -1584,6 +1585,7 @@ module Ciseau = struct
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
     let lines = slurp file in
     {
+      background      = Screen.init_screen frame_buffer v2_zero term_dim ;
       screen          = Screen.init_screen frame_buffer v2_zero term_dim ;
       width           = term_cols ;
       height          = term_rows ;
@@ -1675,6 +1677,7 @@ module Ciseau = struct
   let window_size editor =
     "(" ^ (string_of_int editor.width) ^ " x " ^ (string_of_int editor.height) ^ ")"
 
+  (* Show header is relative to a file view, not to the background *)
   let show_header editor screen y_offset =
     let s = editor.header
           ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
@@ -1682,18 +1685,21 @@ module Ciseau = struct
     in
       Screen.put_line screen y_offset (Block.mk_block s Config.default.colors.header)
 
-  let show_status editor screen y_offset =
+  let show_status editor =
+    let y_offset = editor.height - 2 in
     let s = "Ciseau stats: win = "
           ^ (window_size editor)
           ^ (format_memory_stats editor)
           ^ (format_time_stats editor)
     in
-      Screen.put_line screen y_offset (Block.mk_block s Config.default.colors.status)
+      Screen.put_line editor.background y_offset (Block.mk_block s Config.default.colors.status)
 
-  let show_user_input editor screen y_offset =
+  (* user input is relative to a file view, but always show in the bottom editor line *)
+  let show_user_input editor =
+    let y_offset = editor.height - 1 in
     let s =  editor.user_input
     in
-      Screen.put_line screen y_offset (Block.mk_block s Config.default.colors.user_input)
+      Screen.put_line editor.background y_offset (Block.mk_block s Config.default.colors.user_input)
 
   let mk_line_number_block n =
     LineNumberCache.get n
@@ -1729,11 +1735,13 @@ module Ciseau = struct
     let text_height = editor.height - 3 in
     let screen = editor.screen in (
       Framebuffer.clear editor.frame_buffer ;
+      (* these 3 are file view specific -> TODO: refactor into FileView and add a view manager *)
       default_fill_screen (text_height + 1) screen ;
       show_header editor screen 0 ;
-      show_status editor screen (editor.height - 2) ;
-      show_user_input editor screen (editor.height - 1) ;
       print_file_buffer text_height editor.filebuffer screen ;
+      (* these 2 are editor specific -> TODO: create a background view that takes the bottom two rows *)
+      show_status editor ;
+      show_user_input editor ;
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
     )
