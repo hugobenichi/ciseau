@@ -792,12 +792,13 @@ module type ScreenType = sig
 end
 
 
-module type FilebufferType = sig
+module type FileviewType = sig
   type t
   type atom
   type view
+  type filebuffer
 
-  val init_filebuffer : string list -> int -> t
+  val init_fileview : filebuffer -> int -> t
   val apply_movement : (t -> v2) -> t -> t
   val cursor : t -> v2
   val cursor_next_char : t -> v2
@@ -1238,11 +1239,25 @@ module FilebufferUtil = struct
   let saturate_up length x = min (max (length - 1) 0) x
 end
 
+module Filebuffer = struct
+  type t = {
+      buffer      : string array ;          (* the file data, line per line *)
+      buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
+      atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
+  }
 
-(* This represents a file currently edited
- * It contains both file information, and windowing information
- * TODO: to properly support multiple editing views into the same file, I need to split these into two
- * TODO: Some of the first cracks in this reprensentation are already showing up.
+  let init_filebuffer lines =
+    let buffer = Array.of_list lines in
+    let atoms = Array.map Atom.generic_atom_parser buffer in {
+      buffer        = buffer ;
+      buflen        = alen buffer ;
+      atom_buffer   = atoms ;
+    }
+end
+
+
+(* This represents a view into a file currently open *)
+(* TODO: Some of the first cracks in this reprensentation are already showing up.
          For instance, empty lines are empty strings, but in the file they take characters
          this requires special handling in the editor, because we still need to restore these empty lines at save
          and need to display them.
@@ -1251,46 +1266,39 @@ end
          empty line, while move_next_word must absolutely do.
          Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
          representation. *)
-module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = text_view) = struct
+module Fileview : (FileviewType with type atom = Atom.atom and type view = text_view and type filebuffer = Filebuffer.t) = struct
+  open Filebuffer
   open FilebufferUtil
 
   type atom = Atom.atom
   type view = text_view
+  type filebuffer = Filebuffer.t
 
   type numbering_mode = Absolute | CursorRelative
 
   type t = {
-      buffer      : string array ;  (* the file data, line per line *)
-      atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
-      buflen      : int ;           (* number of lines in the buffer, may be less than buffer array length *)
-
-      (* TODO: move to FileView *)
-      cursor      : v2 ;           (* current position string array: y = index array (rows), x = string array (cols) *)
-      view_start  : int ;      (* index of first row in view *)
-      view_diff   : int ;      (* additional rows in the view after the first row = total_rows_in_view - 1 *)
-                              (* index of last row in view is view_start + view_diff *)
-      numbering     : numbering_mode ;
-      linebreaking  : Block.linebreak ;
+    filebuffer    : filebuffer ;
+    cursor        : v2 ;       (* current position in file space: x = column index, y = row index *)
+    view_start    : int ;      (* index of first row in view *)
+    view_diff     : int ;      (* number of rows in the view *)
+    numbering     : numbering_mode ;
+    linebreaking  : Block.linebreak ;
   }
 
-  let init_filebuffer lines view_h =
-    let buffer = Array.of_list lines in
-    let atoms = Array.map Atom.generic_atom_parser buffer in {
-      buffer        = buffer ;
-      atom_buffer   = atoms ;
-      buflen        = alen buffer ;
-      cursor        = v2_zero ;
-      view_start    = 0 ;
-      view_diff     = view_h - 1;
-      numbering     = CursorRelative ;
-      linebreaking  = Block.Clip ;
-    }
+  let init_fileview filebuffer view_h = {
+    filebuffer    = filebuffer ;
+    cursor        = v2_zero ;
+    view_start    = 0 ;
+    view_diff     = view_h - 1;
+    numbering     = CursorRelative ;
+    linebreaking  = Block.Clip ;
+  }
 
-  let is_current_char_valid t = t.cursor.x < (slen t.buffer.(t.cursor.y)) ;;
-  let current_line t = t.buffer.(t.cursor.y)
+  let is_current_char_valid t = t.cursor.x < (slen t.filebuffer.buffer.(t.cursor.y)) ;;
+  let current_line t = t.filebuffer.buffer.(t.cursor.y)
   let current_char t = String.get (current_line t) t.cursor.x ;;
   let cursor t = t.cursor ;;
-  let buflen t = t.buflen ;;
+  let buflen t = t.filebuffer.buflen ;;
   let view_diff t = t.view_diff ;;
 
   let adjust_view t =
@@ -1335,8 +1343,8 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec first_non_empty y =
       match y with
-      | _ when y = t.buflen           -> first_non_empty 0
-      | _ when 0 = slen t.buffer.(y)  -> first_non_empty (y + 1)
+      | _ when y = (buflen t)         -> first_non_empty 0
+      | _ when 0 = slen t.filebuffer.buffer.(y)  -> first_non_empty (y + 1)
       | _                             -> y
     in
       if vec2.x + 1 < slen (current_line t)
@@ -1350,23 +1358,23 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec last_non_empty y =
       match y with
-      | _ when y = -1                 -> last_non_empty (t.buflen - 1)
-      | _ when 0 = slen t.buffer.(y)  -> last_non_empty (y - 1)
+      | _ when y = -1                 -> last_non_empty ((buflen t) - 1)
+      | _ when 0 = slen t.filebuffer.buffer.(y)  -> last_non_empty (y - 1)
       | _                             -> y
     in
       if t.cursor.x - 1 > 0
       then { x = t.cursor.x - 1 ; y = t.cursor.y }
       else
         let y' = last_non_empty (t.cursor.y - 1) in
-        { x = (slen t.buffer.(y')) - 1 ; y = y'}
+        { x = (slen t.filebuffer.buffer.(y')) - 1 ; y = y'}
 
   let cursor_next_line t = {
       x = t.cursor.x ;
-      y = (t.cursor.y + 1) mod t.buflen ;
+      y = (t.cursor.y + 1) mod (buflen t) ;
     }
 
   let cursor_prev_line t =
-    let y' = if t.cursor.y - 1 >= 0 then t.cursor.y - 1 else t.buflen - 1 in {
+    let y' = if t.cursor.y - 1 >= 0 then t.cursor.y - 1 else (buflen t) - 1 in {
       x = t.cursor.x ;
       y = y' ;
     }
@@ -1375,10 +1383,10 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
     t.cursor <-> { x = 0; y = t.view_start }
 
   let file_length_string t =
-    (string_of_int t.buflen) ^ "L"
+    (string_of_int (buflen t)) ^ "L"
 
   let line_len i t =
-    slen t.buffer.(i)
+    slen t.filebuffer.buffer.(i)
 
   let get_line_numbering_offset t =
     t.view_start + match t.numbering with
@@ -1387,12 +1395,12 @@ module Filebuffer : (FilebufferType with type atom = Atom.atom and type view = t
 
   let get_line t offset i =
     LineInfo {
-      blocks  = List.map atom_to_block t.atom_buffer.(offset + i) ;
+      blocks  = List.map atom_to_block t.filebuffer.atom_buffer.(offset + i) ;
     }
 
   let get_lines view_start view_max t =
     let start = t.view_start in
-    let stop = min t.buflen (start + view_max) in
+    let stop = min (buflen t) (start + view_max) in
     Array.init (stop - start) (get_line t start) |> Array.to_list
 
   let get_view maxlines t =
@@ -1407,7 +1415,7 @@ end
 
 
 module FilebufferMovements = struct
-  open Filebuffer
+  open Fileview
   open FilebufferUtil
 
   (* TODO: refactor to remove the use of adjust cursor *)
@@ -1490,31 +1498,6 @@ module FilebufferMovements = struct
 end
 
 
-(* FileView wraps a Filebuffer and represents an open view into a file
- * it manages drawing the lines of the file into the backing frame buffer
- * and handles line overwrapping, line numbering, view centering *)
-module FileView = struct
-
-  type t = {
-    background:   Screen.t ;  (* Area given for displaying the file content, including header and line numbers *)
-    text_area:    Screen.t ;  (* subarea for drawing the text *)
-    cursor:       v2 ;        (* position of the cursor relative to that screen coordinates system *)
-
-    frame_buffer :  Framebuffer.t ;
-    file_buffer :  Filebuffer.t ;
-  }
-
-  (* TODOs: - move show_header and print_file_buffer here as is
-   *        - remove all view offset from main Editor struct
-   *        - redirect View commands to FileView
-   *        - take into account overwrapping lines for managing diff between FileView and Filebuffer cursors
-   *)
-
-  (* How to deal with different FileViews sharing the sale Filebuffer ?
-   *  whenever a view changes the Filebuffer, all other Fileviews needs to be updated with the new Filebuffer *)
-
-end
-
 module Ciseau = struct
 
   let line_number_cache_t1 = Sys.time () ;;
@@ -1551,8 +1534,8 @@ module Ciseau = struct
   type command = Noop
                | Stop
                | Resize
-               | Move of (Filebuffer.t -> v2)
-               | View of (Filebuffer.t -> Filebuffer.t)
+               | Move of (Fileview.t -> v2)
+               | View of (Fileview.t -> Fileview.t)
                | Pending of pending_command_atom
 
   let max_repetition = 10000
@@ -1584,6 +1567,7 @@ module Ciseau = struct
     filebuffer : Filebuffer.t ;
 
     (* TODO: regroup into Fileview *)
+    fileview      : Fileview.t ;
     file          : string ;
     header        : string ;
     user_input    : string ;
@@ -1616,7 +1600,7 @@ module Ciseau = struct
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    let lines = slurp file
+    let filebuffer      = file |> slurp |> Filebuffer.init_filebuffer ;
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
@@ -1626,7 +1610,9 @@ module Ciseau = struct
       background      = mk_background_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
 
-      filebuffer      = Filebuffer.init_filebuffer lines (term_dim.y - 3) ;   (* 3 lines for header, status, input *)
+      filebuffer      = filebuffer ;
+
+      fileview        = Fileview.init_fileview filebuffer (term_dim.y - 3) ;
       file            = file ;
       header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
@@ -1660,8 +1646,8 @@ module Ciseau = struct
     | Noop    -> editor
     | Stop    -> { editor with running = false }
     | Resize  -> resize_editor editor
-    | Move fn -> { editor with filebuffer = Filebuffer.apply_movement fn editor.filebuffer }
-    | View fn -> { editor with filebuffer = fn editor.filebuffer }
+    | Move fn -> { editor with fileview = Fileview.apply_movement fn editor.fileview }
+    | View fn -> { editor with fileview = fn editor.fileview }
       (* cannot happen ?? *)
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
 
@@ -1670,11 +1656,11 @@ module Ciseau = struct
     | Move fn ->
       let rec loop n fb =
         if (n > 0)
-          then loop (n - 1) (Filebuffer.apply_movement fn fb)
+          then loop (n - 1) (Fileview.apply_movement fn fb)
           else fb
       in {
         editor with
-        filebuffer    = loop n editor.filebuffer ;
+        fileview      = loop n editor.fileview ;
         pending_input = None ;
       }
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
@@ -1721,8 +1707,8 @@ module Ciseau = struct
   let show_header editor screen =
     let header_offset = 0 in
     let s = editor.header
-          ^ "  " ^ (Filebuffer.file_length_string editor.filebuffer)
-          ^ "  " ^ (editor.filebuffer |> Filebuffer.cursor |> v2_to_string)
+          ^ "  " ^ (Fileview.file_length_string editor.fileview)
+          ^ "  " ^ (editor.fileview |> Fileview.cursor |> v2_to_string)
     in
       Screen.put_line screen header_offset (Block.mk_block s Config.default.colors.header)
 
@@ -1751,10 +1737,10 @@ module Ciseau = struct
     in
       loop offset [] lines
 
-  let print_file_buffer filebuffer screen =
+  let print_file_buffer fileview screen =
     let y_offset = 1 in
     let n_lines = (Screen.get_height screen) - 1 in
-    let TextView { offset ; lines ; linebreaking } = Filebuffer.get_view n_lines filebuffer in
+    let TextView { offset ; lines ; linebreaking } = Fileview.get_view n_lines fileview in
     lines |> prepend_line_numbers offset
           (* TODO: fuse selection into the block list *)
           |> Screen.put_block_lines screen linebreaking y_offset
@@ -1767,13 +1753,21 @@ module Ciseau = struct
   let show_filebuffer editor =
     default_fill_screen editor.screen ;
     show_header editor editor.screen ;
-    print_file_buffer editor.filebuffer editor.screen
+    print_file_buffer editor.fileview editor.screen
 
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
-    (* TODO: remove this hack for cursor position management ! *)
-    let cursor_position = editor.filebuffer
-                        |> Filebuffer.cursor_relative_to_view
+    (* TODO: remove this hack for cursor position management !
+     *  proper management:
+     *    take cursor in text space
+     *    knowing how the text was broken down in line of blocks for text rendering,
+     *      remap the cursor from text space to screen space
+     *    using the screen offset
+     *      remap the cursor from screen space to terminal space
+     *)
+
+    let cursor_position = editor.fileview
+                        |> Fileview.cursor_relative_to_view
                         |> (<+>) (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
     in
       Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
@@ -1785,10 +1779,10 @@ module Ciseau = struct
 
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
-    | Keys.Backslash    -> View Filebuffer.swap_line_number_mode
-    | Keys.Pipe         -> View Filebuffer.swap_linebreaking_mode
-    | Keys.Ctrl_z       -> View Filebuffer.recenter_view
-    | Keys.Space        -> View Filebuffer.recenter_view
+    | Keys.Backslash    -> View Fileview.swap_line_number_mode
+    | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
+    | Keys.Ctrl_z       -> View Fileview.recenter_view
+    | Keys.Space        -> View Fileview.recenter_view
     | Keys.Equal        -> Resize
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
     | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
