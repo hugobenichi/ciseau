@@ -68,6 +68,13 @@ let next_char =
     | 1   -> Bytes.get buffer 0 |> Char.code
     | 0   -> one_byte_reader ()     (* timeout *)
     | _   -> raise (Failure "next_char failed")
+    | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
+        Printf.fprintf logs "Unix_error errmsg='%s' fn='%s'\n" (Unix.error_message errcode) fn_name ;
+        match errcode with
+        | Unix.EINTR ->
+          (* read interrupted, usually caused SIGWINCH signal handler for terminal resize: retry read *)
+          one_byte_reader ()
+        | _ -> raise (Unix.Unix_error (errcode, fn_name, fn_param))
   in one_byte_reader
 
 let write fd buffer len =
@@ -1853,6 +1860,13 @@ module Ciseau = struct
 
 end
 
+let log_sigwinch sig_n =
+  output_string logs "sigwinch\n" ;
+  flush logs
+
+let sigwinch = 28 (* That's for OSX *)
+
 let () =
+  Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
   Ciseau.main () ;
   close_out logs
