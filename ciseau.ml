@@ -591,8 +591,8 @@ module Keys = struct
     code    = c ;
   }
 
-  let mk_unknown_key =
-    mk_key Unknown "unknown"
+  let mk_unknown_key c =
+    mk_key Unknown ("unknown(" ^ string_of_int c ^ ")") c
 
   let code_to_key_table = Array.init (256 + 32) mk_unknown_key
 
@@ -1833,9 +1833,8 @@ module Ciseau = struct
 
   (* TODO: replace by a proper history of previous inputs *)
   let make_user_input key editor =
-    let new_head = key.Keys.repr ^ "(" ^ (string_of_int key.Keys.code) ^ ")" in
     let new_user_input = (pending_command_to_string editor.pending_input)
-                       ^  new_head
+                       ^  key.Keys.repr
                        ^ " " ^ editor.user_input
     in {
       editor with
