@@ -4,8 +4,6 @@
  *      - The Framebuffer should only be cleared selectively by subrectangles to redraw stuff that needs to be redrawn
  *      - introduce an array slice type and replace a bunch of list with arrays or array slices
  *
- *  - dynamically resize window and screens
- *  - correctly parse control sequences from terminal and handle SIGWINCH
  *  - add highlight fusion to get_view and support selections, cursor line highlight, ...
  *)
 
@@ -58,24 +56,6 @@ let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr 
 let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
 let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
 let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
-
-(* replacement for input_char which considers 0 as Enf_of_file *)
-let next_char =
-  (* WARN not thread safe *)
-  let buffer = Bytes.make 1 'z' in
-  let rec one_byte_reader () =
-    match Unix.read Unix.stdin buffer 0 1 with
-    | 1   -> Bytes.get buffer 0 |> Char.code
-    | 0   -> one_byte_reader ()     (* timeout *)
-    | _   -> raise (Failure "next_char failed")
-    | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
-        Printf.fprintf logs "Unix_error errmsg='%s' fn='%s'\n" (Unix.error_message errcode) fn_name ;
-        match errcode with
-        | Unix.EINTR ->
-          (* read interrupted, usually caused SIGWINCH signal handler for terminal resize: retry read *)
-          one_byte_reader ()
-        | _ -> raise (Unix.Unix_error (errcode, fn_name, fn_param))
-  in one_byte_reader
 
 let write fd buffer len =
   if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
@@ -596,6 +576,9 @@ module Keys = struct
                   | Backslash
                   | Pipe
 
+                  (* Other events returned by next char *)
+                  | EINTR (* usually happen when terminal is resized *)
+
   type key = {
     symbol  : key_symbol ;
     repr    : string ;
@@ -611,7 +594,7 @@ module Keys = struct
   let mk_unknown_key =
     mk_key Unknown "unknown"
 
-  let code_to_key_table = Array.init 256 mk_unknown_key
+  let code_to_key_table = Array.init (256 + 32) mk_unknown_key
 
   let _ = [
     mk_key Ctrl_c      "Ctrl_c"        3 ;
@@ -650,9 +633,29 @@ module Keys = struct
     mk_key Digit_9     "9"             57 ;
     mk_key Backslash   "\\"            92 ;
     mk_key Pipe        "|"             124 ;
+
+    mk_key EINTR       "EINTR"         256 ;
   ] |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
 
   let code_to_key = Array.get code_to_key_table
+
+  (* replacement for input_char which considers 0 as Enf_of_file *)
+  let next_key =
+    (* WARN not thread safe *)
+    let buffer = Bytes.make 1 'z' in
+    let rec one_byte_reader () =
+      match Unix.read Unix.stdin buffer 0 1 with
+      | 1   -> Bytes.get buffer 0 |> Char.code |> code_to_key
+      | 0   -> one_byte_reader ()     (* timeout *)
+      | _   -> raise (Failure "next_char failed")
+      | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
+          Printf.fprintf logs "Unix_error errmsg='%s' fn='%s'\n" (Unix.error_message errcode) fn_name ;
+          match errcode with
+          | Unix.EINTR ->
+            (* read interrupted, usually caused SIGWINCH signal handler for terminal resize: retry read *)
+            code_to_key 256
+          | _ -> raise (Unix.Unix_error (errcode, fn_name, fn_param))
+    in one_byte_reader
 
 end
 
@@ -1819,6 +1822,8 @@ module Ciseau = struct
     | Keys.Digit_9      -> Pending (Digit 9)
     | Keys.Unknown      -> Noop (* ignore for now *)
 
+    | Keys.EINTR        -> Resize
+
   let process_command editor =
     match editor.pending_input with
     | None          -> apply_command
@@ -1840,7 +1845,7 @@ module Ciseau = struct
 
   let process_events editor =
     let before = Sys.time () in
-    let key = () |> next_char |> Keys.code_to_key in
+    let key = () |> Keys.next_key in
     let after = Sys.time () in
       editor |> process_key editor key.Keys.symbol
              |> make_user_input key
@@ -1860,9 +1865,18 @@ module Ciseau = struct
 
 end
 
+type program_flags = {
+  mutable resize_event_pending : bool ;
+}
+
+let global_flags : program_flags = {
+  resize_event_pending = false ;
+}
+
 let log_sigwinch sig_n =
-  output_string logs "sigwinch\n" ;
-  flush logs
+  (* resize_event_pending is actually not read anywhere. When SIGWINCH is handled, the keyboard function will get
+   * interrupted. The EINTR interrupt codepath there will trigger the resizing *)
+  global_flags.resize_event_pending <- true
 
 let sigwinch = 28 (* That's for OSX *)
 
