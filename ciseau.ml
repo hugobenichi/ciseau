@@ -817,6 +817,8 @@ module type FileviewType = sig
   val cursor_relative_to_view : t -> v2
   val file_length_string : t -> string
   val get_view : int -> t -> view
+
+  val get_header : t -> string
 end
 
 
@@ -1241,14 +1243,19 @@ end
 
 module Filebuffer = struct
   type t = {
+      filename    : string ;
+      filepath    : string ;
       buffer      : string array ;          (* the file data, line per line *)
       buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
       atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
   }
 
-  let init_filebuffer lines =
+  let init_filebuffer file =
+    let lines = slurp file in
     let buffer = Array.of_list lines in
     let atoms = Array.map Atom.generic_atom_parser buffer in {
+      filename      = file ;
+      filepath      = (Sys.getcwd ()) ^ "/" ^ file ;
       buffer        = buffer ;
       buflen        = alen buffer ;
       atom_buffer   = atoms ;
@@ -1411,6 +1418,11 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
       linebreaking  = t.linebreaking ;
     }
 
+  let get_header t =
+    t.filebuffer.Filebuffer.filepath
+          ^ "  " ^ (file_length_string t)
+          ^ "  " ^ (t |> cursor |> v2_to_string)
+
 end
 
 
@@ -1566,10 +1578,7 @@ module Ciseau = struct
     (* TODO: add management code to match multiple fileviews to the same filebuffer *)
     filebuffer : Filebuffer.t ;
 
-    (* TODO: regroup into Fileview *)
     fileview      : Fileview.t ;
-    file          : string ;
-    header        : string ;
     user_input    : string ;
     pending_input : pending_command ;
 
@@ -1600,7 +1609,7 @@ module Ciseau = struct
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    let filebuffer      = file |> slurp |> Filebuffer.init_filebuffer ;
+    let filebuffer      = Filebuffer.init_filebuffer file ;
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
@@ -1613,8 +1622,6 @@ module Ciseau = struct
       filebuffer      = filebuffer ;
 
       fileview        = Fileview.init_fileview filebuffer (term_dim.y - 3) ;
-      file            = file ;
-      header          = (Sys.getcwd ()) ^ "/" ^ file ;
       user_input      = "" ;
       pending_input   = None;
 
@@ -1703,14 +1710,11 @@ module Ciseau = struct
   let format_time_stats editor =
     Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
 
-  (* Show header is relative to a file view, not to the background *)
   let show_header editor screen =
     let header_offset = 0 in
-    let s = editor.header
-          ^ "  " ^ (Fileview.file_length_string editor.fileview)
-          ^ "  " ^ (editor.fileview |> Fileview.cursor |> v2_to_string)
+    let header = Fileview.get_header editor.fileview
     in
-      Screen.put_line screen header_offset (Block.mk_block s Config.default.colors.header)
+      Screen.put_line screen header_offset (Block.mk_block header Config.default.colors.header)
 
   let show_status editor =
     let status_text1 = "Ciseau stats: win = "
@@ -1750,6 +1754,7 @@ module Ciseau = struct
     mk_list (Screen.get_height screen) [Block.mk_block "~" Config.default.colors.default_fill]
       |> Screen.put_block_lines screen Block.Overflow fill_y_offset
 
+  (* TODO: move all this block to Fileview *)
   let show_filebuffer editor =
     default_fill_screen editor.screen ;
     show_header editor editor.screen ;
