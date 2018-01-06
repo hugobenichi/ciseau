@@ -986,31 +986,33 @@ module Config = struct
     colors : colors ;
   }
 
+  let darkgray = Color.Gray 2
+
   let default : cfg = {
     colors = {
       operator = {
         fg    = green ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       structure = {
         fg    = red ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       string  = {
         fg    = yellow ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       spacing = {
-        fg    = black ;
-        bg    = black ;
+        fg    = darkgray ;
+        bg    = darkgray ;
       } ;
       numbers = {
         fg    = magenta ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       default = {
         fg    = white ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       cursor_line = {
         fg    = white ;
@@ -1018,23 +1020,23 @@ module Config = struct
       } ;
       line_numbers = {
         fg    = green ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       header = {
-        fg    = black ;
+        fg    = darkgray ;
         bg    = yellow ;
       } ;
       status = {
-        fg    = black ;
+        fg    = darkgray ;
         bg    = white ;
       } ;
       user_input = {
         fg    = white ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
       default_fill = {
         fg    = blue ;
-        bg    = black ;
+        bg    = darkgray ;
       } ;
     } ;
   }
@@ -1061,7 +1063,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
 
   module Default = struct
     let fg    = Color.white ;;
-    let bg    = Color.black ;;
+    let bg    = Config.darkgray ;;
     let z     = 0 ;;
     let text  = ' ' ;;
   end
@@ -1424,32 +1426,38 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
           ^ "  " ^ (file_length_string t)
           ^ "  " ^ (t |> cursor |> v2_to_string)
 
-  let get_line_len t y_offset =
-    t |> current_line |> slen (* TODO: take into account '\t' characters *)
+  let get_line_len_hacky t y_offset =
+    y_offset |> Array.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
 
   let mk_offset_table t bounds =
-    let line_offset_table = Array.make bounds.y (-t.view_start) in
+    let table_len =
+      min (max bounds.y t.view_diff) (t.filebuffer.Filebuffer.buflen - t.view_start)
+    in
+    let offset0 = -t.view_start in
+    let line_offset_table = Array.make table_len offset0 in
     let rec loop i offset =
-      if i < bounds.y && t.view_start + i < t.filebuffer.Filebuffer.buflen
+      if i < table_len
         then
-          let line_len = get_line_len t (t.view_start + i) in
+          let line_len = get_line_len_hacky t (i + t.view_start) in
           let offset' = offset + (line_len / bounds.x) in
           line_offset_table.(i) <- offset ;
           loop (i + 1) offset'
         else
           line_offset_table
     in
-      loop 0 0
+      loop 0 offset0
 
-  let text_space_to_screen_space line_offset_table width { x ; y } =
-    let y' = y + line_offset_table.(y) + (x / width) in
+  let text_space_to_screen_space line_offset_table t width { x ; y } =
+    let y' = y + line_offset_table.(y - t.view_start) + (x / width) in
     let x' = x mod width in
     mk_v2 x' y'
 
   let cursor_relative_to_view bounds t =
-    (* let table = mk_offset_table t bounds in *)
-    (* text_space_to_screen_space table bounds.x t.cursor *)
-    t.cursor <-> { x = 0; y = t.view_start }
+    let table = mk_offset_table t bounds in
+    output_string logs
+      ("[ " ^ (table |> Array.map string_of_int |> Array.to_list |> String.concat" ") ^ " ]\n") ;
+    flush logs ;
+    text_space_to_screen_space table t bounds.x t.cursor
 end
 
 
