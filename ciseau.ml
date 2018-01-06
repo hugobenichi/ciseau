@@ -1555,7 +1555,9 @@ module Stats = struct
   (* TODO: print all allocated word diff to logs to get quantiles by post processing *)
   type t = {
     gc_stats            : Gc.stat ;
-    gc_stats_diff       : float * float ;
+    last_major_words    : float ;
+    last_minor_words    : float ;
+    minor_heap_zero     : float ;
     timestamp           : float ;
     last_input_duration : float ;
     last_cycle_duration : float ;
@@ -1563,21 +1565,22 @@ module Stats = struct
 
   let init_stats () = {
     gc_stats            = Gc.quick_stat () ;
-    gc_stats_diff       = (0., 0.) ;
+    last_major_words    = 0. ;
+    last_minor_words    = 0. ;
+    minor_heap_zero     = 0. ;
     timestamp           = Sys.time () ;
     last_input_duration = 0. ;
     last_cycle_duration = 0. ;
   }
 
   let update_stats now input_duration stats =
-    let open Gc in
-    (* let _ = Bytes.make (1024 * 512) '0' in (* DEBUG uncomment me to pressure the gc *) *)
-    let new_gc_stats = quick_stat () in
-    let minor_diff = new_gc_stats.minor_words -. stats.gc_stats.minor_words in
-    let major_diff = new_gc_stats.major_words -. stats.gc_stats.major_words in
+    let new_gc_stats = Gc.quick_stat () in
+    let had_minor_gc = new_gc_stats.Gc.minor_collections > stats.gc_stats.Gc.minor_collections in
     {
       gc_stats            = new_gc_stats ;
-      gc_stats_diff       = (minor_diff, major_diff) ;
+      last_major_words    = stats.gc_stats.Gc.major_words ;
+      last_minor_words    = stats.gc_stats.Gc.minor_words ;
+      minor_heap_zero     = if had_minor_gc then new_gc_stats.Gc.minor_words else stats.minor_heap_zero ;
       timestamp           = now ;
       last_input_duration = input_duration ;
       last_cycle_duration = now -. stats.timestamp ;
@@ -1592,21 +1595,26 @@ module Stats = struct
     | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
     | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
 
-  let format_memory_counters (minor, major) =
+  let format_memory_counters (major, minor) =
     Printf.sprintf "%s/%s" (format_memory_counter major)
                            (format_memory_counter minor)
 
-  let format_memory_stats stats =
+  let mem_total stats =
+    let major = float stats.gc_stats.Gc.heap_words in
+    let minor = stats.gc_stats.Gc.minor_words -. stats.minor_heap_zero in
+    (major, minor)
+
+  let mem_delta stats =
+    let major = stats.gc_stats.Gc.major_words -. stats.last_major_words in
+    let minor = stats.gc_stats.Gc.minor_words -. stats.last_minor_words in
+    (major, minor)
+
+  let format_stats stats =
     let open Gc in
-    Printf.sprintf "  mem total = (%s)  mem delta = (%s)  gc = (%d,%d)"
-      (format_memory_counters (stats.gc_stats.minor_words, stats.gc_stats.major_words))
-      (format_memory_counters stats.gc_stats_diff)
-      stats.gc_stats.major_collections
-      stats.gc_stats.minor_collections
-
-  let format_time_stats stats =
-    Printf.sprintf "  time = %.3f ms" (1000. *. (stats.last_cycle_duration -. stats.last_input_duration))
-
+    Printf.sprintf "  mem live = %s  mem delta = %s  time = %.3f ms"
+      (stats |> mem_total |> format_memory_counters )
+      (stats |> mem_delta |> format_memory_counters )
+      (1000. *. (stats.last_cycle_duration -. stats.last_input_duration))
 end
 
 module Ciseau = struct
@@ -1770,8 +1778,7 @@ module Ciseau = struct
   let show_status editor =
     let status_text1 = "Ciseau stats: win = "
                       ^ editor.term_dim_descr
-                      ^ (Stats.format_memory_stats editor.stats)
-                      ^ (Stats.format_time_stats editor.stats)
+                      ^ (Stats.format_stats editor.stats)
     in
     let status_text2 = editor.user_input
     in
