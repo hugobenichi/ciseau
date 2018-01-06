@@ -1453,11 +1453,15 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     mk_v2 x' y'
 
   let cursor_relative_to_view bounds t =
-    let table = mk_offset_table t bounds in
-    output_string logs
-      ("[ " ^ (table |> Array.map string_of_int |> Array.to_list |> String.concat" ") ^ " ]\n") ;
-    flush logs ;
-    text_space_to_screen_space table t bounds.x t.cursor
+    match t.linebreaking with
+    | Block.Clip ->
+        mk_v2 t.cursor.x (t.cursor.y - t.view_start)
+    | Block.Overflow ->
+        let table = mk_offset_table t bounds in
+        output_string logs
+          ("[ " ^ (table |> Array.map string_of_int |> Array.to_list |> String.concat" ") ^ " ]\n") ;
+        flush logs ;
+        text_space_to_screen_space table t bounds.x t.cursor
 end
 
 
