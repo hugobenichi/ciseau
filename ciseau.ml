@@ -785,6 +785,7 @@ module type ScreenType = sig
   type segment
 
   val get_size        : t -> v2
+  val get_width       : t -> int
   val get_height      : t -> int
   val init_screen     : framebuffer -> v2 -> v2 -> t
   val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
@@ -814,7 +815,7 @@ module type FileviewType = sig
   val swap_line_number_mode : t -> t
   val swap_linebreaking_mode : t -> t
   val recenter_view : t -> t
-  val cursor_relative_to_view : t -> v2
+  val cursor_relative_to_view : v2 -> t -> v2
   val file_length_string : t -> string
   val get_view : int -> t -> view
 
@@ -1188,6 +1189,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let get_size t =
     t.size
 
+  let get_width t =
+    t.size.x
+
   let get_height t =
     t.size.y
 
@@ -1386,9 +1390,6 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
       y = y' ;
     }
 
-  let cursor_relative_to_view t =
-    t.cursor <-> { x = 0; y = t.view_start }
-
   let file_length_string t =
     (string_of_int (buflen t)) ^ "L"
 
@@ -1423,6 +1424,32 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
           ^ "  " ^ (file_length_string t)
           ^ "  " ^ (t |> cursor |> v2_to_string)
 
+  let get_line_len t y_offset =
+    t |> current_line |> slen (* TODO: take into account '\t' characters *)
+
+  let mk_offset_table t bounds =
+    let line_offset_table = Array.make bounds.y (-t.view_start) in
+    let rec loop i offset =
+      if i < bounds.y && t.view_start + i < t.filebuffer.Filebuffer.buflen
+        then
+          let line_len = get_line_len t (t.view_start + i) in
+          let offset' = offset + (line_len / bounds.x) in
+          line_offset_table.(i) <- offset ;
+          loop (i + 1) offset'
+        else
+          line_offset_table
+    in
+      loop 0 0
+
+  let text_space_to_screen_space line_offset_table width { x ; y } =
+    let y' = y + line_offset_table.(y) + (x / width) in
+    let x' = x mod width in
+    mk_v2 x' y'
+
+  let cursor_relative_to_view bounds t =
+    (* let table = mk_offset_table t bounds in *)
+    (* text_space_to_screen_space table bounds.x t.cursor *)
+    t.cursor <-> { x = 0; y = t.view_start }
 end
 
 
@@ -1772,7 +1799,7 @@ module Ciseau = struct
      *)
 
     let cursor_position = editor.fileview
-                        |> Fileview.cursor_relative_to_view
+                        |> Fileview.cursor_relative_to_view (Screen.get_size editor.screen)
                         |> (<+>) (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
     in
       Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
@@ -1853,13 +1880,22 @@ module Ciseau = struct
     if editor.running then
       editor |> refresh_screen |> process_events |> loop
 
-  let run_loop editor () = loop editor
+  let run_editor_loop editor () = loop editor
 
   let main () =
-    (if alen Sys.argv > 1 then Sys.argv.(1) else __FILE__)
-      |> init_editor
-      |> run_loop
-      |> Term.do_with_raw_mode
+    try
+      Printexc.record_backtrace true ;
+      let file =
+        if alen Sys.argv > 1
+          then Sys.argv.(1)
+          else __FILE__
+      in file |> init_editor
+              |> run_editor_loop
+              |> Term.do_with_raw_mode
+    with
+      e ->
+          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n" ;
+          Printexc.print_backtrace stdout
 
 end
 
