@@ -1549,6 +1549,66 @@ module FilebufferMovements = struct
 end
 
 
+module Stats = struct
+
+  (* TODO: add every X a full stats collection for printing total current footprint *)
+  (* TODO: print all allocated word diff to logs to get quantiles by post processing *)
+  type t = {
+    gc_stats            : Gc.stat ;
+    gc_stats_diff       : float * float ;
+    timestamp           : float ;
+    last_input_duration : float ;
+    last_cycle_duration : float ;
+  }
+
+  let init_stats () = {
+    gc_stats            = Gc.quick_stat () ;
+    gc_stats_diff       = (0., 0.) ;
+    timestamp           = Sys.time () ;
+    last_input_duration = 0. ;
+    last_cycle_duration = 0. ;
+  }
+
+  let update_stats now input_duration stats =
+    let open Gc in
+    (* let _ = Bytes.make (1024 * 512) '0' in (* DEBUG uncomment me to pressure the gc *) *)
+    let new_gc_stats = quick_stat () in
+    let minor_diff = new_gc_stats.minor_words -. stats.gc_stats.minor_words in
+    let major_diff = new_gc_stats.major_words -. stats.gc_stats.major_words in
+    {
+      gc_stats            = new_gc_stats ;
+      gc_stats_diff       = (minor_diff, major_diff) ;
+      timestamp           = now ;
+      last_input_duration = input_duration ;
+      last_cycle_duration = now -. stats.timestamp ;
+    }
+
+  let word_byte_size =
+    float (Sys.word_size / 8)
+
+  let format_memory_counter word_count =
+    match word_count *. word_byte_size with
+    | x when x < 1024.          -> Printf.sprintf "%.2fB" x
+    | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
+    | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
+
+  let format_memory_counters (minor, major) =
+    Printf.sprintf "%s/%s" (format_memory_counter major)
+                           (format_memory_counter minor)
+
+  let format_memory_stats stats =
+    let open Gc in
+    Printf.sprintf "  mem total = (%s)  mem delta = (%s)  gc = (%d,%d)"
+      (format_memory_counters (stats.gc_stats.minor_words, stats.gc_stats.major_words))
+      (format_memory_counters stats.gc_stats_diff)
+      stats.gc_stats.major_collections
+      stats.gc_stats.minor_collections
+
+  let format_time_stats stats =
+    Printf.sprintf "  time = %.3f ms" (1000. *. (stats.last_cycle_duration -. stats.last_input_duration))
+
+end
+
 module Ciseau = struct
 
   let line_number_cache_t1 = Sys.time () ;;
@@ -1617,19 +1677,11 @@ module Ciseau = struct
     (* TODO: add management code to match multiple fileviews to the same filebuffer *)
     filebuffer : Filebuffer.t ;
 
-    fileview      : Fileview.t ;
-    user_input    : string ;
-    pending_input : pending_command ;
+    fileview        : Fileview.t ;
+    user_input      : string ;
+    pending_input   : pending_command ;
 
-    (* regroup into a separate EditorStats module *)
-    (* TODO: add every X a full stats collection for printing total footprint *)
-    (* TODO: keep a rolling buffer of alloc diff per frame and show quantiles *)
-    (* TODO: export stats to some log files for doing more offline statistics *)
-    gc_stats            : Gc.stat ;
-    gc_stats_diff       : float * float ;
-    timestamp           : float ;
-    last_input_duration : float ;
-    last_cycle_duration : float ;
+    stats           : Stats.t
   }
 
   let mk_background_screen frame_buffer term_dim =
@@ -1664,11 +1716,7 @@ module Ciseau = struct
       user_input      = "" ;
       pending_input   = None;
 
-      gc_stats        = Gc.quick_stat () ;
-      gc_stats_diff   = (0., 0.) ;
-      timestamp           = Sys.time() ;
-      last_input_duration = 0. ;
-      last_cycle_duration = 0. ;
+      stats           = Stats.init_stats () ;
     }
 
   let resize_editor editor =
@@ -1713,42 +1761,6 @@ module Ciseau = struct
       (* for other command, flush any pending digits *)
     | _ -> apply_command command { editor with pending_input = None }
 
-  let update_stats now input_duration editor =
-    let open Gc in
-    (* let _ = Bytes.make (1024 * 512) '0' in (* DEBUG uncomment me to pressure the gc *) *)
-    let new_gc_stats = quick_stat () in
-    let minor_diff = new_gc_stats.minor_words -. editor.gc_stats.minor_words in
-    let major_diff = new_gc_stats.major_words -. editor.gc_stats.major_words in
-    { editor with
-      gc_stats            = new_gc_stats ;
-      gc_stats_diff       = (minor_diff, major_diff) ;
-      timestamp           = now ;
-      last_input_duration = input_duration ;
-      last_cycle_duration = now -. editor.timestamp ;
-    }
-
-  let word_byte_size = float (Sys.word_size / 8)
-
-  let format_memory_counter word_count = match word_count *. word_byte_size with
-    | x when x < 1024.          -> Printf.sprintf "%.2fB" x
-    | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
-    | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
-
-  let format_memory_counters (minor, major) =
-    Printf.sprintf "%s/%s" (format_memory_counter major)
-                           (format_memory_counter minor)
-
-  let format_memory_stats editor =
-    let open Gc in
-    Printf.sprintf "  mem total = (%s)  mem delta = (%s)  gc = (%d,%d)"
-      (format_memory_counters (editor.gc_stats.minor_words, editor.gc_stats.major_words))
-      (format_memory_counters editor.gc_stats_diff)
-      editor.gc_stats.major_collections
-      editor.gc_stats.minor_collections
-
-  let format_time_stats editor =
-    Printf.sprintf "  time = %.3f ms" (1000. *. (editor.last_cycle_duration -. editor.last_input_duration))
-
   let show_header editor screen =
     let header_offset = 0 in
     let header = Fileview.get_header editor.fileview
@@ -1758,8 +1770,8 @@ module Ciseau = struct
   let show_status editor =
     let status_text1 = "Ciseau stats: win = "
                       ^ editor.term_dim_descr
-                      ^ (format_memory_stats editor)
-                      ^ (format_time_stats editor)
+                      ^ (Stats.format_memory_stats editor.stats)
+                      ^ (Stats.format_time_stats editor.stats)
     in
     let status_text2 = editor.user_input
     in
@@ -1880,13 +1892,20 @@ module Ciseau = struct
       user_input = truncate_string editor.term_dim.x new_user_input ;
     }
 
+  let update_stats input_duration editor =
+    let now = Sys.time ()
+    in {
+      editor with
+        stats = Stats.update_stats now input_duration editor.stats
+    }
+
   let process_events editor =
-    let before = Sys.time () in
+    let before_input = Sys.time () in
     let key = () |> Keys.next_key in
-    let after = Sys.time () in
+    let after_input = Sys.time () in
       editor |> process_key editor key.Keys.symbol
              |> make_user_input key
-             |> update_stats (Sys.time ()) (after -. before)
+             |> update_stats (after_input -. before_input)
 
   let rec loop editor =
     if editor.running then
