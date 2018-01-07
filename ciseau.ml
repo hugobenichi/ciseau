@@ -1557,7 +1557,6 @@ module Stats = struct
     gc_stats            : Gc.stat ;
     last_major_words    : float ;
     last_minor_words    : float ;
-    minor_heap_zero     : float ;
     timestamp           : float ;
     last_input_duration : float ;
     last_cycle_duration : float ;
@@ -1567,24 +1566,19 @@ module Stats = struct
     gc_stats            = Gc.quick_stat () ;
     last_major_words    = 0. ;
     last_minor_words    = 0. ;
-    minor_heap_zero     = 0. ;
     timestamp           = Sys.time () ;
     last_input_duration = 0. ;
     last_cycle_duration = 0. ;
   }
 
-  let update_stats now input_duration stats =
-    let new_gc_stats = Gc.quick_stat () in
-    let had_minor_gc = new_gc_stats.Gc.minor_collections > stats.gc_stats.Gc.minor_collections in
-    {
-      gc_stats            = new_gc_stats ;
-      last_major_words    = stats.gc_stats.Gc.major_words ;
-      last_minor_words    = stats.gc_stats.Gc.minor_words ;
-      minor_heap_zero     = if had_minor_gc then new_gc_stats.Gc.minor_words else stats.minor_heap_zero ;
-      timestamp           = now ;
-      last_input_duration = input_duration ;
-      last_cycle_duration = now -. stats.timestamp ;
-    }
+  let update_stats now input_duration stats = {
+    gc_stats            = Gc.quick_stat () ;
+    last_major_words    = stats.gc_stats.Gc.major_words ;
+    last_minor_words    = stats.gc_stats.Gc.minor_words ;
+    timestamp           = now ;
+    last_input_duration = input_duration ;
+    last_cycle_duration = now -. stats.timestamp ;
+  }
 
   let word_byte_size =
     float (Sys.word_size / 8)
@@ -1595,25 +1589,12 @@ module Stats = struct
     | x when x < 1024. *. 1024. -> Printf.sprintf "%.2fkB" (x /. 1024.)
     | x                         -> Printf.sprintf "%.2fMB" (x /. 1024. /. 1024.)
 
-  let format_memory_counters (major, minor) =
-    Printf.sprintf "%s/%s" (format_memory_counter major)
-                           (format_memory_counter minor)
-
-  let mem_total stats =
-    let major = float stats.gc_stats.Gc.heap_words in
-    let minor = stats.gc_stats.Gc.minor_words -. stats.minor_heap_zero in
-    (major, minor)
-
-  let mem_delta stats =
-    let major = stats.gc_stats.Gc.major_words -. stats.last_major_words in
-    let minor = stats.gc_stats.Gc.minor_words -. stats.last_minor_words in
-    (major, minor)
-
   let format_stats stats =
     let open Gc in
-    Printf.sprintf "  mem live = %s  mem delta = %s  time = %.3f ms"
-      (stats |> mem_total |> format_memory_counters )
-      (stats |> mem_delta |> format_memory_counters )
+    Printf.sprintf "  heap = %s  alloc = (major: %s  minor: %s)  time = %.3fms"
+      (format_memory_counter (float stats.gc_stats.Gc.heap_words))
+      (format_memory_counter (stats.gc_stats.Gc.major_words -. stats.last_major_words))
+      (format_memory_counter (stats.gc_stats.Gc.minor_words -. stats.last_minor_words))
       (1000. *. (stats.last_cycle_duration -. stats.last_input_duration))
 end
 
