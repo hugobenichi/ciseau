@@ -798,6 +798,7 @@ module type FileviewType = sig
   type atom
   type view
   type filebuffer
+  type screen
 
   val init_fileview : filebuffer -> int -> t
   val apply_movement : (t -> v2) -> t -> t
@@ -819,7 +820,7 @@ module type FileviewType = sig
   val file_length_string : t -> string
   val get_view : int -> t -> view
 
-  val get_header : t -> string
+  val render : t -> screen -> unit
 end
 
 
@@ -1279,15 +1280,35 @@ end
          empty line, while move_next_word must absolutely do.
          Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
          representation. *)
-module Fileview : (FileviewType with type atom = Atom.atom and type view = text_view and type filebuffer = Filebuffer.t) = struct
+module Fileview : (FileviewType with type atom = Atom.atom and type view = text_view and type filebuffer = Filebuffer.t and type screen = Screen.t) = struct
   open Filebuffer
   open FilebufferUtil
 
-  type atom = Atom.atom
-  type view = text_view
+  type atom       = Atom.atom
+  type view       = text_view
   type filebuffer = Filebuffer.t
+  type screen     = Screen.t
 
   type numbering_mode = Absolute | CursorRelative
+
+  module LineNumberCache = struct
+    (* TODO: - dynmically populate cache as needed by resizing the cache array if needed *)
+
+    let negative_offset = 200
+    let hardcoded_size  = 10000 + negative_offset
+
+    let format_n n =
+      Printf.sprintf "%4d " (n - negative_offset)
+
+    let mk_block n =
+      Block.mk_block (format_n n) Config.default.colors.line_numbers
+
+    let cache =
+      Array.init hardcoded_size mk_block
+
+    let get n =
+      Array.get cache (n + negative_offset)
+  end
 
   type t = {
     filebuffer    : filebuffer ;
@@ -1421,10 +1442,45 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
       linebreaking  = t.linebreaking ;
     }
 
-  let get_header t =
-    t.filebuffer.Filebuffer.filepath
-          ^ "  " ^ (file_length_string t)
-          ^ "  " ^ (t |> cursor |> v2_to_string)
+  let print_default_fill screen =
+    let fill_y_offset = 1 in
+    mk_list (Screen.get_height screen) [Block.mk_block "~" Config.default.colors.default_fill]
+      |> Screen.put_block_lines screen Block.Overflow fill_y_offset
+
+  let print_header t screen =
+    let header_offset = 0 in
+    let header = t.filebuffer.Filebuffer.filepath
+                ^ "  " ^ (file_length_string t)
+                ^ "  " ^ (t |> cursor |> v2_to_string)
+    in
+      Screen.put_line screen header_offset (Block.mk_block header Config.default.colors.header)
+
+  let mk_line_number_block n =
+    LineNumberCache.get n
+
+  let prepend_line_numbers offset lines =
+    let rec loop n acc =
+      function
+      | [] -> List.rev acc
+      | LineInfo { blocks } :: t ->
+          let acc' = mk_line_number_block n |> conj blocks |> conj acc
+          in
+            loop (n + 1) acc' t
+    in
+      loop offset [] lines
+
+  let print_file_buffer fileview screen =
+    let y_offset = 1 in
+    let n_lines = (Screen.get_height screen) - 1 in
+    let TextView { offset ; lines ; linebreaking } = get_view n_lines fileview in
+    lines |> prepend_line_numbers offset
+          (* TODO: fuse selection into the block list *)
+          |> Screen.put_block_lines screen linebreaking y_offset
+
+  let render t screen =
+    print_header t screen ;
+    print_default_fill screen ; (* PERF: only put default filling when needed *)
+    print_file_buffer t screen
 
   let get_line_len_hacky t y_offset =
     y_offset |> Array.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
@@ -1598,28 +1654,10 @@ module Stats = struct
       (1000. *. (stats.last_cycle_duration -. stats.last_input_duration))
 end
 
+
 module Ciseau = struct
 
   let line_number_cache_t1 = Sys.time () ;;
-
-  module LineNumberCache = struct
-    (* TODO: - dynmically populate cache as needed by resizing the cache array if needed *)
-
-    let negative_offset = 200
-    let hardcoded_size  = 10000 + negative_offset
-
-    let format_n n =
-      Printf.sprintf "%4d " (n - negative_offset)
-
-    let mk_block n =
-      Block.mk_block (format_n n) Config.default.colors.line_numbers
-
-    let cache =
-      Array.init hardcoded_size mk_block
-
-    let get n =
-      Array.get cache (n + negative_offset)
-  end
 
   let line_number_cache_t2 = Sys.time () ;;
 
@@ -1664,7 +1702,7 @@ module Ciseau = struct
     screen          : Screen.t ;
 
     (* TODO: add management code to match multiple fileviews to the same filebuffer *)
-    filebuffer : Filebuffer.t ;
+    filebuffer      : Filebuffer.t ;
 
     fileview        : Fileview.t ;
     user_input      : string ;
@@ -1750,12 +1788,6 @@ module Ciseau = struct
       (* for other command, flush any pending digits *)
     | _ -> apply_command command { editor with pending_input = None }
 
-  let show_header editor screen =
-    let header_offset = 0 in
-    let header = Fileview.get_header editor.fileview
-    in
-      Screen.put_line screen header_offset (Block.mk_block header Config.default.colors.header)
-
   let show_status editor =
     let status_text1 = "Ciseau stats: win = "
                       ^ editor.term_dim_descr
@@ -1765,39 +1797,6 @@ module Ciseau = struct
     in
       Screen.put_line editor.background 0 (Block.mk_block status_text1 Config.default.colors.status) ;
       Screen.put_line editor.background 1 (Block.mk_block status_text2 Config.default.colors.user_input)
-
-  let mk_line_number_block n =
-    LineNumberCache.get n
-
-  let prepend_line_numbers offset lines =
-    let rec loop n acc =
-      function
-      | [] -> List.rev acc
-      | LineInfo { blocks } :: t ->
-          let acc' = mk_line_number_block n |> conj blocks |> conj acc
-          in
-            loop (n + 1) acc' t
-    in
-      loop offset [] lines
-
-  let print_file_buffer fileview screen =
-    let y_offset = 1 in
-    let n_lines = (Screen.get_height screen) - 1 in
-    let TextView { offset ; lines ; linebreaking } = Fileview.get_view n_lines fileview in
-    lines |> prepend_line_numbers offset
-          (* TODO: fuse selection into the block list *)
-          |> Screen.put_block_lines screen linebreaking y_offset
-
-  let default_fill_screen screen =
-    let fill_y_offset = 1 in
-    mk_list (Screen.get_height screen) [Block.mk_block "~" Config.default.colors.default_fill]
-      |> Screen.put_block_lines screen Block.Overflow fill_y_offset
-
-  (* TODO: move all this block to Fileview *)
-  let show_filebuffer editor =
-    default_fill_screen editor.screen ;
-    show_header editor editor.screen ;
-    print_file_buffer editor.fileview editor.screen
 
   let refresh_screen editor =
     (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
@@ -1809,14 +1808,13 @@ module Ciseau = struct
      *    using the screen offset
      *      remap the cursor from screen space to terminal space
      *)
-
     let cursor_position = editor.fileview
                         |> Fileview.cursor_relative_to_view (Screen.get_size editor.screen)
                         |> (<+>) (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
     in
       Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
-      show_filebuffer editor ;
-      show_status editor ;
+      Fileview.render editor.fileview editor.screen ;
+      show_status editor ; (* using active Fileview *)
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
 
