@@ -234,6 +234,106 @@ module Iter = struct
 end
 
 
+module Slice = struct
+
+  type range = int * int
+
+  type 'a t = {
+    data : 'a array ;
+    range : range ;
+  }
+
+  exception Bad_range of int * range
+  exception Out_of_bounds of int * range
+
+  let bound_checking = true
+
+  let check_range (s, e) l =
+    if bound_checking && (s < 0 || l < e) then raise (Bad_range (l, (s, e)))
+
+  let check_inside_range (s, e) i =
+    if bound_checking && (i < s || e < i) then raise (Out_of_bounds (i, (s, e)))
+
+  let shift (s, e) i =
+    check_inside_range (s, e) i ;
+    s + i
+
+  let shift_range (s, e) (s', e') =
+    check_range (s', e') (s - e) ;
+    (s + s', s + e')
+
+  let len { range = (s, e) } =
+    e - s
+
+  let get { data ; range } i =
+    i |> shift range |> Array.get data
+
+  let set { data ; range } i =
+    i |> shift range |> Array.set data
+
+  let mk_slice data s e =
+    check_range (s, e) (alen data) ;
+    {
+      data = data ;
+      range = (s, e) ;
+    }
+
+  let wrap_array data =
+    mk_slice data 0 (alen data)
+
+  let to_array { data ; range = (s, e) } =
+    Array.sub data s (e - s)
+
+  let clone slice =
+    slice |> to_array |> wrap_array
+
+  let reslice { data ; range } new_range =
+    {
+      data = data ;
+      range = shift_range range new_range ;
+    }
+
+  let slice_left slice e =
+    reslice slice (0, e)
+
+  let slice_right slice s =
+    reslice slice (s, len slice)
+
+  let split slice pivot =
+    (slice_left slice pivot, slice_right slice pivot)
+
+  let iter fn slice =
+    for i = 0 to (len slice) - 1 do
+      fn (get slice i)
+    done
+
+  let map fn slice =
+    Array.init (len slice) (get slice >> fn) |> wrap_array
+
+  let fold fn zero slice =
+    let rec loop e acc i =
+      if i < e
+        then loop e (i |> get slice |> fn acc) (i + 1)
+        else acc
+    in
+      loop (len slice) zero 0
+
+  let filter fn slice =
+    let slice' = clone slice in
+    let fn out_idx elem =
+      if fn elem
+        then (set slice' out_idx elem ; out_idx + 1 )
+        else out_idx
+    in
+      fold fn 0 slice |> slice_left slice'
+
+  let copy dst_slice src_slice =
+    let e = min (len dst_slice) (len dst_slice) in
+    Array.blit src_slice.data (shift src_slice.range 0) dst_slice.data (shift dst_slice.range 0) e
+
+end
+
+
 (*
  *  -> tokenizer that takes lines as strings and breaks them down in base atoms
  *  -> layering function that takes a list of atoms and returns another list of grouping atoms
