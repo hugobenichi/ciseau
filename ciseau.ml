@@ -243,23 +243,22 @@ module Slice = struct
     range : range ;
   }
 
-  exception Bad_range of int * range
-  exception Out_of_bounds of int * range
+  exception Bad_range of string
+  exception Out_of_bounds of string
 
   let bound_checking = true
 
   let check_range (s, e) l =
-    if bound_checking && (s < 0 || l < e) then raise (Bad_range (l, (s, e)))
-
-  let check_inside_range (s, e) i =
-    if bound_checking && (i < s || e < i) then raise (Out_of_bounds (i, (s, e)))
+    if bound_checking && (s < 0 || l < e)
+      then raise (Bad_range (Printf.sprintf "cannot slice (%d,%d) from array of len %d" s e l))
 
   let shift (s, e) i =
-    check_inside_range (s, e) i ;
+    if bound_checking && (i < 0 || (e - s) < i)
+      then raise (Out_of_bounds (Printf.sprintf "index %d is out of bounds (%d,%d)" i s e)) ;
     s + i
 
   let shift_range (s, e) (s', e') =
-    check_range (s', e') (s - e) ;
+    check_range (s', e') (e - s) ;
     (s + s', s + e')
 
   let len { range = (s, e) } =
@@ -287,17 +286,17 @@ module Slice = struct
   let clone slice =
     slice |> to_array |> wrap_array
 
-  let reslice { data ; range } new_range =
+  let reslice new_range { data ; range } =
     {
       data = data ;
       range = shift_range range new_range ;
     }
 
-  let slice_left slice e =
-    reslice slice (0, e)
+  let slice_left e slice =
+    reslice (0, e) slice
 
-  let slice_right slice s =
-    reslice slice (s, len slice)
+  let slice_right s slice =
+    reslice (s, len slice) slice
 
   let split slice pivot =
     (slice_left slice pivot, slice_right slice pivot)
@@ -325,11 +324,76 @@ module Slice = struct
         then (set slice' out_idx elem ; out_idx + 1 )
         else out_idx
     in
-      fold fn 0 slice |> slice_left slice'
+      slice_left (fold fn 0 slice) slice'
 
   let copy dst_slice src_slice =
-    let e = min (len dst_slice) (len dst_slice) in
-    Array.blit src_slice.data (shift src_slice.range 0) dst_slice.data (shift dst_slice.range 0) e
+    let len = min (len dst_slice) (len dst_slice) in
+    Array.blit src_slice.data (shift src_slice.range 0) dst_slice.data (shift dst_slice.range 0) len
+
+  let test _ =
+    try
+      Printexc.record_backtrace true ;
+
+      let to_string fn slice =
+        slice |> map fn |> to_array |> Array.to_list |> String.concat " ; "
+      in
+      let println s =
+        print_string s ;
+        print_newline ()
+      in
+
+      let a = [| 1 ; 2 ; 3 ; 4 ; 5 ; 6 |] in
+      let s1 = wrap_array a in
+      s1 |> len |> Printf.printf "%d\n" ;
+      s1 |> reslice (3, 4) |> len |> Printf.printf "%d\n" ;
+      s1 |> slice_left 3 |> len |> Printf.printf "%d\n" ;
+      s1 |> slice_left 6 |> len |> Printf.printf "%d\n" ;
+
+      print_newline () ;
+
+      s1 |> iter print_int ; print_newline () ;
+      s1 |> reslice (3, 4) |> iter print_int ; print_newline () ;
+      s1 |> reslice (1, 4) |> iter print_int ; print_newline () ;
+      s1 |> slice_left 3 |> iter print_int ; print_newline () ;
+      s1 |> slice_left 6 |> iter print_int ; print_newline () ;
+
+      print_newline () ;
+
+      s1 |> map (fun x -> x * 2) |> to_string string_of_int |> println ;
+      s1 |> reslice (3, 4) |> map (fun x -> x * 2) |> to_string string_of_int |> println ;
+      s1 |> reslice (1, 4) |> map (fun x -> x * 2) |> to_string string_of_int |> println ;
+
+      print_newline () ;
+
+      s1 |> filter (fun x -> x mod 2 == 0) |> to_string string_of_int |> println ;
+      s1 |> filter (fun x -> x < 4) |> to_string string_of_int |> println ;
+      s1 |> filter (fun x -> x < 9) |> to_string string_of_int |> println ;
+      s1 |> filter (fun x -> x > 9) |> to_string string_of_int |> println ;
+      s1 |> reslice (1, 4) |> filter (fun x -> x mod 2 = 0) |> to_string string_of_int |> println ;
+
+      print_newline () ;
+
+      let s2 = clone s1 in
+      set (slice_right 2 s2) 3 42 ;
+      s1 |> to_string string_of_int |> println ;
+      s2 |> to_string string_of_int |> println ;
+
+      print_newline () ;
+
+      let s3 = wrap_array [| 0 ; 0 ; 0 ; 0 ; 0 |] in
+      s3 |> to_string string_of_int |> println ;
+      copy s3 s1 ;
+      s3 |> to_string string_of_int |> println ;
+      [| 0 ; 0 ; 0 ; 0 ; 0 ; 0|] |> wrap_array |> copy s3 ;
+      s3 |> to_string string_of_int |> println ;
+      copy s3 (reslice (0, 2) s1) ;
+      copy s3 (slice_right 3 s1) ;
+
+      ()
+  with
+    e ->
+        e |> Printexc.to_string |> Printf.printf "\nerror: %s\n" ;
+        Printexc.print_backtrace stdout
 
 end
 
@@ -2033,5 +2097,6 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
+  Slice.test () ;
+  (* Ciseau.main () ; *)
   close_out logs
