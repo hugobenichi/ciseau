@@ -610,6 +610,13 @@ module Atom = struct
         } in
         tokenize_atoms (a :: all_atoms) next_kind index (index + 1) line
 
+  let zero_atom = {
+    kind = Ending ;
+    line = "" ;
+    start = 0 ;
+    stop = 0 ;
+  }
+
   let generic_atom_parser line =
     tokenize_atoms [] (atom_kind_at line 0) 0 1 line
 end
@@ -1139,6 +1146,8 @@ module Term = struct
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
 
+      Printf.fprintf logs "enter raw mode %f\n" (Sys.time() -. starttime) ;
+
       stdout_write_string Control.cursor_save ;
       stdout_write_string Control.switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
@@ -1479,7 +1488,10 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
 
   type numbering_mode = Absolute | CursorRelative
 
+
+
   module LineNumberCache = struct
+    let line_number_cache_t1 = Sys.time () ;;
     (* TODO: - dynmically populate cache as needed by resizing the cache array if needed *)
 
     let negative_offset = 200
@@ -1496,6 +1508,9 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
 
     let get n =
       Array.get cache (n + negative_offset)
+
+    let line_number_cache_t2 = Sys.time () ;;
+    Printf.fprintf logs "cache %f\n" (line_number_cache_t2 -. line_number_cache_t1) ;;
   end
 
   type t = {
@@ -1845,12 +1860,6 @@ end
 
 module Ciseau = struct
 
-  let line_number_cache_t1 = Sys.time () ;;
-
-  let line_number_cache_t2 = Sys.time () ;;
-
-  Printf.fprintf logs "cache %f\n" (line_number_cache_t2 -. line_number_cache_t1) ;;
-
   type pending_command_atom = Digit of int
 
   type pending_command = None
@@ -2114,6 +2123,5 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Slice.test () ;
-  (* Ciseau.main () ; *)
+  Ciseau.main () ;
   close_out logs
