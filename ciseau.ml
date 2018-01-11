@@ -327,8 +327,10 @@ module Slice = struct
       slice_left (fold fn 0 slice) slice'
 
   let copy dst_slice src_slice =
-    let len = min (len dst_slice) (len dst_slice) in
-    Array.blit src_slice.data (shift src_slice.range 0) dst_slice.data (shift dst_slice.range 0) len
+    let len = min (len dst_slice) (len src_slice) in
+    let src_offset = shift src_slice.range 0 in
+    let dst_offset = shift dst_slice.range 0 in
+    Array.blit src_slice.data src_offset dst_slice.data dst_offset len
 
   let test _ =
     try
@@ -387,7 +389,8 @@ module Slice = struct
       [| 0 ; 0 ; 0 ; 0 ; 0 ; 0|] |> wrap_array |> copy s3 ;
       s3 |> to_string string_of_int |> println ;
       copy s3 (reslice (0, 2) s1) ;
-      copy s3 (slice_right 3 s1) ;
+      copy (slice_right 3 s3) (slice_right 3 s1) ;
+      s3 |> to_string string_of_int |> println ;
 
       ()
   with
