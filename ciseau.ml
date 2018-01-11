@@ -59,28 +59,6 @@ let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
 let write fd buffer len =
   if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
 
-let slurp f =
-  let rec loop lines ch =
-    match input_line ch with
-    | s                     -> loop (s :: lines) ch
-    | exception End_of_file -> List.rev lines
-  in
-  let ch = open_in f in
-  let action () = loop [] ch in
-  let cleanup () = close_in ch in
-  try_finally action cleanup
-
-let dir_ls path =
-  let rec loop entries handle =
-    match Unix.readdir handle with
-    | s                     -> loop (s :: entries) handle
-    | exception End_of_file -> List.rev entries
-  in
-  let handle = Unix.opendir path in
-  let entries = loop [] handle in
-    Unix.closedir handle ;
-    entries
-
 
 module Iter = struct
 
@@ -343,6 +321,9 @@ module Slice = struct
     in
       Array.set data' e elem ;
       mk_slice s (e + 1) data'
+
+  (* TODO: mk_slice function with a initial backend array length *)
+  (* TODO: cat_slice function for joining two slices *)
 
   let test _ =
     try
@@ -609,13 +590,6 @@ module Atom = struct
           stop  = index ;
         } in
         tokenize_atoms (a :: all_atoms) next_kind index (index + 1) line
-
-  let zero_atom = {
-    kind = Ending ;
-    line = "" ;
-    start = 0 ;
-    stop = 0 ;
-  }
 
   let generic_atom_parser line =
     tokenize_atoms [] (atom_kind_at line 0) 0 1 line
@@ -1441,9 +1415,6 @@ let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } =
       Block.colors  = colors ;
     }
 
-module FilebufferUtil = struct
-  let saturate_up length x = min (max (length - 1) 0) x
-end
 
 module Filebuffer = struct
   type t = {
@@ -1454,8 +1425,18 @@ module Filebuffer = struct
       atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
   }
 
-  let init_filebuffer file =
-    let lines = slurp file in
+  let read_file f =
+    let rec loop lines ch =
+      match input_line ch with
+      | s                     -> loop (s :: lines) ch
+      | exception End_of_file -> List.rev lines
+    in
+    let ch = open_in f in
+    let action () = loop [] ch in
+    let cleanup () = close_in ch in
+    try_finally action cleanup
+
+  let from_lines file lines =
     let buffer = Array.of_list lines in
     let atoms = Array.map Atom.generic_atom_parser buffer in {
       filename      = file ;
@@ -1464,6 +1445,28 @@ module Filebuffer = struct
       buflen        = alen buffer ;
       atom_buffer   = atoms ;
     }
+
+  let init_filebuffer file =
+    file |> read_file |> from_lines file
+end
+
+
+module FileNavigator = struct
+
+  let dir_ls path =
+    let rec loop entries handle =
+      match Unix.readdir handle with
+      | s                     -> loop (s :: entries) handle
+      | exception End_of_file -> List.rev entries
+    in
+    let handle = Unix.opendir path in
+    let entries = loop [] handle in
+      Unix.closedir handle ;
+      entries
+
+  let dir_to_filebuffer path =
+    path |> dir_ls |> Filebuffer.from_lines path
+
 end
 
 
@@ -1479,7 +1482,6 @@ end
          representation. *)
 module Fileview : (FileviewType with type atom = Atom.atom and type view = text_view and type filebuffer = Filebuffer.t and type screen = Screen.t) = struct
   open Filebuffer
-  open FilebufferUtil
 
   type atom       = Atom.atom
   type view       = text_view
@@ -1726,7 +1728,8 @@ end
 
 module FilebufferMovements = struct
   open Fileview
-  open FilebufferUtil
+
+  let saturate_up length x = min (max (length - 1) 0) x
 
   (* TODO: refactor to remove the use of adjust cursor *)
   let rec cursor_move_while u f t =
@@ -1924,7 +1927,8 @@ module Ciseau = struct
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    let filebuffer      = Filebuffer.init_filebuffer file ;
+    let filebuffer      = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ;
+    (* let filebuffer      = Filebuffer.init_filebuffer file ; *)
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
