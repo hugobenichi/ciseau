@@ -269,7 +269,7 @@ module Slice = struct
   let set { data ; range } i =
     i |> shift range |> Array.set data
 
-  let mk_slice data s e =
+  let mk_slice s e data =
     check_range (s, e) (alen data) ;
     {
       data = data ;
@@ -277,7 +277,7 @@ module Slice = struct
     }
 
   let wrap_array data =
-    mk_slice data 0 (alen data)
+    mk_slice 0 (alen data) data
 
   let to_array { data ; range = (s, e) } =
     Array.sub data s (e - s)
@@ -330,6 +330,19 @@ module Slice = struct
     let src_offset = shift src_slice.range 0 in
     let dst_offset = shift dst_slice.range 0 in
     Array.blit src_slice.data src_offset dst_slice.data dst_offset len
+
+  let append elem { data ; range = (s, e) } =
+    let len = alen data in
+    let data' =
+      if e < len
+        then data
+        else
+          let new_data = Array.make (2 * len) data.(0) in
+          Array.blit data 0 new_data 0 len ;
+          new_data
+    in
+      Array.set data' e elem ;
+      mk_slice s (e + 1) data'
 
   let test _ =
     try
@@ -390,6 +403,13 @@ module Slice = struct
       copy s3 (reslice (0, 2) s1) ;
       copy (slice_right 3 s3) (slice_right 3 s1) ;
       s3 |> to_string string_of_int |> println ;
+
+      print_newline () ;
+
+      [| 0 ; 0 ; 0 |] |> wrap_array |> append 1 |> append 2 |> append 3 |> to_string string_of_int |> println  ;
+      [| 20 ; 30 ; 40 |] |> wrap_array |> reslice (1, 1) |> append 1 |> to_string string_of_int |> println  ;
+      [| 20 ; 30 ; 40 |] |> wrap_array |> reslice (1, 2) |> append 1 |> to_string string_of_int |> println  ;
+      [| 20 ; 30 ; 40 |] |> wrap_array |> reslice (1, 2) |> append 1 |> append 2 |> append 3 |> append 3 |> to_string string_of_int |> println  ;
 
       ()
   with
@@ -2094,5 +2114,6 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
+  Slice.test () ;
+  (* Ciseau.main () ; *)
   close_out logs
