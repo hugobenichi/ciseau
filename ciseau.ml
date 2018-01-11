@@ -1,5 +1,4 @@
 (* next TODOs:
- *  - correctly manage the cursor position in text coordinates and in screen coordinates
  *  - optimize a bit memory usage
  *      - The Framebuffer should only be cleared selectively by subrectangles to redraw stuff that needs to be redrawn
  *      - introduce an array slice type and replace a bunch of list with arrays or array slices
@@ -1062,6 +1061,8 @@ module Term = struct
     let newline               = "\r\n"  ;;
     let cursor_hide           = start ^ "?25l" ;;
     let cursor_show           = start ^ "?25h" ;;
+    let cursor_save           = start ^ "s" ;;
+    let cursor_restore        = start ^ "u" ;;
     let switch_offscreen      = start ^ "?47h" ;;
     let switch_mainscreen     = start ^ "?47l" ;;
     let gohome                = start ^ "H" ;;
@@ -1118,13 +1119,13 @@ module Term = struct
                                                but not deal with the hassle of End_of_file from input_char ... *)
       want.c_csize   <- 8;        (* 8 bit chars *)
 
-      (* TODO: save cursor position and screen state *)
+      stdout_write_string Control.cursor_save ;
       stdout_write_string Control.switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
       try_finally action (fun () ->
         tcsetattr stdin TCSAFLUSH initial ;
-        stdout_write_string Control.switch_mainscreen
-        (* TODO: restore cursor position and screen state *)
+        stdout_write_string Control.switch_mainscreen ;
+        stdout_write_string Control.cursor_restore
       )
     )
 
@@ -1966,18 +1967,11 @@ module Ciseau = struct
       Screen.put_line editor.background 1 (Block.mk_block status_text2 Config.default.colors.user_input)
 
   let refresh_screen editor =
-    (* Note: when multiple screen are on, there needs to be cursor selection from active screen *)
-    (* TODO: remove this hack for cursor position management !
-     *  proper management:
-     *    take cursor in text space
-     *    knowing how the text was broken down in line of blocks for text rendering,
-     *      remap the cursor from text space to screen space
-     *    using the screen offset
-     *      remap the cursor from screen space to terminal space
-     *)
     let cursor_position = editor.fileview
                         |> Fileview.cursor_relative_to_view (Screen.get_size editor.screen)
-                        |> (<+>) (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
+                        |> (<+>) (mk_v2 5 1)  (* +5 for line numbers, +1 for header *)
+                                              (* TODO: remove this hack, instead remap cursor from
+                                               * screen space to terminal space using screen offset *)
     in
       Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
       Fileview.render editor.fileview editor.screen ;
@@ -2100,6 +2094,5 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Slice.test () ;
-  (* Ciseau.main () ; *)
+  Ciseau.main () ;
   close_out logs
