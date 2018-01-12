@@ -1457,7 +1457,7 @@ module FileNavigator = struct
     let rec loop entries handle =
       match Unix.readdir handle with
       | s                     -> loop (s :: entries) handle
-      | exception End_of_file -> List.rev entries
+      | exception End_of_file -> entries |> List.rev |> List.sort String.compare
     in
     let handle = Unix.opendir path in
     let entries = loop [] handle in
