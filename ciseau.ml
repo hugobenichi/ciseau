@@ -1007,6 +1007,18 @@ module type FileviewType = sig
 end
 
 
+module type FilebufferSetType = sig
+  type t
+  type filebuffer
+
+  val buffers_menu : t -> filebuffer (* TODO: this should return a Menu object that wraps a filebuffer *)
+  val list_buffers : t -> filebuffer Slice.t
+  val open_buffers : string -> t -> (t * filebuffer)
+  val get_buffer : string -> t -> filebuffer option
+  val close_buffers : string -> t -> t
+end
+
+
 module Bytevector : BytevectorType = struct
 
   type t = {
@@ -1452,7 +1464,7 @@ module Filebuffer = struct
     let cleanup () = close_in ch in
     try_finally action cleanup
 
-  let from_lines file lines =
+  let from_lines file lines = (* TODO: refactor with Slice *)
     let buffer = Array.of_list lines in
     let atoms = Array.map Atom.generic_atom_parser buffer in {
       filename      = file ;
@@ -1824,6 +1836,45 @@ module FilebufferMovements = struct
   let move_line_end t   = { x = max 0 ((t |> current_line |> slen) - 1) ; y = (cursor t).y } ;;
   let move_file_start t = { x = (cursor t).x ; y = 0 } ;;
   let move_file_end t   = { x = (cursor t).x ; y = (buflen t) - 1 } ;;
+end
+
+
+module FilebufferSet : (FilebufferSetType with type filebuffer = Filebuffer.t) = struct
+
+  type filebuffer = Filebuffer.t
+
+  type t = {
+    buffers : filebuffer Slice.t
+  }
+
+  let buffers_menu t =
+    t.buffers |> Slice.map (fun fb -> fb.Filebuffer.filename)
+              |> Slice.to_array
+              |> Array.to_list
+              |> Filebuffer.from_lines "opened buffers"
+
+  let list_buffers { buffers } =
+    buffers
+
+  let open_buffers filepath { buffers } =
+    (* check if that buffer is not opened yet ! *)
+    let fb = Filebuffer.init_filebuffer filepath in
+    let buffers' = buffers |> Slice.clone |> Slice.append fb in
+    ({ buffers = buffers' }, fb)
+
+  let get_buffer filepath { buffers } =
+    let e = Slice.len buffers in
+    let rec loop i =
+      if i < e
+        then
+          let fb = Slice.get buffers i in
+          if fb.Filebuffer.filename = filepath
+            then Some fb
+            else loop (i + 1)
+        else None
+    in loop 0
+
+  let close_buffers filepath t = (* IMPLEMENT *) t
 end
 
 
