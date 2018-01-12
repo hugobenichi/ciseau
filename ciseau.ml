@@ -1900,11 +1900,13 @@ module Ciseau = struct
     running         : bool ;
     background      : Screen.t ;
     screen          : Screen.t ;
+    screen2         : Screen.t ;
 
     (* TODO: add management code to match multiple fileviews to the same filebuffer *)
     filebuffer      : Filebuffer.t ;
 
     fileview        : Fileview.t ;
+    fileview2       : Fileview.t ;
     user_input      : string ;
     pending_input   : pending_command ;
 
@@ -1916,31 +1918,42 @@ module Ciseau = struct
     let size = mk_v2 term_dim.x 2 in
     Screen.init_screen frame_buffer offset size
 
-  let mk_main_screen frame_buffer term_dim =
-    let offset = v2_zero in
+  let mk_screen y_offset frame_buffer term_dim =
+    let offset = mk_v2 0 y_offset in
     let size = mk_v2 term_dim.x (term_dim.y - 2) in
     Screen.init_screen frame_buffer offset size
+
+  let mk_main_screen =
+    mk_screen 0
 
   let mk_window_size_descr { x = w ; y = h } =
     "(" ^ (string_of_int w) ^ " x " ^ (string_of_int h) ^ ")"
 
+  let split_v_screen v_space =
+    let upper_half    = v_space / 2 in
+    let lower_half    = v_space - upper_half in
+    (upper_half, lower_half)
+
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    let filebuffer      = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ;
-    (* let filebuffer      = Filebuffer.init_filebuffer file ; *)
-    in {
+    (* let filebuffer      = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
+    let filebuffer      = Filebuffer.init_filebuffer file in
+    let (upper_half, lower_half) = term_dim.y - 3 |> split_v_screen in
+    {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
       render_buffer   = Bytevector.init_bytevector 0x1000 ;
       frame_buffer    = frame_buffer ;
       running         = true ;
       background      = mk_background_screen frame_buffer term_dim ;
-      screen          = mk_main_screen frame_buffer term_dim ;
+      screen          = mk_main_screen frame_buffer (mk_v2 term_dim.x upper_half) ;
+      screen2         = mk_screen upper_half frame_buffer (mk_v2 term_dim.x lower_half) ;
 
       filebuffer      = filebuffer ;
 
-      fileview        = Fileview.init_fileview filebuffer (term_dim.y - 3) ;
+      fileview        = Fileview.init_fileview filebuffer upper_half ;
+      fileview2       = Fileview.init_fileview filebuffer lower_half ;
       user_input      = "" ;
       pending_input   = None;
 
@@ -1949,7 +1962,8 @@ module Ciseau = struct
 
   let resize_editor editor =
     let term_dim = Term.get_terminal_dimensions () in
-    let frame_buffer = Framebuffer.init_frame_buffer term_dim
+    let frame_buffer = Framebuffer.init_frame_buffer term_dim in
+    let (upper_half, lower_half) = term_dim.y - 3 |> split_v_screen
     in {
       editor with
       term_dim        = term_dim ;
@@ -1957,7 +1971,8 @@ module Ciseau = struct
       render_buffer   = Bytevector.init_bytevector 0x1000 ;
       frame_buffer    = frame_buffer ;
       background      = mk_background_screen frame_buffer term_dim ;
-      screen          = mk_main_screen frame_buffer term_dim ;
+      screen          = mk_main_screen frame_buffer (mk_v2 term_dim.x upper_half) ;
+      screen2         = mk_screen upper_half frame_buffer (mk_v2 term_dim.x lower_half) ;
     }
 
   let queue_pending_command editor = function
@@ -2008,6 +2023,7 @@ module Ciseau = struct
     in
       Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
       Fileview.render editor.fileview editor.screen ;
+      Fileview.render editor.fileview2 editor.screen2 ;
       show_status editor ; (* using active Fileview *)
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
