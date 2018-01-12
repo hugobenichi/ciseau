@@ -643,6 +643,22 @@ end
 open Vec2
 
 
+module Rect = struct
+  type rect = {
+    topleft     : v2 ;
+    bottomright : v2 ;
+  }
+
+  let mk_rect tl_x tl_y br_x br_y = {
+    topleft     = mk_v2 tl_x tl_y ;
+    bottomright = mk_v2 br_x br_y ;
+  }
+end
+
+
+open Rect
+
+
 module Color = struct
 
   type base = Black
@@ -954,7 +970,7 @@ module type ScreenType = sig
   val get_size        : t -> v2
   val get_width       : t -> int
   val get_height      : t -> int
-  val init_screen     : framebuffer -> v2 -> v2 -> t
+  val init_screen     : framebuffer -> rect -> t
   val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
   val put_line        : t -> int -> block -> unit
 end
@@ -1369,7 +1385,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let get_height t =
     t.size.y
 
-  let init_screen cb offset size = {
+  let init_screen cb { topleft = offset ; bottomright = size } = {
     size                = size ;
     screen_offset       = offset ;
     frame_buffer        = cb ;
@@ -1898,7 +1914,7 @@ module Ciseau = struct
     render_buffer   : Bytevector.t ;
     frame_buffer    : Framebuffer.t ;
     running         : bool ;
-    background      : Screen.t ;
+    status_screen      : Screen.t ;
     screen          : Screen.t ;
 
     (* TODO: add management code to match multiple fileviews to the same filebuffer *)
@@ -1911,15 +1927,17 @@ module Ciseau = struct
     stats           : Stats.t
   }
 
-  let mk_background_screen frame_buffer term_dim =
-    let offset = mk_v2 0 (term_dim.y - 2) in
-    let size = mk_v2 term_dim.x 2 in
-    Screen.init_screen frame_buffer offset size
+  let main_screen_dimensions term_dim =
+    mk_rect 0 0 term_dim.x (term_dim.y - 2)
+
+  let status_screen_dimensions term_dim =
+    mk_rect 0 (term_dim.y - 2) term_dim.x 2
+
+  let mk_status_screen frame_buffer term_dim =
+    term_dim |> status_screen_dimensions |> Screen.init_screen frame_buffer
 
   let mk_main_screen frame_buffer term_dim =
-    let offset = v2_zero in
-    let size = mk_v2 term_dim.x (term_dim.y - 2) in
-    Screen.init_screen frame_buffer offset size
+    term_dim |> main_screen_dimensions |> Screen.init_screen frame_buffer
 
   let mk_window_size_descr { x = w ; y = h } =
     "(" ^ (string_of_int w) ^ " x " ^ (string_of_int h) ^ ")"
@@ -1927,15 +1945,15 @@ module Ciseau = struct
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    let filebuffer      = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ;
-    (* let filebuffer      = Filebuffer.init_filebuffer file ; *)
+    (* let filebuffer = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
+    let filebuffer      = Filebuffer.init_filebuffer file ;
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
       render_buffer   = Bytevector.init_bytevector 0x1000 ;
       frame_buffer    = frame_buffer ;
       running         = true ;
-      background      = mk_background_screen frame_buffer term_dim ;
+      status_screen   = mk_status_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
 
       filebuffer      = filebuffer ;
@@ -1956,7 +1974,7 @@ module Ciseau = struct
       term_dim_descr  = mk_window_size_descr term_dim ;
       render_buffer   = Bytevector.init_bytevector 0x1000 ;
       frame_buffer    = frame_buffer ;
-      background      = mk_background_screen frame_buffer term_dim ;
+      status_screen   = mk_status_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
     }
 
@@ -1996,8 +2014,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-      Screen.put_line editor.background 0 (Block.mk_block status_text1 Config.default.colors.status) ;
-      Screen.put_line editor.background 1 (Block.mk_block status_text2 Config.default.colors.user_input)
+      Screen.put_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ;
+      Screen.put_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input)
 
   let refresh_screen editor =
     let cursor_position = editor.fileview
