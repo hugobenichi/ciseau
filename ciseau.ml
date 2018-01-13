@@ -254,6 +254,9 @@ module Slice = struct
       range = (s, e) ;
     }
 
+  let init_slice len capacity zero =
+    mk_slice 0 len (Array.make capacity zero)
+
   let wrap_array data =
     mk_slice 0 (alen data) data
 
@@ -322,8 +325,14 @@ module Slice = struct
       Array.set data' e elem ;
       mk_slice s (e + 1) data'
 
-  (* TODO: mk_slice function with a initial backend array length *)
   (* TODO: cat_slice function for joining two slices *)
+
+  let sort_slice fn slice =
+    (* TODO: better sort_slice function !! *)
+    let ary = to_array slice
+    in
+      Array.fast_sort fn ary ;
+      wrap_array ary
 
   let test _ =
     try
@@ -1448,29 +1457,29 @@ module Filebuffer = struct
   type t = {
       filename    : string ;
       filepath    : string ;
-      buffer      : string array ;          (* the file data, line per line *)
+      buffer      : string Slice.t ;        (* the file data, line per line *)
       buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
-      atom_buffer : Atom.atom list array ;  (* parsed atoms from the file data *)
+      atom_buffer : Atom.atom list Slice.t ;  (* parsed atoms from the file data *)
   }
 
   let read_file f =
     let rec loop lines ch =
       match input_line ch with
-      | s                     -> loop (s :: lines) ch
-      | exception End_of_file -> List.rev lines
+      | s                     -> loop (Slice.append s lines) ch
+      | exception End_of_file -> lines
     in
     let ch = open_in f in
-    let action () = loop [] ch in
+    let action () = loop (Slice.init_slice 0 32 "") ch in
     let cleanup () = close_in ch in
     try_finally action cleanup
 
   let from_lines file lines = (* TODO: refactor with Slice *)
-    let buffer = Array.of_list lines in
-    let atoms = Array.map Atom.generic_atom_parser buffer in {
+    let buffer = lines in
+    let atoms = Slice.map Atom.generic_atom_parser buffer in {
       filename      = file ;
       filepath      = (Sys.getcwd ()) ^ "/" ^ file ;
       buffer        = buffer ;
-      buflen        = alen buffer ;
+      buflen        = Slice.len buffer ;
       atom_buffer   = atoms ;
     }
 
@@ -1484,11 +1493,11 @@ module FileNavigator = struct
   let dir_ls path =
     let rec loop entries handle =
       match Unix.readdir handle with
-      | s                     -> loop (s :: entries) handle
-      | exception End_of_file -> entries |> List.rev |> List.sort String.compare
+      | s                     -> loop (Slice.append s entries) handle
+      | exception End_of_file -> entries |> Slice.sort_slice String.compare
     in
     let handle = Unix.opendir path in
-    let entries = loop [] handle in
+    let entries = loop (Slice.init_slice 0 16 "") handle in
       Unix.closedir handle ;
       entries
 
@@ -1561,12 +1570,31 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     linebreaking  = Block.Clip ;
   }
 
-  let is_current_char_valid t = t.cursor.x < (slen t.filebuffer.buffer.(t.cursor.y)) ;;
-  let current_line t = t.filebuffer.buffer.(t.cursor.y)
-  let current_char t = String.get (current_line t) t.cursor.x ;;
-  let cursor t = t.cursor ;;
-  let buflen t = t.filebuffer.buflen ;;
-  let view_diff t = t.view_diff ;;
+  let line_at t =
+    Slice.get t.filebuffer.buffer
+
+  let current_line t =
+    line_at t t.cursor.y
+
+  let current_char t =
+    String.get (current_line t) t.cursor.x
+
+  let current_line_len =
+    current_line >> slen
+
+  let line_len t i =
+    line_at t i |> slen
+
+  let is_current_char_valid t =
+    t.cursor.x < current_line_len t
+
+  let cursor t = t.cursor
+
+  let buflen t =
+    Slice.len t.filebuffer.buffer
+
+  let view_diff t =
+    t.view_diff
 
   let adjust_view t =
     if t.cursor.y < t.view_start then
@@ -1610,9 +1638,9 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec first_non_empty y =
       match y with
-      | _ when y = (buflen t)         -> first_non_empty 0
-      | _ when 0 = slen t.filebuffer.buffer.(y)  -> first_non_empty (y + 1)
-      | _                             -> y
+      | _ when y = (buflen t)   -> first_non_empty 0
+      | _ when 0 = line_len t y -> first_non_empty (y + 1)
+      | _                       -> y
     in
       if vec2.x + 1 < slen (current_line t)
       then { x = vec2.x + 1; y = vec2.y}
@@ -1625,15 +1653,15 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     (* BUG: infinite loop on file where the matcher never return true *)
     let rec last_non_empty y =
       match y with
-      | _ when y = -1                 -> last_non_empty ((buflen t) - 1)
-      | _ when 0 = slen t.filebuffer.buffer.(y)  -> last_non_empty (y - 1)
-      | _                             -> y
+      | _ when y = -1           -> last_non_empty ((buflen t) - 1)
+      | _ when 0 = line_len t y -> last_non_empty (y - 1)
+      | _                       -> y
     in
       if t.cursor.x - 1 > 0
       then { x = t.cursor.x - 1 ; y = t.cursor.y }
       else
         let y' = last_non_empty (t.cursor.y - 1) in
-        { x = (slen t.filebuffer.buffer.(y')) - 1 ; y = y'}
+        { x = (line_len t y') - 1 ; y = y'}
 
   let cursor_next_line t = {
       x = t.cursor.x ;
@@ -1649,9 +1677,6 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
   let file_length_string t =
     (string_of_int (buflen t)) ^ "L"
 
-  let line_len i t =
-    slen t.filebuffer.buffer.(i)
-
   let get_line_numbering_offset t =
     t.view_start + match t.numbering with
     | Absolute        -> 1 ;
@@ -1659,7 +1684,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
 
   let get_line t offset i =
     LineInfo {
-      blocks  = List.map atom_to_block t.filebuffer.atom_buffer.(offset + i) ;
+      blocks  = List.map atom_to_block (Slice.get t.filebuffer.atom_buffer (offset + i)) ;
     }
 
   let get_lines view_start view_max t =
@@ -1716,7 +1741,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     print_file_buffer t screen
 
   let get_line_len_hacky t y_offset =
-    y_offset |> Array.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
+    y_offset |> Slice.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
 
   let mk_offset_table t bounds =
     let table_len =
@@ -1849,8 +1874,6 @@ module FilebufferSet : (FilebufferSetType with type filebuffer = Filebuffer.t) =
 
   let buffers_menu t =
     t.buffers |> Slice.map (fun fb -> fb.Filebuffer.filename)
-              |> Slice.to_array
-              |> Array.to_list
               |> Filebuffer.from_lines "opened buffers"
 
   let list_buffers { buffers } =
