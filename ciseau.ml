@@ -260,6 +260,9 @@ module Slice = struct
   let wrap_array data =
     mk_slice 0 (alen data) data
 
+  let init_slice_fn len fn =
+    Array.init len fn |> wrap_array
+
   let to_array { data ; range = (s, e) } =
     Array.sub data s (e - s)
 
@@ -982,6 +985,94 @@ module type ScreenType = sig
   val init_screen     : framebuffer -> rect -> t
   val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
   val put_line        : t -> int -> block -> unit
+end
+
+
+module ScreenConfiguration = struct
+
+  type orientation = Normal | Mirror
+  type layout = Single | Columns | Rows | ColumnMajor | RowMajor
+
+  type t = {
+    layout      : layout ;
+    orientation : orientation ;
+  }
+
+  let flip_orientation =
+    function
+      | Normal -> Mirror
+      | Mirror -> Normal
+
+  let flip_config { layout ; orientation } = {
+    layout      = layout ;
+    orientation = flip_orientation orientation
+  }
+
+  let flip_xy_rect { topleft ; bottomright } =
+    mk_rect topleft.y topleft.x bottomright.y bottomright.x
+
+  let split l n =
+    let a = l / n in
+    Slice.init_slice_fn n (fun i -> (a * i, a * ( i + 1) ))
+
+  let rec make_screen_rectangles total_area n_screen =
+    function
+      | Single ->
+          Slice.init_slice 1 1 total_area
+      | Columns ->
+          let { topleft = offset ; bottomright = size } = total_area in
+          split size.x n_screen |> Slice.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
+      | Rows ->
+          Columns |> make_screen_rectangles (flip_xy_rect total_area) n_screen |> Slice.map flip_xy_rect
+      | _ -> Slice.init_slice 1 1 total_area
+
+  let apply_orientation screens =
+    function
+      | { layout = Single } | { orientation = Normal } ->  screens
+      | { layout = Columns ; orientation = Mirror }
+      | { layout = Rows ; orientation = Mirror } -> List.rev screens
+      | { layout = ColumnMajor ; orientation = Mirror }
+      | { layout = RowMajor ; orientation = Mirror } -> List.rev screens
+
+  let test () =
+    let print_rect { topleft ; bottomright } =
+      Printf.sprintf "{%d %d %d %d}" topleft.x topleft.y (bottomright.x - topleft.x) (bottomright.y - topleft.y)
+    in
+    let to_string fn slice =
+      slice |> Slice.map fn |> Slice.to_array |> Array.to_list |> String.concat " ; "
+    in
+    let println s =
+      print_string s ;
+      print_newline ()
+    in
+    let print_screens =
+      to_string print_rect >> println
+    in
+
+    let term = mk_rect 0 0 100 50 in
+
+    make_screen_rectangles term 1 Single |> print_screens ;
+    make_screen_rectangles term 2 Single |> print_screens ;
+    make_screen_rectangles term 20 Single |> print_screens ;
+
+    print_newline () ;
+
+    make_screen_rectangles term 1 Rows |> print_screens ;
+    make_screen_rectangles term 2 Rows |> print_screens ;
+    make_screen_rectangles term 3 Rows |> print_screens ;
+    make_screen_rectangles term 10 Rows |> print_screens ;
+
+    print_newline () ;
+
+    make_screen_rectangles term 1 Columns |> print_screens ;
+    make_screen_rectangles term 2 Columns |> print_screens ;
+    make_screen_rectangles term 3 Columns |> print_screens ;
+    make_screen_rectangles term 10 Columns |> print_screens ;
+
+
+    print_newline ()
+
+
 end
 
 
@@ -2219,5 +2310,6 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
+  ScreenConfiguration.test () ;
+  (* Ciseau.main () ; *)
   close_out logs
