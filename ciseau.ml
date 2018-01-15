@@ -2215,6 +2215,7 @@ module Ciseau = struct
 
       filebuffer      = filebuffer ;
 
+      (* TODO: fileview should be agnostic of the term dimension ! *)
       fileview        = Fileview.init_fileview filebuffer (term_dim.y - 3) ;
       user_input      = "" ;
       pending_input   = None;
@@ -2233,8 +2234,10 @@ module Ciseau = struct
       frame_buffer    = frame_buffer ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
+      (* TODO: don't forget to recompute the fileview viewports from the screen config *)
     }
 
+  (* TODO: screen_config_flip needs to recompute All the screens from the config there inline *)
   let screen_config_flip editor = {
     editor with
     screen_config = ScreenConfiguration.flip_config_orientation editor.screen_config ;
@@ -2286,6 +2289,15 @@ module Ciseau = struct
       Screen.put_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ;
       Screen.put_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input)
 
+  let render_fileviews editor =
+    (* this funtion should only go through the list of fileviews and rectangles and pair them one by one *)
+    let n_screens = 3 in
+    let total_area = editor.term_dim |> main_screen_dimensions in
+    let view_ports = ScreenConfiguration.make_screen_rectangles total_area n_screens editor.screen_config in
+    Slice.iter (fun r ->
+      Screen.init_screen editor.frame_buffer r |> Fileview.render editor.fileview) view_ports
+    (* Fileview.render editor.fileview editor.screen  *)
+
   let refresh_screen editor =
     let cursor_position = editor.fileview
                         |> Fileview.cursor_relative_to_view (Screen.get_size editor.screen)
@@ -2294,7 +2306,7 @@ module Ciseau = struct
                                                * screen space to terminal space using screen offset *)
     in
       Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
-      Fileview.render editor.fileview editor.screen ;
+      render_fileviews editor ;
       show_status editor ; (* using active Fileview *)
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
