@@ -328,7 +328,19 @@ module Slice = struct
       Array.set data' e elem ;
       mk_slice s (e + 1) data'
 
-  (* TODO: cat_slice function for joining two slices *)
+  let cat slice1 slice2 =
+    let l1 = len slice1 in
+    let l2 = len slice2 in
+    if l1 = 0
+      then slice2
+    else if l2 = 0
+      then slice1
+    else
+      (* TODO: see if slice2 fits in slice1 backing array *)
+      let output = init_slice (l1 + l2) (l1 + l2) (get slice1 0) in
+      copy output slice1 ;
+      copy (slice_right l1 output) slice2 ;
+      output
 
   let sort_slice fn slice =
     (* TODO: better sort_slice function !! *)
@@ -1019,12 +1031,21 @@ module ScreenConfiguration = struct
     function
       | Single ->
           Slice.init_slice 1 1 total_area
+      | _ when n_screen = 1 ->
+          make_screen_rectangles total_area 1 Single
       | Columns ->
           let { topleft = offset ; bottomright = size } = total_area in
           split size.x n_screen |> Slice.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
       | Rows ->
-          Columns |> make_screen_rectangles (flip_xy_rect total_area) n_screen |> Slice.map flip_xy_rect
-      | _ -> Slice.init_slice 1 1 total_area
+          Columns |> make_screen_rectangles (flip_xy_rect total_area) n_screen
+                  |> Slice.map flip_xy_rect
+      | ColumnMajor ->
+          let halves = make_screen_rectangles total_area 2 Columns in
+          let minors = make_screen_rectangles (Slice.get halves 1) (n_screen - 1) Rows in
+          Slice.cat (Slice.slice_left 1 halves) minors
+      | RowMajor ->
+          ColumnMajor |> make_screen_rectangles (flip_xy_rect total_area) n_screen
+                      |> Slice.map flip_xy_rect
 
   let apply_orientation screens =
     function
@@ -1069,6 +1090,19 @@ module ScreenConfiguration = struct
     make_screen_rectangles term 3 Columns |> print_screens ;
     make_screen_rectangles term 10 Columns |> print_screens ;
 
+    print_newline () ;
+
+    make_screen_rectangles term 1 ColumnMajor |> print_screens ;
+    make_screen_rectangles term 2 ColumnMajor |> print_screens ;
+    make_screen_rectangles term 3 ColumnMajor |> print_screens ;
+    make_screen_rectangles term 4 ColumnMajor |> print_screens ;
+
+    print_newline () ;
+
+    make_screen_rectangles term 1 RowMajor |> print_screens ;
+    make_screen_rectangles term 2 RowMajor |> print_screens ;
+    make_screen_rectangles term 3 RowMajor |> print_screens ;
+    make_screen_rectangles term 4 RowMajor |> print_screens ;
 
     print_newline ()
 
