@@ -793,6 +793,8 @@ module Keys = struct
                   | Digit_8
                   | Digit_9
                   | Backslash
+                  | BraceLeft
+                  | BraceRight
                   | Pipe
 
                   (* Other events returned by next char *)
@@ -852,6 +854,8 @@ module Keys = struct
     mk_key Digit_9     "9"             57 ;
     mk_key Backslash   "\\"            92 ;
     mk_key Pipe        "|"             124 ;
+    mk_key BraceLeft   "{"             123 ;
+    mk_key BraceRight  "}"             125 ;
 
     mk_key EINTR       "EINTR"         256 ;
   ] |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
@@ -1047,7 +1051,7 @@ module ScreenConfiguration = struct
       | ColumnMajor -> RowMajor
       | RowMajor    -> Single
 
-  let flip_config { layout ; orientation } = {
+  let flip_config_orientation { layout ; orientation } = {
     layout      = layout ;
     orientation = flip_orientation orientation ;
   }
@@ -2137,6 +2141,8 @@ module Ciseau = struct
   type command = Noop
                | Stop
                | Resize
+               | ScreenLayoutCycle
+               | ScreenLayoutFlip
                | Move of (Fileview.t -> v2)
                | View of (Fileview.t -> Fileview.t)
                | Pending of pending_command_atom
@@ -2163,8 +2169,9 @@ module Ciseau = struct
     render_buffer   : Bytevector.t ;
     frame_buffer    : Framebuffer.t ;
     running         : bool ;
-    status_screen      : Screen.t ;
+    status_screen   : Screen.t ;
     screen          : Screen.t ;
+    screen_config   : ScreenConfiguration.t ;
 
     (* TODO: add management code to match multiple fileviews to the same filebuffer *)
     filebuffer      : Filebuffer.t ;
@@ -2204,6 +2211,7 @@ module Ciseau = struct
       running         = true ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
+      screen_config   = ScreenConfiguration.Configs.zero ;
 
       filebuffer      = filebuffer ;
 
@@ -2227,6 +2235,16 @@ module Ciseau = struct
       screen          = mk_main_screen frame_buffer term_dim ;
     }
 
+  let screen_config_flip editor = {
+    editor with
+    screen_config = ScreenConfiguration.flip_config_orientation editor.screen_config ;
+  }
+
+  let screen_config_cycle editor = {
+    editor with
+    screen_config = ScreenConfiguration.cycle_config_layout editor.screen_config ;
+  }
+
   let queue_pending_command editor = function
     | Digit n -> { editor with pending_input = enqueue_digit n editor.pending_input }
 
@@ -2235,6 +2253,8 @@ module Ciseau = struct
     | Noop    -> editor
     | Stop    -> { editor with running = false }
     | Resize  -> resize_editor editor
+    | ScreenLayoutCycle -> screen_config_cycle editor
+    | ScreenLayoutFlip  -> screen_config_flip editor
     | Move fn -> { editor with fileview = Fileview.apply_movement fn editor.fileview }
     | View fn -> { editor with fileview = fn editor.fileview }
       (* cannot happen ?? *)
@@ -2284,6 +2304,8 @@ module Ciseau = struct
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
+    | Keys.BraceLeft    -> ScreenLayoutCycle
+    | Keys.BraceRight   -> ScreenLayoutFlip
     | Keys.Ctrl_z       -> View Fileview.recenter_view
     | Keys.Space        -> View Fileview.recenter_view
     | Keys.Equal        -> Resize
@@ -2394,6 +2416,6 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  ScreenConfiguration.test () ;
-  (* Ciseau.main () ; *)
+  (* ScreenConfiguration.test () ; *)
+  Ciseau.main () ;
   close_out logs
