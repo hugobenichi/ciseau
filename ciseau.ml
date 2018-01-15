@@ -677,6 +677,18 @@ module Rect = struct
     topleft     = mk_v2 tl_x tl_y ;
     bottomright = mk_v2 br_x br_y ;
   }
+
+  let displace_rect { x ; y } { topleft ; bottomright } =
+    mk_rect (topleft.x + x) (topleft.y + y) (bottomright.x + x) (bottomright.y + y)
+
+  let flip_x_rect { topleft ; bottomright } =
+    mk_rect (-bottomright.x) topleft.y (-topleft.x) bottomright.y
+
+  let flip_y_rect { topleft ; bottomright } =
+    mk_rect topleft.x (-bottomright.y) bottomright.x (-topleft.y)
+
+  let flip_xy_rect { topleft ; bottomright } =
+    mk_rect topleft.y topleft.x bottomright.y bottomright.x
 end
 
 
@@ -1010,14 +1022,39 @@ module ScreenConfiguration = struct
     orientation : orientation ;
   }
 
+  let mk_config l o = {
+    layout      = l ;
+    orientation = o ;
+  }
+
+  module Configs = struct
+    let zero    = mk_config Single  Normal
+    let columns = mk_config Columns Normal
+    let rows    = mk_config Rows    Normal
+  end
+
+
   let flip_orientation =
     function
       | Normal -> Mirror
       | Mirror -> Normal
 
+  let cycle_layout =
+    function
+      | Single      -> Columns
+      | Columns     -> Rows
+      | Rows        -> ColumnMajor
+      | ColumnMajor -> RowMajor
+      | RowMajor    -> Single
+
   let flip_config { layout ; orientation } = {
     layout      = layout ;
-    orientation = flip_orientation orientation
+    orientation = flip_orientation orientation ;
+  }
+
+  let cycle_config_layout { layout ; orientation } = {
+    layout      = cycle_layout layout ;
+    orientation = orientation ;
   }
 
   let flip_xy_rect { topleft ; bottomright } =
@@ -1029,31 +1066,35 @@ module ScreenConfiguration = struct
 
   let rec make_screen_rectangles total_area n_screen =
     function
-      | Single ->
+      (* Handle all single screen configs *)
+      | { layout = Single } ->
           Slice.init_slice 1 1 total_area
       | _ when n_screen = 1 ->
-          make_screen_rectangles total_area 1 Single
-      | Columns ->
+          make_screen_rectangles total_area 1 Configs.zero
+      (* Handle all mirror configs *)
+      | { layout ; orientation = Mirror } ->
+          let { topleft = offset ; bottomright = area_size } = total_area in
+          mk_config layout Normal
+            |> make_screen_rectangles { topleft = v2_zero ; bottomright = area_size } n_screen
+            |> Slice.map flip_x_rect
+            |> Slice.map (displace_rect (offset <+> mk_v2 area_size.x 0))
+
+     (* try to handle both Rows and RowMajor in term of Columns only ?? *)
+      | { layout = Columns } ->
           let { topleft = offset ; bottomright = size } = total_area in
           split size.x n_screen |> Slice.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
-      | Rows ->
-          Columns |> make_screen_rectangles (flip_xy_rect total_area) n_screen
-                  |> Slice.map flip_xy_rect
-      | ColumnMajor ->
-          let halves = make_screen_rectangles total_area 2 Columns in
-          let minors = make_screen_rectangles (Slice.get halves 1) (n_screen - 1) Rows in
+      | { layout = Rows } ->
+          Configs.columns
+            |> make_screen_rectangles (flip_xy_rect total_area) n_screen
+            |> Slice.map flip_xy_rect
+      | { layout = ColumnMajor } ->
+          let halves = make_screen_rectangles total_area 2 Configs.columns in
+          let minors = make_screen_rectangles (Slice.get halves 1) (n_screen - 1) Configs.rows in
           Slice.cat (Slice.slice_left 1 halves) minors
-      | RowMajor ->
-          ColumnMajor |> make_screen_rectangles (flip_xy_rect total_area) n_screen
-                      |> Slice.map flip_xy_rect
-
-  let apply_orientation screens =
-    function
-      | { layout = Single } | { orientation = Normal } ->  screens
-      | { layout = Columns ; orientation = Mirror }
-      | { layout = Rows ; orientation = Mirror } -> List.rev screens
-      | { layout = ColumnMajor ; orientation = Mirror }
-      | { layout = RowMajor ; orientation = Mirror } -> List.rev screens
+      | { layout = RowMajor } ->
+          mk_config ColumnMajor Normal
+            |> make_screen_rectangles (flip_xy_rect total_area) n_screen
+            |> Slice.map flip_xy_rect
 
   let test () =
     let print_rect { topleft ; bottomright } =
@@ -1072,37 +1113,43 @@ module ScreenConfiguration = struct
 
     let term = mk_rect 0 0 100 50 in
 
-    make_screen_rectangles term 1 Single |> print_screens ;
-    make_screen_rectangles term 2 Single |> print_screens ;
-    make_screen_rectangles term 20 Single |> print_screens ;
+    make_screen_rectangles term 1 Configs.zero |> print_screens ;
+    make_screen_rectangles term 2 Configs.zero |> print_screens ;
+    make_screen_rectangles term 20 Configs.zero |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 Rows |> print_screens ;
-    make_screen_rectangles term 2 Rows |> print_screens ;
-    make_screen_rectangles term 3 Rows |> print_screens ;
-    make_screen_rectangles term 10 Rows |> print_screens ;
+    make_screen_rectangles term 1 Configs.rows |> print_screens ;
+    make_screen_rectangles term 2 Configs.rows |> print_screens ;
+    make_screen_rectangles term 3 Configs.rows |> print_screens ;
+    make_screen_rectangles term 10 Configs.rows |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 Columns |> print_screens ;
-    make_screen_rectangles term 2 Columns |> print_screens ;
-    make_screen_rectangles term 3 Columns |> print_screens ;
-    make_screen_rectangles term 10 Columns |> print_screens ;
+    make_screen_rectangles term 1 Configs.columns |> print_screens ;
+    make_screen_rectangles term 2 Configs.columns |> print_screens ;
+    make_screen_rectangles term 3 Configs.columns |> print_screens ;
+    make_screen_rectangles term 10 Configs.columns |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 ColumnMajor |> print_screens ;
-    make_screen_rectangles term 2 ColumnMajor |> print_screens ;
-    make_screen_rectangles term 3 ColumnMajor |> print_screens ;
-    make_screen_rectangles term 4 ColumnMajor |> print_screens ;
+    make_screen_rectangles term 1 (mk_config ColumnMajor Normal) |> print_screens ;
+    make_screen_rectangles term 2 (mk_config ColumnMajor Normal) |> print_screens ;
+    make_screen_rectangles term 3 (mk_config ColumnMajor Normal) |> print_screens ;
+    make_screen_rectangles term 4 (mk_config ColumnMajor Normal) |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 RowMajor |> print_screens ;
-    make_screen_rectangles term 2 RowMajor |> print_screens ;
-    make_screen_rectangles term 3 RowMajor |> print_screens ;
-    make_screen_rectangles term 4 RowMajor |> print_screens ;
+    make_screen_rectangles term 1 (mk_config RowMajor Normal) |> print_screens ;
+    make_screen_rectangles term 2 (mk_config RowMajor Normal) |> print_screens ;
+    make_screen_rectangles term 3 (mk_config RowMajor Normal) |> print_screens ;
+    make_screen_rectangles term 4 (mk_config RowMajor Normal) |> print_screens ;
+
+    print_newline () ;
+
+    make_screen_rectangles term 1 (mk_config ColumnMajor Mirror) |> print_screens ;
+    make_screen_rectangles term 2 (mk_config ColumnMajor Mirror) |> print_screens ;
+    make_screen_rectangles term 3 (mk_config ColumnMajor Mirror) |> print_screens ;
 
     print_newline ()
 
