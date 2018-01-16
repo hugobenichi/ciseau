@@ -1177,7 +1177,7 @@ module type FileviewType = sig
   type filebuffer
   type screen
 
-  val init_fileview : filebuffer -> int -> t
+  val init_fileview : int -> filebuffer -> t (* TODO: eliminate view_h param *)
   val apply_movement : (t -> v2) -> t -> t
   val cursor : t -> v2
   val cursor_next_char : t -> v2
@@ -1749,7 +1749,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     linebreaking  : Block.linebreak ;
   }
 
-  let init_fileview filebuffer view_h = {
+  let init_fileview view_h filebuffer = {
     filebuffer    = filebuffer ;
     cursor        = v2_zero ;
     view_start    = 0 ;
@@ -2249,16 +2249,10 @@ module Ciseau = struct
     frame_buffer    : Framebuffer.t ;
     running         : bool ;
     status_screen   : Screen.t ;
-    screen          : Screen.t ;
-    screen_config   : ScreenConfiguration.t ;
-
-    (* TODO: add management code to match multiple fileviews to the same filebuffer *)
-    filebuffer      : Filebuffer.t ;
-
-    fileview        : Fileview.t ;
+    tileset         : Tileset.t ;
+    filebuffers     : Filebuffer.t Slice.t ; (* TODO: turn this into buffer management layer *)
     user_input      : string ;
     pending_input   : pending_command ;
-
     stats           : Stats.t
   }
 
@@ -2277,11 +2271,22 @@ module Ciseau = struct
   let mk_window_size_descr { x = w ; y = h } =
     "(" ^ (string_of_int w) ^ " x " ^ (string_of_int h) ^ ")"
 
+  let test_mk_filebuffers file = [|
+    (* let filebuffer = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
+      Filebuffer.init_filebuffer file ;
+      (* Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *) *)
+      Filebuffer.init_filebuffer "./README.md" ;
+      Filebuffer.init_filebuffer "./ioctl.c" ;
+    |] |> Slice.wrap_array
+
+  let test_mk_fileviews term_dim =
+    Slice.map (Fileview.init_fileview (term_dim.y - 3))
+
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_frame_buffer term_dim in
-    (* let filebuffer = FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
-    let filebuffer      = Filebuffer.init_filebuffer file ;
+    let filebuffers = test_mk_filebuffers file in
+    let fileviews = test_mk_fileviews term_dim filebuffers
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
@@ -2289,13 +2294,10 @@ module Ciseau = struct
       frame_buffer    = frame_buffer ;
       running         = true ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
-      screen          = mk_main_screen frame_buffer term_dim ;
-      screen_config   = ScreenConfiguration.Configs.zero ;
 
-      filebuffer      = filebuffer ;
+      tileset         = Tileset.mk_tileset (main_screen_dimensions term_dim) fileviews ;
+      filebuffers     = filebuffers ;
 
-      (* TODO: fileview should be agnostic of the term dimension ! *)
-      fileview        = Fileview.init_fileview filebuffer (term_dim.y - 3) ;
       user_input      = "" ;
       pending_input   = None;
 
@@ -2313,20 +2315,7 @@ module Ciseau = struct
                         (* reuse the same render_buffer !! *)
       frame_buffer    = frame_buffer ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
-      screen          = mk_main_screen frame_buffer term_dim ;
-      (* TODO: don't forget to recompute the fileview viewports from the screen config *)
     }
-
-  (* TODO: screen_config_flip needs to recompute All the screens from the config there inline *)
-  let screen_config_flip editor = {
-    editor with
-    screen_config = ScreenConfiguration.flip_config_orientation editor.screen_config ;
-  }
-
-  let screen_config_cycle editor = {
-    editor with
-    screen_config = ScreenConfiguration.cycle_config_layout editor.screen_config ;
-  }
 
   let queue_pending_command editor = function
     | Digit n -> { editor with pending_input = enqueue_digit n editor.pending_input }
@@ -2336,12 +2325,21 @@ module Ciseau = struct
     | Noop    -> editor
     | Stop    -> { editor with running = false }
     | Resize  -> resize_editor editor
-    | ScreenLayoutCycle -> screen_config_cycle editor
-    | ScreenLayoutFlip  -> screen_config_flip editor
-    | Move fn -> { editor with fileview = Fileview.apply_movement fn editor.fileview }
-    | View fn -> { editor with fileview = fn editor.fileview }
+    | ScreenLayoutCycle ->
+        { editor with tileset = Tileset.apply_op editor.tileset Tileset.ScreenLayoutCycle }
+    | ScreenLayoutFlip  ->
+        { editor with tileset = Tileset.apply_op editor.tileset Tileset.ScreenLayoutFlip }
+    | Move fn ->
+        editor
+        (* FIXME *)
+        (* { editor with fileview = Fileview.apply_movement fn editor.fileview } *)
+    | View fn ->
+        editor
+        (* FIXME *)
+        (* { editor with fileview = fn editor.fileview } *)
       (* cannot happen ?? *)
-    | Pending ((Digit n) as d)  -> queue_pending_command editor d
+    | Pending ((Digit n) as d) ->
+        queue_pending_command editor d
 
   let apply_command_with_repetition n command editor =
     match command with
@@ -2352,7 +2350,8 @@ module Ciseau = struct
           else fb
       in {
         editor with
-        fileview      = loop n editor.fileview ;
+        (* FIXME *)
+        (* fileview      = loop n editor.fileview ; *)
         pending_input = None ;
       }
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
@@ -2369,27 +2368,13 @@ module Ciseau = struct
       Screen.put_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ;
       Screen.put_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input)
 
-  let render_fileviews editor =
-    (* this funtion should only go through the list of fileviews and rectangles and pair them one by one *)
-    let n_screens = 3 in
-    let total_area = editor.term_dim |> main_screen_dimensions in
-    let view_ports = ScreenConfiguration.mk_view_ports total_area n_screens editor.screen_config in
-    Slice.iter (fun r ->
-      Screen.init_screen editor.frame_buffer r |> Fileview.render editor.fileview) view_ports
-    (* Fileview.render editor.fileview editor.screen  *)
-
   let refresh_screen editor =
-    let cursor_position = editor.fileview
-                        |> Fileview.cursor_relative_to_view (Screen.get_size editor.screen)
-                        |> (<+>) (mk_v2 5 1)  (* +5 for line numbers, +1 for header *)
-                                              (* TODO: remove this hack, instead remap cursor from
-                                               * screen space to terminal space using screen offset *)
-    in
-      Framebuffer.clear editor.frame_buffer ; (* PERF: only clear rectangles per subscreen *)
-      render_fileviews editor ;
-      show_status editor ; (* using active Fileview *)
-      Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
-      editor
+    (* PERF: only clear rectangles per subscreen *)
+    Framebuffer.clear editor.frame_buffer ;
+    show_status editor ;
+    let cursor_position = Tileset.render editor.tileset editor.frame_buffer in
+    Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
+    editor
 
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
