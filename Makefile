@@ -10,6 +10,9 @@ CAML=$(CAML_LD_LIBRARY_PATH)/../ocaml
 builddir:
 	mkdir -p $(OUTDIR)
 
+$(OUTDIR)/iter: iter.ml
+	ocamlopt -o $@ $<
+
 $(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
 	ocamlopt $(OUTDIR)/ioctl.o unix.cmxa -o $@ $<
 #	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
@@ -17,7 +20,7 @@ $(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
 $(OUTDIR)/ioctl.o: ioctl.c
 	gcc -c -o $@ $< -I $(CAML)
 
-build: builddir $(OUTDIR)/ciseau $(OUTDIR)/ioctl.o
+build: builddir $(OUTDIR)/iter $(OUTDIR)/ciseau $(OUTDIR)/ioctl.o
 
 run: build
 	$(OUTDIR)/ciseau
