@@ -750,6 +750,18 @@ module Block = struct
     colors  = c ;
   }
 
+  let rec adjust_length want_len blk =
+    if want_len > blk.len
+      then {
+        blk with
+        text = blk.text ^ (String.make (want_len - blk.len) ' ') ;
+        len = want_len ;
+      }
+      else {
+        blk with
+        len = want_len ;
+      }
+
   let split_at l b =
     let blen = b.len in
     if blen <= l
@@ -1044,7 +1056,7 @@ module type FileviewType = sig
   val file_length_string : t -> string
   val get_view : int -> t -> view
 
-  val render : t -> screen -> unit
+  val draw : t -> screen -> bool -> unit
 end
 
 
@@ -1217,10 +1229,11 @@ module Config = struct
     default       : color_cell ;
     cursor_line   : color_cell ;
     line_numbers  : color_cell ;
+    focus_header  : color_cell ;
     header        : color_cell ;
     status        : color_cell ;
     user_input    : color_cell ;
-    default_fill  : color_cell ;
+    border        : color_cell ;
   }
 
   type cfg = {
@@ -1263,9 +1276,13 @@ module Config = struct
         fg    = green ;
         bg    = darkgray ;
       } ;
-      header = {
+      focus_header = {
         fg    = darkgray ;
         bg    = yellow ;
+      } ;
+      header = {
+        fg    = darkgray ;
+        bg    = cyan ;
       } ;
       status = {
         fg    = darkgray ;
@@ -1275,9 +1292,9 @@ module Config = struct
         fg    = white ;
         bg    = darkgray ;
       } ;
-      default_fill = {
-        fg    = blue ;
-        bg    = darkgray ;
+      border = {
+        fg    = darkgray ;
+        bg    = Gray 8 ;
       } ;
     } ;
   }
@@ -1464,8 +1481,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       |> List.iteri put_block_line
 
   let put_line screen y_offset blk =
-    let pad_blk = Block.mk_block (String.make screen.size.x ' ') blk.Block.colors in
-    put_block_lines screen Block.Clip y_offset [[ blk ; pad_blk ]]
+    put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore
 end
 
 let count_tabs s start stop =
@@ -1572,7 +1588,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     let hardcoded_size  = 10000 + negative_offset
 
     let format_n n =
-      Printf.sprintf "%4d " (n - negative_offset)
+      Printf.sprintf "%3d " (n - negative_offset)
 
     let mk_block n =
       Block.mk_block (format_n n) Config.default.colors.line_numbers
@@ -1602,7 +1618,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
     view_start    = 0 ;
     view_diff     = view_h - 1;
     numbering     = CursorRelative ;
-    linebreaking  = Block.Clip ;
+    linebreaking  = Block.Overflow ;
   }
 
   let line_at t =
@@ -1735,18 +1751,22 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
       linebreaking  = t.linebreaking ;
     }
 
+  let border_block =
+    Block.mk_block " " Config.default.colors.border
+
   let print_default_fill screen =
     let fill_y_offset = 1 in
-    mk_list (Screen.get_height screen) [Block.mk_block "~" Config.default.colors.default_fill]
+    mk_list (Screen.get_height screen) [border_block]
       |> Screen.put_block_lines screen Block.Overflow fill_y_offset
 
-  let print_header t screen =
+  let print_header t screen colors =
     let header_offset = 0 in
+    (* PERF: cache this string in screen and only update when length change *)
     let header = t.filebuffer.Filebuffer.filepath
                 ^ "  " ^ (file_length_string t)
                 ^ "  " ^ (t |> cursor |> v2_to_string)
     in
-      Screen.put_line screen header_offset (Block.mk_block header Config.default.colors.header)
+      Screen.put_line screen header_offset (Block.mk_block header colors)
 
   let mk_line_number_block n =
     LineNumberCache.get n
@@ -1756,7 +1776,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
       function
       | [] -> List.rev acc
       | LineInfo { blocks } :: t ->
-          let acc' = mk_line_number_block n |> conj blocks |> conj acc
+          let acc' = mk_line_number_block n |> conj blocks |> List.cons border_block |> conj acc
           in
             loop (n + 1) acc' t
     in
@@ -1770,8 +1790,11 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
           (* TODO: fuse selection into the block list *)
           |> Screen.put_block_lines screen linebreaking y_offset
 
-  let render t screen =
-    print_header t screen ;
+  let draw t screen is_focused =
+    let header_colors =
+      if is_focused then Config.default.colors.focus_header else Config.default.colors.header
+    in
+    print_header t screen header_colors ;
     print_default_fill screen ; (* PERF: only put default filling when needed *)
     print_file_buffer t screen
 
@@ -2021,9 +2044,11 @@ module Tileset = struct
       |> ScreenConfiguration.mk_view_ports t.screen_size (Slice.len t.fileviews)
       |> Slice.map (Screen.init_screen frame_buffer)
 
-  let render t frame_buffer =
+  let draw_fileviews t frame_buffer =
     let screens = make_screens t frame_buffer in
-    Slice.iteri (Slice.get t.fileviews >> Fileview.render) screens ;
+    for i = 0 to (Slice.len screens) - 1 do
+      Fileview.draw (Slice.get t.fileviews i) (Slice.get screens i) (i = t.focus_index)
+    done ;
     get_cursor (Slice.get screens t.focus_index) (Slice.get t.fileviews t.focus_index)
 
   let apply_op t =
@@ -2218,7 +2243,7 @@ module Ciseau = struct
     (* PERF: only clear rectangles per subscreen *)
     Framebuffer.clear editor.frame_buffer ;
     show_status editor ;
-    let cursor_position = Tileset.render editor.tileset editor.frame_buffer in
+    let cursor_position = Tileset.draw_fileviews editor.tileset editor.frame_buffer in
     Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
     editor
 
