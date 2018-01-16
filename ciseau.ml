@@ -289,6 +289,11 @@ module Slice = struct
       fn (get slice i)
     done
 
+  let iteri fn slice =
+    for i = 0 to (len slice) - 1 do
+      fn i (get slice i)
+    done
+
   let map fn slice =
     Array.init (len slice) (get slice >> fn) |> wrap_array
 
@@ -1008,6 +1013,7 @@ module type ScreenType = sig
   type segment
 
   val get_size        : t -> v2
+  val get_offset      : t -> v2
   val get_width       : t -> int
   val get_height      : t -> int
   val init_screen     : framebuffer -> rect -> t
@@ -1065,33 +1071,33 @@ module ScreenConfiguration = struct
     let a = l / n in
     Slice.init_slice_fn n (fun i -> (a * i, a * ( i + 1) ))
 
-  let rec make_screen_rectangles total_area n_screen =
+  let rec mk_view_ports total_area n_screen =
     function
       (* Handle all single screen configs *)
       | { layout = Single } ->
           Slice.init_slice 1 1 total_area
       | _ when n_screen = 1 ->
-          make_screen_rectangles total_area 1 Configs.zero
+          mk_view_ports total_area 1 Configs.zero
      (* Handle RowMajor in term of ColumnMajor *)
       | { layout = RowMajor ; orientation } ->
           mk_config ColumnMajor orientation
-            |> make_screen_rectangles (flip_xy_rect total_area) n_screen
+            |> mk_view_ports (flip_xy_rect total_area) n_screen
             |> Slice.map flip_xy_rect
       (* Handle ColumnMajor in term of Rows and Columns *)
       | { layout = ColumnMajor ; orientation } ->
-          let halves = make_screen_rectangles total_area 2 (mk_config Columns orientation) in
-          let minors = make_screen_rectangles (Slice.get halves 1) (n_screen - 1) Configs.rows in
+          let halves = mk_view_ports total_area 2 (mk_config Columns orientation) in
+          let minors = mk_view_ports (Slice.get halves 1) (n_screen - 1) Configs.rows in
           Slice.cat (Slice.slice_left 1 halves) minors
      (* Handle Rows in term of Columns *)
       | { layout = Rows ; orientation } ->
           mk_config Columns orientation
-            |> make_screen_rectangles (flip_xy_rect total_area) n_screen
+            |> mk_view_ports (flip_xy_rect total_area) n_screen
             |> Slice.map flip_xy_rect
       (* Handle mirror configs for Columns and ColumnMajor *)
       | { layout ; orientation = Mirror } ->
           let { topleft = offset ; bottomright = area_size } = total_area in
           mk_config layout Normal
-            |> make_screen_rectangles { topleft = v2_zero ; bottomright = area_size } n_screen
+            |> mk_view_ports { topleft = v2_zero ; bottomright = area_size } n_screen
             |> Slice.map flip_x_rect
             |> Slice.map (displace_rect (offset <+> mk_v2 area_size.x 0))
       | { layout = Columns ; orientation = Normal } ->
@@ -1115,48 +1121,48 @@ module ScreenConfiguration = struct
 
     let term = mk_rect 0 0 100 50 in
 
-    make_screen_rectangles term 1 Configs.zero |> print_screens ;
-    make_screen_rectangles term 2 Configs.zero |> print_screens ;
-    make_screen_rectangles term 20 Configs.zero |> print_screens ;
+    mk_view_ports term 1 Configs.zero |> print_screens ;
+    mk_view_ports term 2 Configs.zero |> print_screens ;
+    mk_view_ports term 20 Configs.zero |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 Configs.rows |> print_screens ;
-    make_screen_rectangles term 2 Configs.rows |> print_screens ;
-    make_screen_rectangles term 3 Configs.rows |> print_screens ;
-    make_screen_rectangles term 3 (mk_config Rows Mirror) |> print_screens ;
-    make_screen_rectangles term 4 Configs.rows |> print_screens ;
-    make_screen_rectangles term 4 (mk_config Rows Mirror) |> print_screens ;
+    mk_view_ports term 1 Configs.rows |> print_screens ;
+    mk_view_ports term 2 Configs.rows |> print_screens ;
+    mk_view_ports term 3 Configs.rows |> print_screens ;
+    mk_view_ports term 3 (mk_config Rows Mirror) |> print_screens ;
+    mk_view_ports term 4 Configs.rows |> print_screens ;
+    mk_view_ports term 4 (mk_config Rows Mirror) |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 Configs.columns |> print_screens ;
-    make_screen_rectangles term 2 Configs.columns |> print_screens ;
-    make_screen_rectangles term 3 Configs.columns |> print_screens ;
-    make_screen_rectangles term 3 (mk_config Columns Mirror) |> print_screens ;
-    make_screen_rectangles term 4 Configs.columns |> print_screens ;
-    make_screen_rectangles term 4 (mk_config Columns Mirror) |> print_screens ;
+    mk_view_ports term 1 Configs.columns |> print_screens ;
+    mk_view_ports term 2 Configs.columns |> print_screens ;
+    mk_view_ports term 3 Configs.columns |> print_screens ;
+    mk_view_ports term 3 (mk_config Columns Mirror) |> print_screens ;
+    mk_view_ports term 4 Configs.columns |> print_screens ;
+    mk_view_ports term 4 (mk_config Columns Mirror) |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 (mk_config ColumnMajor Normal) |> print_screens ;
-    make_screen_rectangles term 2 (mk_config ColumnMajor Normal) |> print_screens ;
-    make_screen_rectangles term 3 (mk_config ColumnMajor Normal) |> print_screens ;
-    make_screen_rectangles term 3 (mk_config ColumnMajor Mirror) |> print_screens ;
+    mk_view_ports term 1 (mk_config ColumnMajor Normal) |> print_screens ;
+    mk_view_ports term 2 (mk_config ColumnMajor Normal) |> print_screens ;
+    mk_view_ports term 3 (mk_config ColumnMajor Normal) |> print_screens ;
+    mk_view_ports term 3 (mk_config ColumnMajor Mirror) |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 1 (mk_config RowMajor Normal) |> print_screens ;
-    make_screen_rectangles term 2 (mk_config RowMajor Normal) |> print_screens ;
-    make_screen_rectangles term 3 (mk_config RowMajor Normal) |> print_screens ;
-    make_screen_rectangles term 3 (mk_config RowMajor Mirror) |> print_screens ;
+    mk_view_ports term 1 (mk_config RowMajor Normal) |> print_screens ;
+    mk_view_ports term 2 (mk_config RowMajor Normal) |> print_screens ;
+    mk_view_ports term 3 (mk_config RowMajor Normal) |> print_screens ;
+    mk_view_ports term 3 (mk_config RowMajor Mirror) |> print_screens ;
 
     print_newline () ;
 
-    make_screen_rectangles term 2 (mk_config Columns Mirror) |> print_screens ;
-    make_screen_rectangles term 2 (mk_config Rows Mirror) |> print_screens ;
-    make_screen_rectangles term 2 (mk_config ColumnMajor Mirror) |> print_screens ;
-    make_screen_rectangles term 2 (mk_config RowMajor Mirror) |> print_screens ;
+    mk_view_ports term 2 (mk_config Columns Mirror) |> print_screens ;
+    mk_view_ports term 2 (mk_config Rows Mirror) |> print_screens ;
+    mk_view_ports term 2 (mk_config ColumnMajor Mirror) |> print_screens ;
+    mk_view_ports term 2 (mk_config RowMajor Mirror) |> print_screens ;
 
     print_newline ()
 
@@ -1578,6 +1584,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   let get_size t =
     t.size
+
+  let get_offset t =
+    t.screen_offset
 
   let get_width t =
     t.size.x
@@ -2130,6 +2139,76 @@ module Stats = struct
 end
 
 
+module Tileset = struct
+
+  type op = Resize of rect
+          | ScreenLayoutCycle
+          | ScreenLayoutFlip
+          | FocusNext
+          | FocusPrevious
+          | FocusMain
+          | BringFocusToMain
+          | RotateViews
+
+  type t = {
+    screen_size   : rect ;
+    screen_config : ScreenConfiguration.t ;
+    focus_index   : int ;
+    fileviews     : Fileview.t Slice.t ;
+  }
+
+  let mk_tileset term_size fileviews = {
+    screen_size   = term_size ;
+    screen_config = ScreenConfiguration.Configs.zero ;
+    focus_index   = 0 ;
+    fileviews     = fileviews ;
+  }
+
+  let get_cursor focused_screen focused_fileview =
+    Fileview.cursor_relative_to_view (Screen.get_size focused_screen) focused_fileview
+                  |> (<+>) (Screen.get_offset focused_screen)
+                  |> (<+>) (mk_v2 5 1)  (* +5 for line numbers, +1 for header *)
+
+  let make_screens t frame_buffer =
+    t.screen_config
+      |> ScreenConfiguration.mk_view_ports t.screen_size (Slice.len t.fileviews)
+      |> Slice.map (Screen.init_screen frame_buffer)
+
+  let render t frame_buffer =
+    let screens = make_screens t frame_buffer in
+    Slice.iteri (Slice.get t.fileviews >> Fileview.render) screens ;
+    get_cursor (Slice.get screens t.focus_index) (Slice.get t.fileviews t.focus_index)
+
+  let apply_op t =
+    function
+      | Resize screen_size ->
+          { t with screen_size = screen_size ; }
+      | ScreenLayoutCycle ->
+          { t with screen_config = ScreenConfiguration.cycle_config_layout t.screen_config }
+      | ScreenLayoutFlip ->
+          { t with screen_config = ScreenConfiguration.flip_config_orientation t.screen_config }
+      | FocusNext ->
+          let new_focus = (t.focus_index + 1) mod Slice.len t.fileviews  in
+          { t with focus_index = new_focus }
+      | FocusPrevious ->
+          let new_focus = (t.focus_index + (Slice.len t.fileviews) - 1) mod Slice.len t.fileviews in
+          { t with focus_index = new_focus }
+      | FocusMain ->
+          { t with focus_index = 0 }
+      | BringFocusToMain ->
+          let fileviews' = Slice.clone t.fileviews in
+          Slice.get t.fileviews t.focus_index |> Slice.set fileviews' 0 ;
+          Slice.get t.fileviews 0             |> Slice.set fileviews' t.focus_index ;
+          { t with fileviews = fileviews' }
+      | RotateViews ->
+          let last_index = (Slice.len t.fileviews) - 1 in
+          let fileviews' = Slice.clone t.fileviews in
+          Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
+          Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
+          { t with fileviews = fileviews' }
+end
+
+
 module Ciseau = struct
 
   type pending_command_atom = Digit of int
@@ -2231,6 +2310,7 @@ module Ciseau = struct
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
       render_buffer   = Bytevector.init_bytevector 0x1000 ;
+                        (* reuse the same render_buffer !! *)
       frame_buffer    = frame_buffer ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
       screen          = mk_main_screen frame_buffer term_dim ;
@@ -2293,7 +2373,7 @@ module Ciseau = struct
     (* this funtion should only go through the list of fileviews and rectangles and pair them one by one *)
     let n_screens = 3 in
     let total_area = editor.term_dim |> main_screen_dimensions in
-    let view_ports = ScreenConfiguration.make_screen_rectangles total_area n_screens editor.screen_config in
+    let view_ports = ScreenConfiguration.mk_view_ports total_area n_screens editor.screen_config in
     Slice.iter (fun r ->
       Screen.init_screen editor.frame_buffer r |> Fileview.render editor.fileview) view_ports
     (* Fileview.render editor.fileview editor.screen  *)
@@ -2310,7 +2390,6 @@ module Ciseau = struct
       show_status editor ; (* using active Fileview *)
       Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
       editor
-
 
   let key_to_command = function
     | Keys.Ctrl_c       -> Stop
