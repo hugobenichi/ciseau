@@ -2311,10 +2311,9 @@ module Ciseau = struct
       editor with
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
-      render_buffer   = Bytevector.init_bytevector 0x1000 ;
-                        (* reuse the same render_buffer !! *)
       frame_buffer    = frame_buffer ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
+      tileset         = Tileset.apply_op editor.tileset (Tileset.Resize (main_screen_dimensions term_dim)) ;
     }
 
   let queue_pending_command editor = function
