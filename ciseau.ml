@@ -645,6 +645,8 @@ module Keys = struct
                   | Digit_8
                   | Digit_9
                   | Backslash
+                  | BracketLeft
+                  | BracketRight
                   | BraceLeft
                   | BraceRight
                   | Pipe
@@ -705,6 +707,8 @@ module Keys = struct
     mk_key Digit_8     "8"             56 ;
     mk_key Digit_9     "9"             57 ;
     mk_key Backslash   "\\"            92 ;
+    mk_key BracketLeft "["             91 ;
+    mk_key BracketRight "]"            93 ;
     mk_key Pipe        "|"             124 ;
     mk_key BraceLeft   "{"             123 ;
     mk_key BraceRight  "}"             125 ;
@@ -2046,10 +2050,19 @@ module Tileset = struct
 
   let draw_fileviews t frame_buffer =
     let screens = make_screens t frame_buffer in
-    for i = 0 to (Slice.len screens) - 1 do
-      Fileview.draw (Slice.get t.fileviews i) (Slice.get screens i) (i = t.focus_index)
-    done ;
-    get_cursor (Slice.get screens t.focus_index) (Slice.get t.fileviews t.focus_index)
+    let n_screens = Slice.len screens in
+    if n_screens = 1
+      then (
+        let main_screen = Slice.get screens 0 in
+        let focused_fileview = Slice.get t.fileviews t.focus_index in
+        Fileview.draw focused_fileview main_screen true ;
+        get_cursor main_screen focused_fileview
+      ) else (
+        for i = 0 to n_screens - 1 do
+          Fileview.draw (Slice.get t.fileviews i) (Slice.get screens i) (i = t.focus_index)
+        done ;
+        get_cursor (Slice.get screens t.focus_index) (Slice.get t.fileviews t.focus_index)
+      )
 
   let apply_op t =
     function
@@ -2092,8 +2105,7 @@ module Ciseau = struct
   type command = Noop
                | Stop
                | Resize
-               | ScreenLayoutCycle
-               | ScreenLayoutFlip
+               | TilesetOp of Tileset.op
                | Move of (Fileview.t -> v2)
                | View of (Fileview.t -> Fileview.t)
                | Pending of pending_command_atom
@@ -2196,10 +2208,8 @@ module Ciseau = struct
     | Noop    -> editor
     | Stop    -> { editor with running = false }
     | Resize  -> resize_editor editor
-    | ScreenLayoutCycle ->
-        { editor with tileset = Tileset.apply_op editor.tileset Tileset.ScreenLayoutCycle }
-    | ScreenLayoutFlip  ->
-        { editor with tileset = Tileset.apply_op editor.tileset Tileset.ScreenLayoutFlip }
+    | TilesetOp op ->
+        { editor with tileset = Tileset.apply_op editor.tileset op }
     | Move fn ->
         editor
         (* FIXME *)
@@ -2251,8 +2261,10 @@ module Ciseau = struct
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
-    | Keys.BraceLeft    -> ScreenLayoutCycle
-    | Keys.BraceRight   -> ScreenLayoutFlip
+    | Keys.BraceLeft    -> TilesetOp Tileset.ScreenLayoutCycle
+    | Keys.BraceRight   -> TilesetOp Tileset.ScreenLayoutFlip
+    | Keys.BracketLeft  -> TilesetOp Tileset.FocusPrevious
+    | Keys.BracketRight -> TilesetOp Tileset.FocusNext
     | Keys.Ctrl_z       -> View Fileview.recenter_view
     | Keys.Space        -> View Fileview.recenter_view
     | Keys.Equal        -> Resize
