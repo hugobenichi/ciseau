@@ -141,6 +141,11 @@ module Slice = struct
       fn i (get slice i)
     done
 
+  let rev slice =
+    let l = len slice in
+    let rev_index i = l - i - 1 in
+    init_slice_fn l (rev_index >> get slice)
+
   let map fn slice =
     Array.init (len slice) (get slice >> fn) |> wrap_array
 
@@ -267,6 +272,13 @@ module Slice = struct
       [| 20 ; 30 ; 40 |] |> wrap_array |> reslice (1, 1) |> append 1 |> to_string string_of_int |> println  ;
       [| 20 ; 30 ; 40 |] |> wrap_array |> reslice (1, 2) |> append 1 |> to_string string_of_int |> println  ;
       [| 20 ; 30 ; 40 |] |> wrap_array |> reslice (1, 2) |> append 1 |> append 2 |> append 3 |> append 3 |> to_string string_of_int |> println  ;
+      print_newline () ;
+
+      [| 0 |]                 |> wrap_array |> rev |> to_string string_of_int |> println ;
+      [| 0 ; 1 |]             |> wrap_array |> rev |> to_string string_of_int |> println ;
+      [| 0 ; 1 ; 2 |]         |> wrap_array |> rev |> to_string string_of_int |> println ;
+      [| 0 ; 1 ; 2 ; 3 |]     |> wrap_array |> rev |> to_string string_of_int |> println ;
+      [| 0 ; 1 ; 2 ; 3 ; 4 |] |> wrap_array |> rev |> to_string string_of_int |> println ;
 
       ()
   with
@@ -529,18 +541,6 @@ module Rect = struct
     topleft     = mk_v2 tl_x tl_y ;
     bottomright = mk_v2 br_x br_y ;
   }
-
-  let displace_rect { x ; y } { topleft ; bottomright } =
-    mk_rect (topleft.x + x) (topleft.y + y) (bottomright.x + x) (bottomright.y + y)
-
-  let flip_x_rect { topleft ; bottomright } =
-    mk_rect (-bottomright.x) topleft.y (-topleft.x) bottomright.y
-
-  let flip_y_rect { topleft ; bottomright } =
-    mk_rect topleft.x (-bottomright.y) bottomright.x (-topleft.y)
-
-  let flip_xy_rect { topleft ; bottomright } =
-    mk_rect topleft.y topleft.x bottomright.y bottomright.x
 end
 
 
@@ -645,11 +645,16 @@ module Keys = struct
                   | Digit_8
                   | Digit_9
                   | Backslash
+                  | ParenLeft
+                  | ParenRight
                   | BracketLeft
                   | BracketRight
                   | BraceLeft
                   | BraceRight
                   | Pipe
+                  | Plus
+                  | Minus
+                  | Underscore
 
                   (* Other events returned by next char *)
                   | EINTR (* usually happen when terminal is resized *)
@@ -707,12 +712,16 @@ module Keys = struct
     mk_key Digit_8     "8"             56 ;
     mk_key Digit_9     "9"             57 ;
     mk_key Backslash   "\\"            92 ;
+    mk_key ParenLeft   "("             40 ;
+    mk_key ParenRight  ")"             41 ;
+    mk_key Plus        "+"             43 ;
+    mk_key Minus       "-"             45 ;
     mk_key BracketLeft "["             91 ;
     mk_key BracketRight "]"            93 ;
+    mk_key Underscore  "_"             95 ;
     mk_key Pipe        "|"             124 ;
     mk_key BraceLeft   "{"             123 ;
     mk_key BraceRight  "}"             125 ;
-
     mk_key EINTR       "EINTR"         256 ;
   ] |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
 
@@ -912,7 +921,7 @@ module ScreenConfiguration = struct
       | Normal -> Mirror
       | Mirror -> Normal
 
-  let cycle_layout =
+  let cycle_layout_next =
     function
       | Single      -> Columns
       | Columns     -> Rows
@@ -920,13 +929,26 @@ module ScreenConfiguration = struct
       | ColumnMajor -> RowMajor
       | RowMajor    -> Single
 
+  let cycle_layout_prev =
+    function
+      | Single      -> RowMajor
+      | Columns     -> Single
+      | Rows        -> Columns
+      | ColumnMajor -> Rows
+      | RowMajor    -> ColumnMajor
+
   let flip_config_orientation { layout ; orientation } = {
     layout      = layout ;
     orientation = flip_orientation orientation ;
   }
 
-  let cycle_config_layout { layout ; orientation } = {
-    layout      = cycle_layout layout ;
+  let cycle_config_layout_next { layout ; orientation } = {
+    layout      = cycle_layout_next layout ;
+    orientation = orientation ;
+  }
+
+  let cycle_config_layout_prev { layout ; orientation } = {
+    layout      = cycle_layout_prev layout ;
     orientation = orientation ;
   }
 
@@ -934,38 +956,35 @@ module ScreenConfiguration = struct
     let a = l / n in
     Slice.init_slice_fn n (fun i -> (a * i, a * ( i + 1) ))
 
+  let flip_xy_rect { topleft ; bottomright } =
+    mk_rect topleft.y topleft.x bottomright.y bottomright.x
+
   let rec mk_view_ports total_area n_screen =
     function
-      (* Handle all single screen configs *)
       | { layout = Single } ->
           Slice.init_slice 1 1 total_area
       | _ when n_screen = 1 ->
           mk_view_ports total_area 1 Configs.zero
-     (* Handle RowMajor in term of ColumnMajor *)
-      | { layout = RowMajor ; orientation } ->
-          mk_config ColumnMajor orientation
-            |> mk_view_ports (flip_xy_rect total_area) n_screen
-            |> Slice.map flip_xy_rect
-      (* Handle ColumnMajor in term of Rows and Columns *)
-      | { layout = ColumnMajor ; orientation } ->
-          let halves = mk_view_ports total_area 2 (mk_config Columns orientation) in
-          let minors = mk_view_ports (Slice.get halves 1) (n_screen - 1) Configs.rows in
-          Slice.cat (Slice.slice_left 1 halves) minors
-     (* Handle Rows in term of Columns *)
+      | { layout = Columns ; orientation = Normal } ->
+          let { topleft = offset ; bottomright = size } = total_area in
+          split size.x n_screen
+            |> Slice.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
+      | { layout = Columns ; orientation = Mirror } ->
+          mk_config Columns Normal
+            |> mk_view_ports total_area n_screen
+            |> Slice.rev
       | { layout = Rows ; orientation } ->
           mk_config Columns orientation
             |> mk_view_ports (flip_xy_rect total_area) n_screen
             |> Slice.map flip_xy_rect
-      (* Handle mirror configs for Columns and ColumnMajor *)
-      | { layout ; orientation = Mirror } ->
-          let { topleft = offset ; bottomright = area_size } = total_area in
-          mk_config layout Normal
-            |> mk_view_ports { topleft = v2_zero ; bottomright = area_size } n_screen
-            |> Slice.map flip_x_rect
-            |> Slice.map (displace_rect (offset <+> mk_v2 area_size.x 0))
-      | { layout = Columns ; orientation = Normal } ->
-          let { topleft = offset ; bottomright = size } = total_area in
-          split size.x n_screen |> Slice.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
+      | { layout = ColumnMajor ; orientation } ->
+          let halves = mk_view_ports total_area 2 (mk_config Columns orientation) in
+          let minors = mk_view_ports (Slice.get halves 1) (n_screen - 1) Configs.rows in
+          Slice.cat (Slice.slice_left 1 halves) minors
+      | { layout = RowMajor ; orientation } ->
+          mk_config ColumnMajor orientation
+            |> mk_view_ports (flip_xy_rect total_area) n_screen
+            |> Slice.map flip_xy_rect
 
   let test () =
     let print_rect { topleft ; bottomright } =
@@ -1485,7 +1504,8 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       |> List.iteri put_block_line
 
   let put_line screen y_offset blk =
-    put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore
+    put_block screen (mk_v2 0 y_offset) blk |> ignore
+    (* put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore *)
 end
 
 let count_tabs s start stop =
@@ -2016,13 +2036,15 @@ end
 module Tileset = struct
 
   type op = Resize of rect
-          | ScreenLayoutCycle
+          | RotateViewsLeft
+          | RotateViewsRight
+          | ScreenLayoutCycleNext
+          | ScreenLayoutCyclePrev
           | ScreenLayoutFlip
           | FocusNext
-          | FocusPrevious
+          | FocusPrev
           | FocusMain
           | BringFocusToMain
-          | RotateViews
 
   type t = {
     screen_size   : rect ;
@@ -2068,14 +2090,16 @@ module Tileset = struct
     function
       | Resize screen_size ->
           { t with screen_size = screen_size ; }
-      | ScreenLayoutCycle ->
-          { t with screen_config = ScreenConfiguration.cycle_config_layout t.screen_config }
+      | ScreenLayoutCycleNext ->
+          { t with screen_config = ScreenConfiguration.cycle_config_layout_next t.screen_config }
+      | ScreenLayoutCyclePrev ->
+          { t with screen_config = ScreenConfiguration.cycle_config_layout_prev t.screen_config }
       | ScreenLayoutFlip ->
           { t with screen_config = ScreenConfiguration.flip_config_orientation t.screen_config }
       | FocusNext ->
           let new_focus = (t.focus_index + 1) mod Slice.len t.fileviews  in
           { t with focus_index = new_focus }
-      | FocusPrevious ->
+      | FocusPrev ->
           let new_focus = (t.focus_index + (Slice.len t.fileviews) - 1) mod Slice.len t.fileviews in
           { t with focus_index = new_focus }
       | FocusMain ->
@@ -2084,8 +2108,14 @@ module Tileset = struct
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews t.focus_index |> Slice.set fileviews' 0 ;
           Slice.get t.fileviews 0             |> Slice.set fileviews' t.focus_index ;
+          { t with fileviews = fileviews' ; focus_index = 0 }
+      | RotateViewsLeft ->
+          let last_index = (Slice.len t.fileviews) - 1 in
+          let fileviews' = Slice.clone t.fileviews in
+          Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
+          Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
           { t with fileviews = fileviews' }
-      | RotateViews ->
+      | RotateViewsRight ->
           let last_index = (Slice.len t.fileviews) - 1 in
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
@@ -2261,13 +2291,18 @@ module Ciseau = struct
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
-    | Keys.BraceLeft    -> TilesetOp Tileset.ScreenLayoutCycle
-    | Keys.BraceRight   -> TilesetOp Tileset.ScreenLayoutFlip
-    | Keys.BracketLeft  -> TilesetOp Tileset.FocusPrevious
+    | Keys.ParenLeft    -> TilesetOp Tileset.RotateViewsLeft
+    | Keys.ParenRight   -> TilesetOp Tileset.RotateViewsRight
+    | Keys.BraceLeft    -> TilesetOp Tileset.ScreenLayoutCyclePrev
+    | Keys.BraceRight   -> TilesetOp Tileset.ScreenLayoutCycleNext
+    | Keys.BracketLeft  -> TilesetOp Tileset.FocusPrev
     | Keys.BracketRight -> TilesetOp Tileset.FocusNext
+    | Keys.Underscore   -> TilesetOp Tileset.ScreenLayoutFlip
+    | Keys.Minus        -> TilesetOp Tileset.BringFocusToMain
+    | Keys.Equal        -> TilesetOp Tileset.FocusMain
+    | Keys.Plus         -> Resize
     | Keys.Ctrl_z       -> View Fileview.recenter_view
     | Keys.Space        -> View Fileview.recenter_view
-    | Keys.Equal        -> Resize
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
     | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
     | Keys.Ctrl_k       -> Move FilebufferMovements.move_prev_paragraph
@@ -2375,6 +2410,7 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
+  (* Slice.test () ; *)
   (* ScreenConfiguration.test () ; *)
   Ciseau.main () ;
   close_out logs
