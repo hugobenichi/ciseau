@@ -904,7 +904,6 @@ module type FileviewType = sig
   val swap_linebreaking_mode : t -> t
   val recenter_view : t -> t
   val cursor_relative_to_view : v2 -> t -> v2
-  val file_length_string : t -> string
   val get_view : int -> t -> view
 
   val draw : t -> screen -> bool -> unit
@@ -1240,6 +1239,7 @@ module Filebuffer = struct
   type t = {
       filename    : string ;
       filepath    : string ;
+      header      : string ;
       buffer      : string Slice.t ;        (* the file data, line per line *)
       buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
   }
@@ -1255,12 +1255,13 @@ module Filebuffer = struct
     let cleanup () = close_in ch in
     try_finally action cleanup
 
-  let from_lines file lines = (* TODO: refactor with Slice *)
-    let buffer = lines in {
+  let from_lines file lines =
+    let filepath = (Sys.getcwd ()) ^ "/" ^ file in {
       filename      = file ;
-      filepath      = (Sys.getcwd ()) ^ "/" ^ file ;
-      buffer        = buffer ;
-      buflen        = Slice.len buffer ;
+      filepath      = filepath ;
+      header        = filepath ^ "  " ^ (lines |> Slice.len |> string_of_int) ^ "L " ;
+      buffer        = lines ;
+      buflen        = Slice.len lines ;
     }
 
   let init_filebuffer file =
@@ -1452,9 +1453,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       y = y' ;
     }
 
-  let file_length_string t =
-    (string_of_int (buflen t)) ^ "L"
-
   let get_line_numbering_offset t =
     t.view_start + match t.numbering with
     | Absolute        -> 1 ;
@@ -1489,9 +1487,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
   let print_header t screen colors =
     let header_offset = 0 in
     (* PERF: cache this string in screen and only update when length change *)
-    let header = t.filebuffer.Filebuffer.filepath
-                ^ "  " ^ (file_length_string t)
-                ^ "  " ^ (t |> cursor |> v2_to_string)
+    let header = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string)
     in
       Screen.put_line screen header_offset (Block.mk_block header colors)
 
