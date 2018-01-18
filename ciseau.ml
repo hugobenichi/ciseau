@@ -2036,6 +2036,7 @@ end
 module Tileset = struct
 
   type op = Resize of rect
+          | FileviewOp of (Fileview.t -> Fileview.t)
           | RotateViewsLeft
           | RotateViewsRight
           | ScreenLayoutCycleNext
@@ -2090,6 +2091,14 @@ module Tileset = struct
     function
       | Resize screen_size ->
           { t with screen_size = screen_size ; }
+      | FileviewOp fileview_op ->
+          let t' = { t with fileviews = Slice.clone t.fileviews } in
+          t'.focus_index
+            |> Slice.get t'.fileviews
+            |> fileview_op
+            |> Slice.set t'.fileviews t'.focus_index ;
+          t'
+
       | ScreenLayoutCycleNext ->
           { t with screen_config = ScreenConfiguration.cycle_config_layout_next t.screen_config }
       | ScreenLayoutCyclePrev ->
@@ -2241,13 +2250,15 @@ module Ciseau = struct
     | TilesetOp op ->
         { editor with tileset = Tileset.apply_op editor.tileset op }
     | Move fn ->
-        editor
-        (* FIXME *)
-        (* { editor with fileview = Fileview.apply_movement fn editor.fileview } *)
+        let fileview_op = Tileset.FileviewOp (Fileview.apply_movement fn) in {
+          editor with
+          tileset = Tileset.apply_op editor.tileset fileview_op ;
+        }
     | View fn ->
-        editor
-        (* FIXME *)
-        (* { editor with fileview = fn editor.fileview } *)
+        let fileview_op = Tileset.FileviewOp fn in {
+          editor with
+          tileset = Tileset.apply_op editor.tileset fileview_op ;
+        }
       (* cannot happen ?? *)
     | Pending ((Digit n) as d) ->
         queue_pending_command editor d
@@ -2259,10 +2270,10 @@ module Ciseau = struct
         if (n > 0)
           then loop (n - 1) (Fileview.apply_movement fn fb)
           else fb
-      in {
+      in
+      let fileview_op = Tileset.FileviewOp (loop n) in {
         editor with
-        (* FIXME *)
-        (* fileview      = loop n editor.fileview ; *)
+        tileset = Tileset.apply_op editor.tileset fileview_op ;
         pending_input = None ;
       }
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
