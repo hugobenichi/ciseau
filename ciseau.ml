@@ -848,6 +848,9 @@ module Block = struct
     colors  = c ;
   }
 
+  let wrap_string s =
+    mk_block s Config.default.colors.default
+
   let rec adjust_length want_len blk =
     if want_len > blk.len
       then {
@@ -1533,7 +1536,6 @@ module Filebuffer = struct
       filepath    : string ;
       buffer      : string Slice.t ;        (* the file data, line per line *)
       buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
-      atom_buffer : Atom.atom list Slice.t ;  (* parsed atoms from the file data *)
   }
 
   let read_file f =
@@ -1548,13 +1550,11 @@ module Filebuffer = struct
     try_finally action cleanup
 
   let from_lines file lines = (* TODO: refactor with Slice *)
-    let buffer = lines in
-    let atoms = Slice.map Atom.generic_atom_parser buffer in {
+    let buffer = lines in {
       filename      = file ;
       filepath      = (Sys.getcwd ()) ^ "/" ^ file ;
       buffer        = buffer ;
       buflen        = Slice.len buffer ;
-      atom_buffer   = atoms ;
     }
 
   let init_filebuffer file =
@@ -1758,7 +1758,7 @@ module Fileview : (FileviewType with type atom = Atom.atom and type view = text_
 
   let get_line t offset i =
     LineInfo {
-      blocks  = List.map atom_to_block (Slice.get t.filebuffer.atom_buffer (offset + i)) ;
+      blocks = [ offset + i |> Slice.get t.filebuffer.buffer |> Block.wrap_string ]
     }
 
   let get_lines view_start view_max t =
