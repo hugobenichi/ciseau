@@ -607,6 +607,91 @@ module Color = struct
 end
 
 
+(* this is a config module for storing all parameters *)
+module Config = struct
+  open Color
+
+  type colors = {
+    operator      : color_cell ;
+    structure     : color_cell ;
+    string        : color_cell ;
+    spacing       : color_cell ;
+    numbers       : color_cell ;
+    default       : color_cell ;
+    cursor_line   : color_cell ;
+    line_numbers  : color_cell ;
+    focus_header  : color_cell ;
+    header        : color_cell ;
+    status        : color_cell ;
+    user_input    : color_cell ;
+    border        : color_cell ;
+  }
+
+  type cfg = {
+    colors : colors ;
+  }
+
+  let darkgray = Color.Gray 2
+
+  let default : cfg = {
+    colors = {
+      operator = {
+        fg    = green ;
+        bg    = darkgray ;
+      } ;
+      structure = {
+        fg    = red ;
+        bg    = darkgray ;
+      } ;
+      string  = {
+        fg    = yellow ;
+        bg    = darkgray ;
+      } ;
+      spacing = {
+        fg    = darkgray ;
+        bg    = darkgray ;
+      } ;
+      numbers = {
+        fg    = magenta ;
+        bg    = darkgray ;
+      } ;
+      default = {
+        fg    = white ;
+        bg    = darkgray ;
+      } ;
+      cursor_line = {
+        fg    = white ;
+        bg    = Gray 4 ;
+      } ;
+      line_numbers = {
+        fg    = green ;
+        bg    = darkgray ;
+      } ;
+      focus_header = {
+        fg    = darkgray ;
+        bg    = yellow ;
+      } ;
+      header = {
+        fg    = darkgray ;
+        bg    = cyan ;
+      } ;
+      status = {
+        fg    = darkgray ;
+        bg    = white ;
+      } ;
+      user_input = {
+        fg    = white ;
+        bg    = darkgray ;
+      } ;
+      border = {
+        fg    = darkgray ;
+        bg    = Gray 8 ;
+      } ;
+    } ;
+  }
+end
+
+
 module Keys = struct
 
   type key_symbol = Unknown
@@ -1239,107 +1324,6 @@ module Term = struct
 end
 
 
-(* this is a config module for storing all parameters *)
-module Config = struct
-  open Color
-
-  type colors = {
-    operator      : color_cell ;
-    structure     : color_cell ;
-    string        : color_cell ;
-    spacing       : color_cell ;
-    numbers       : color_cell ;
-    default       : color_cell ;
-    cursor_line   : color_cell ;
-    line_numbers  : color_cell ;
-    focus_header  : color_cell ;
-    header        : color_cell ;
-    status        : color_cell ;
-    user_input    : color_cell ;
-    border        : color_cell ;
-  }
-
-  type cfg = {
-    colors : colors ;
-  }
-
-  let darkgray = Color.Gray 2
-
-  let default : cfg = {
-    colors = {
-      operator = {
-        fg    = green ;
-        bg    = darkgray ;
-      } ;
-      structure = {
-        fg    = red ;
-        bg    = darkgray ;
-      } ;
-      string  = {
-        fg    = yellow ;
-        bg    = darkgray ;
-      } ;
-      spacing = {
-        fg    = darkgray ;
-        bg    = darkgray ;
-      } ;
-      numbers = {
-        fg    = magenta ;
-        bg    = darkgray ;
-      } ;
-      default = {
-        fg    = white ;
-        bg    = darkgray ;
-      } ;
-      cursor_line = {
-        fg    = white ;
-        bg    = Gray 4 ;
-      } ;
-      line_numbers = {
-        fg    = green ;
-        bg    = darkgray ;
-      } ;
-      focus_header = {
-        fg    = darkgray ;
-        bg    = yellow ;
-      } ;
-      header = {
-        fg    = darkgray ;
-        bg    = cyan ;
-      } ;
-      status = {
-        fg    = darkgray ;
-        bg    = white ;
-      } ;
-      user_input = {
-        fg    = white ;
-        bg    = darkgray ;
-      } ;
-      border = {
-        fg    = darkgray ;
-        bg    = Gray 8 ;
-      } ;
-    } ;
-  }
-
-  let color_for_atom cfg kind =
-    let open Atom in
-      match kind with
-      | Text      -> cfg.colors.default
-      | Digit     -> cfg.colors.numbers
-      | Spacing   -> cfg.colors.spacing
-      | Operator  -> cfg.colors.operator
-      | Structure -> cfg.colors.structure
-      | Line      -> cfg.colors.default
-      | Control   -> cfg.colors.default
-      | Other     -> cfg.colors.default
-      | Ending    -> cfg.colors.default
-      | Tab       -> cfg.colors.default
-end
-
-open Config
-
-
 module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and type segment = Segment.t) = struct
 
   module Default = struct
@@ -1516,8 +1500,23 @@ let count_tabs s start stop =
   in
     loop 0 start stop
 
+let color_for_atom cfg kind =
+  let open Config in
+  let open Atom in
+    match kind with
+    | Text      -> cfg.colors.default
+    | Digit     -> cfg.colors.numbers
+    | Spacing   -> cfg.colors.spacing
+    | Operator  -> cfg.colors.operator
+    | Structure -> cfg.colors.structure
+    | Line      -> cfg.colors.default
+    | Control   -> cfg.colors.default
+    | Other     -> cfg.colors.default
+    | Ending    -> cfg.colors.default
+    | Tab       -> cfg.colors.default
+
 let atom_to_block { Atom.kind ; Atom.line ; Atom.start ; Atom.stop } =
-  let colors = Config.color_for_atom Config.default kind in
+  let colors = color_for_atom Config.default kind in
   match kind with
   | Atom.Tab -> Block.mk_block tab_to_spaces colors
   | _   -> {
