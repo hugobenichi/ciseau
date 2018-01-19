@@ -888,7 +888,7 @@ module type FileviewType = sig
   type screen
 
   val init_fileview : int -> filebuffer -> t (* TODO: eliminate view_h param *)
-  val apply_movement : (t -> v2) -> t -> t
+  val apply_movement : (t -> v2) -> int -> t -> t
   val cursor : t -> v2
   val cursor_next_char : t -> v2
   val cursor_prev_char : t -> v2
@@ -1375,21 +1375,21 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
   let view_diff t =
     t.view_diff
 
-  let adjust_view t =
+  let adjust_view view_height t =
     if t.cursor.y < t.view_start then
       { t with
         view_start  = t.cursor.y ;
       }
-    else if t.cursor.y > t.view_start + t.view_diff then
+    else if t.cursor.y > t.view_start + view_height then
       { t with
-        view_start  = t.cursor.y - t.view_diff ;
+        view_start  = t.cursor.y - view_height ;
       }
     else t
 
   let adjust_cursor vec2 t = { t with cursor = vec2 }
 
-  let apply_movement fn t =
-    t |> adjust_cursor (fn t) |> adjust_view
+  let apply_movement fn view_height t =
+    t |> adjust_cursor (fn t) |> adjust_view view_height
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -1735,7 +1735,7 @@ end
 module Tileset = struct
 
   type op = Resize of rect
-          | FileviewOp of (Fileview.t -> Fileview.t)
+          | FileviewOp of (int -> Fileview.t -> Fileview.t)
           | RotateViewsLeft
           | RotateViewsRight
           | ScreenLayoutCycleNext
@@ -1794,7 +1794,7 @@ module Tileset = struct
           let t' = { t with fileviews = Slice.clone t.fileviews } in
           t'.focus_index
             |> Slice.get t'.fileviews
-            |> fileview_op
+            |> fileview_op (t.screen_size.bottomright.y - 2)
             |> Slice.set t'.fileviews t'.focus_index ;
           t'
 
@@ -1845,7 +1845,7 @@ module Ciseau = struct
                | Resize
                | TilesetOp of Tileset.op
                | Move of (Fileview.t -> v2)
-               | View of (Fileview.t -> Fileview.t)
+               | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
 
   let max_repetition = 10000
@@ -1954,7 +1954,7 @@ module Ciseau = struct
           tileset = Tileset.apply_op editor.tileset fileview_op ;
         }
     | View fn ->
-        let fileview_op = Tileset.FileviewOp fn in {
+        let fileview_op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in {
           editor with
           tileset = Tileset.apply_op editor.tileset fileview_op ;
         }
@@ -1965,9 +1965,9 @@ module Ciseau = struct
   let apply_command_with_repetition n command editor =
     match command with
     | Move fn ->
-      let rec loop n fb =
+      let rec loop n view_height fb =
         if (n > 0)
-          then loop (n - 1) (Fileview.apply_movement fn fb)
+          then loop (n - 1) view_height (Fileview.apply_movement fn view_height fb)
           else fb
       in
       let fileview_op = Tileset.FileviewOp (loop n) in {
