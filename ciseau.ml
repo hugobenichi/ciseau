@@ -433,7 +433,8 @@ module Config = struct
   }
 
   type cfg = {
-    colors : colors ;
+    colors    : colors ;
+    page_size : int;
   }
 
   let darkgray = Color.Gray 2
@@ -493,6 +494,7 @@ module Config = struct
         bg    = Gray 8 ;
       } ;
     } ;
+    page_size = 50;
   }
 end
 
@@ -887,7 +889,7 @@ module type FileviewType = sig
   type filebuffer
   type screen
 
-  val init_fileview : int -> filebuffer -> t (* TODO: eliminate view_h param *)
+  val init_fileview : filebuffer -> t
   val apply_movement : (t -> v2) -> int -> t -> t
   val cursor : t -> v2
   val cursor_next_char : t -> v2
@@ -899,10 +901,9 @@ module type FileviewType = sig
   val current_line : t -> string
   val current_char : t -> char
   val buflen : t -> int
-  val view_diff : t -> int
   val swap_line_number_mode : t -> t
   val swap_linebreaking_mode : t -> t
-  val recenter_view : t -> t
+  val recenter_view : int -> t -> t
   val cursor_relative_to_view : v2 -> t -> v2
   val get_view : int -> t -> view
 
@@ -1335,16 +1336,14 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     filebuffer    : filebuffer ;
     cursor        : v2 ;       (* current position in file space: x = column index, y = row index *)
     view_start    : int ;      (* index of first row in view *)
-    view_diff     : int ;      (* number of rows in the view *)
     numbering     : numbering_mode ;
     linebreaking  : Block.linebreak ;
   }
 
-  let init_fileview view_h filebuffer = {
+  let init_fileview filebuffer = {
     filebuffer    = filebuffer ;
     cursor        = v2_zero ;
     view_start    = 0 ;
-    view_diff     = view_h - 1;
     numbering     = CursorRelative ;
     linebreaking  = Block.Overflow ;
   }
@@ -1371,9 +1370,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
 
   let buflen t =
     Slice.len t.filebuffer.buffer
-
-  let view_diff t =
-    t.view_diff
 
   let adjust_view view_height t =
     if t.cursor.y < t.view_start then
@@ -1404,8 +1400,8 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     | Overflow  -> Clip
     in { t with linebreaking = new_mode }
 
-  let recenter_view t =
-    let new_start = t.cursor.y - t.view_diff / 2 in
+  let recenter_view view_height t =
+    let new_start = t.cursor.y - view_height / 2 in
     { t with view_start = max new_start 0 }
 
   let move_cursor_left2 t = {
@@ -1526,7 +1522,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
 
   let mk_offset_table t bounds =
     let table_len =
-      min (max bounds.y t.view_diff) (t.filebuffer.Filebuffer.buflen - t.view_start)
+      min bounds.y (t.filebuffer.Filebuffer.buflen - t.view_start)
     in
     let offset0 = -t.view_start in
     let line_offset_table = Array.make table_len offset0 in
@@ -1594,8 +1590,8 @@ module FilebufferMovements = struct
 
   let move_cursor_up   = move_n_up 1 ;;
   let move_cursor_down = move_n_down 1 ;;
-  let move_page_up   t = move_n_up ((view_diff t) + 1) t ;;
-  let move_page_down t = move_n_down ((view_diff t) + 1) t ;;
+  let move_page_up   t = move_n_up Config.default.page_size t ;;
+  let move_page_down t = move_n_down Config.default.page_size t ;;
 
   (* BUG ? '_' is considered to be a word separation *)
   let move_next_word t =
@@ -1902,7 +1898,7 @@ module Ciseau = struct
     |] |> Slice.wrap_array
 
   let test_mk_fileviews term_dim =
-    Slice.map (Fileview.init_fileview (term_dim.y - 3))
+    Slice.map Fileview.init_fileview
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
@@ -2011,8 +2007,8 @@ module Ciseau = struct
     | Keys.Minus        -> TilesetOp Tileset.BringFocusToMain
     | Keys.Equal        -> TilesetOp Tileset.FocusMain
     | Keys.Plus         -> Resize
-    | Keys.Ctrl_z       -> View Fileview.recenter_view
-    | Keys.Space        -> View Fileview.recenter_view
+    | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
+    | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
     | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
     | Keys.Ctrl_k       -> Move FilebufferMovements.move_prev_paragraph
