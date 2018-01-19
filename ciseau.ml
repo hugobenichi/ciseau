@@ -743,9 +743,20 @@ type line_info = LineInfo of {
   blocks      : Block.t list ;
 }
 
+type color_info = ColorInfo of {
+  segment : Segment.t ;
+  colors  : Color.color_cell ;
+}
+
+let zero_color_info = ColorInfo {
+  segment = Segment.mk_segment 0 0 0 ;
+  colors  = Config.default.colors.default ;
+}
+
 type text_view = TextView of {
   offset        : int ;
   lines         : line_info list ;
+  colors        : color_info Slice.t ;
   cursor        : v2 ;
   linebreaking  : Block.linebreak ;
 }
@@ -770,6 +781,8 @@ module type FramebufferType = sig
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
   val put_block         : v2 -> Block.t -> t -> unit
+  val put_block_no_color : v2 -> Block.t -> t -> unit
+  val put_color         : Segment.t -> Color.color_cell -> t -> unit
 end
 
 
@@ -786,6 +799,8 @@ module type ScreenType = sig
   val init_screen     : framebuffer -> rect -> t
   val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
   val put_line        : t -> int -> block -> unit
+
+  val put_text        : t -> text_view -> unit
 end
 
 
@@ -1181,6 +1196,19 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.bg_colors vec_offset len' bg ;
       Bytes.blit_string text offset t.text vec_offset len'
 
+  let put_block_no_color pos { Block.text ; Block.offset ; Block.len } t =
+    let vec_offset = v2_to_offset t.window.x pos in
+    let len' = min len (t.len - vec_offset) in
+    if vec_offset < t.len then
+      Bytes.blit_string text offset t.text vec_offset len'
+
+  let put_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
+    let vec_offset = v2_to_offset t.window.x pos in
+    let len' = min len (t.len - vec_offset) in
+    if vec_offset < t.len then
+      Array.fill t.fg_colors vec_offset len' fg ;
+      Array.fill t.bg_colors vec_offset len' bg ;
+
 end
 
 
@@ -1233,6 +1261,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let put_line screen y_offset blk =
     put_block screen (mk_v2 0 y_offset) blk |> ignore
     (* put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore *)
+
+  let put_text t (TextView { offset ; lines ; colors ; cursor ; (* TODO: linebreaking *) }) =
+    ()
 end
 
 
@@ -1468,6 +1499,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     TextView {
       offset        = get_line_numbering_offset t ;
       lines         = get_lines t.view_start maxlines t ;
+      colors        = Slice.init_slice 0 0 zero_color_info ;
       cursor        = t.cursor ;
       linebreaking  = t.linebreaking ;
     }
@@ -1504,9 +1536,9 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
   let print_file_buffer fileview screen =
     let y_offset = 1 in
     let n_lines = (Screen.get_height screen) - 1 in
+(* create function for making a textview, such that line number are automatically added *)
     let TextView { offset ; lines ; linebreaking } = get_view n_lines fileview in
     lines |> prepend_line_numbers offset
-          (* TODO: fuse selection into the block list *)
           |> Screen.put_block_lines screen linebreaking y_offset
 
   let draw t screen is_focused =
