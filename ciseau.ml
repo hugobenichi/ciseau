@@ -107,6 +107,9 @@ module Slice = struct
   let wrap_array data =
     mk_slice 0 (alen data) data
 
+  let of_list ls =
+    ls |> Array.of_list |> wrap_array
+
   let init_slice_fn len fn =
     Array.init len fn |> wrap_array
 
@@ -738,25 +741,35 @@ module Segment = struct
   }
 end
 
-(* Represents the result of projecting a line of text inside a drawing view rectangle *)
-type line_info = LineInfo of {
-  blocks      : Block.t list ;
-}
+module Line = struct
+  type t = {
+    blocks : Block.t list ;
+    len : int
+  }
 
-type color_info = ColorInfo of {
-  segment : Segment.t ;
-  colors  : Color.color_cell ;
-}
+  let len { len } = len
 
-let zero_color_info = ColorInfo {
-  segment = Segment.mk_segment 0 0 0 ;
-  colors  = Config.default.colors.default ;
+  let blit_line bytes offset maxlen { blocks ; len } =
+    (* TODO *)
+    ()
+end
+
+module ColorBlock = struct
+  type t = {
+    segment : Segment.t ;
+    colors  : Color.color_cell ;
+  }
+end
+
+let zero_color_info = {
+  ColorBlock.segment = Segment.mk_segment 0 0 0 ;
+  ColorBlock.colors  = Config.default.colors.default ;
 }
 
 type text_view = TextView of {
   offset        : int ;
-  lines         : line_info list ;
-  colors        : color_info Slice.t ;
+  lines         : Line.t list ;
+  colors        : ColorBlock.t Slice.t ;
   cursor        : v2 ;
   linebreaking  : Block.linebreak ;
 }
@@ -1262,18 +1275,19 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     put_block screen (mk_v2 0 y_offset) blk |> ignore
     (* put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore *)
 
-  let put_text t (TextView { offset ; lines ; colors ; cursor ; (* TODO: linebreaking *) }) =
-    ()
+  let put_text screen (TextView { offset ; lines ; colors ; cursor ; (* TODO: linebreaking *) }) =
+    lines |> Slice.of_list
+          |> Slice.iteri (fun i l -> Framebuffer.put_block_no_color (mk_v2 0 (offset + i)) l screen.frame_buffer)
 end
 
 
 module Filebuffer = struct
   type t = {
-      filename    : string ;
-      filepath    : string ;
-      header      : string ;
-      buffer      : string Slice.t ;        (* the file data, line per line *)
-      buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
+    filename    : string ;
+    filepath    : string ;
+    header      : string ;
+    buffer      : string Slice.t ;        (* the file data, line per line *)
+    buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
   }
 
   let read_file f =
