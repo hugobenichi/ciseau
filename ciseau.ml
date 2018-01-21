@@ -12,6 +12,8 @@ let logs = open_out "/tmp/ciseau.log"
 
 let conj ls x = List.cons x ls
 
+let id x = x
+
 (* TODO replace with List.init in ocaml 4.06 *)
 let mk_list size e =
   let rec loop acc n =
@@ -661,6 +663,9 @@ module Block = struct
   let wrap_string s =
     mk_block s Config.default.colors.default
 
+  let zero_block =
+    wrap_string ""
+
   let rec adjust_length want_len blk =
     if want_len > blk.len
       then {
@@ -673,6 +678,17 @@ module Block = struct
         len = want_len ;
       }
 
+  let split l b =
+    let blen = b.len in
+    if blen <= l
+      then
+        (b, zero_block)
+      else
+        let t1 = String.sub b.text 0 l in
+        let t2 = String.sub b.text l (blen - l) in
+        ( mk_block t1 b.colors, mk_block t2 b.colors)
+
+  (* TODO: delete me *)
   let split_at l b =
     let blen = b.len in
     if blen <= l
@@ -741,17 +757,69 @@ module Segment = struct
   }
 end
 
-module Line = struct
+module Byteslice = struct
   type t = {
-    blocks : Block.t list ;
-    len : int
+    bytes   : Bytes.t ;
+    offset  : int;
+    len     : int ;
   }
 
-  let len { len } = len
+  let mk_byteslice bytes offset len = {
+    bytes = bytes ;
+    offset = offset ;
+    len  = len ;
+  }
 
-  let blit_line bytes offset maxlen { blocks ; len } =
-    (* TODO *)
-    ()
+  let zero_byteslice =
+    mk_byteslice Bytes.empty 0 0
+
+  let drop n { bytes ; offset ; len } =
+    mk_byteslice bytes (offset + n) (len - n)
+
+  open Block
+
+  (* TODO: in the future, Block should be moved to Bytes.t instead of string, which will allow to
+   * harmonize evertyhing to Byteslice bliting *)
+  let blit_block
+      { bytes ; offset = bytes_offset ; len = bytes_len }
+      { text ; offset = block_offset ; len = block_len } =
+    let blit_len = min block_len bytes_len in
+    Bytes.blit_string text block_offset bytes bytes_offset blit_len ;
+    blit_len
+
+end
+
+module Line = struct
+
+  type t = {
+    blocks  : Block.t list ;
+  }
+
+  let mk_line blocks = {
+    blocks  = blocks ;
+  }
+
+  let zero_line =
+    mk_line []
+
+  (* Blit 'left' chars of from line into 'bytes' starting at 'offset'.
+   * Returns a new line that contains what did not fit in 'left' *)
+  let rec blit_blocks byteslice =
+    function
+    | [] ->
+        zero_line
+    | ls when byteslice.Byteslice.len = 0 ->
+        mk_line ls
+    | b :: t when b.Block.len > byteslice.Byteslice.len ->
+        let (left, right) = Block.split byteslice.Byteslice.len b in
+        blit_blocks byteslice [left] |> ignore ;
+        mk_line (right :: t)
+    | b :: t -> (* covers b.len <= byteslice.len *)
+        let blit_len = Byteslice.blit_block byteslice b in
+        blit_blocks (Byteslice.drop blit_len byteslice) t
+
+  let blit_line byteslice { blocks } =
+    blit_blocks byteslice blocks
 end
 
 module ColorBlock = struct
@@ -768,7 +836,7 @@ let zero_color_info = {
 
 type text_view = TextView of {
   offset        : int ;
-  lines         : Line.t list ;
+  lines         : Line.t list ; (* TODO: convert to slice ! *)
   colors        : ColorBlock.t Slice.t ;
   cursor        : v2 ;
   linebreaking  : Block.linebreak ;
@@ -794,8 +862,8 @@ module type FramebufferType = sig
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
   val put_block         : v2 -> Block.t -> t -> unit
-  val put_block_no_color : v2 -> Block.t -> t -> unit
   val put_color         : Segment.t -> Color.color_cell -> t -> unit
+  val get_bytes_slice   : v2 -> int -> t -> Byteslice.t
 end
 
 
@@ -811,8 +879,7 @@ module type ScreenType = sig
   val get_height      : t -> int
   val init_screen     : framebuffer -> rect -> t
   val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
-  val put_line        : t -> int -> block -> unit
-
+  val put_block_line  : t -> int -> block -> unit
   val put_text        : t -> text_view -> unit
 end
 
@@ -1209,18 +1276,17 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.bg_colors vec_offset len' bg ;
       Bytes.blit_string text offset t.text vec_offset len'
 
-  let put_block_no_color pos { Block.text ; Block.offset ; Block.len } t =
-    let vec_offset = v2_to_offset t.window.x pos in
-    let len' = min len (t.len - vec_offset) in
-    if vec_offset < t.len then
-      Bytes.blit_string text offset t.text vec_offset len'
-
   let put_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
     if vec_offset < t.len then
       Array.fill t.fg_colors vec_offset len' fg ;
-      Array.fill t.bg_colors vec_offset len' bg ;
+      Array.fill t.bg_colors vec_offset len' bg
+
+  let get_bytes_slice pos len t =
+    let vec_offset = v2_to_offset t.window.x pos in
+    let len' = min len (t.len - vec_offset) in
+    Byteslice.mk_byteslice t.text vec_offset len'
 
 end
 
@@ -1271,13 +1337,55 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       |> (Block.get_line_breaker linebreak) bounds
       |> List.iteri put_block_line
 
-  let put_line screen y_offset blk =
+  let put_block_line screen y_offset blk =
     put_block screen (mk_v2 0 y_offset) blk |> ignore
     (* put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore *)
 
+  let get_bytes_slice_for_line screen line_y_offset =
+    let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
+    Framebuffer.get_bytes_slice start screen.size.x screen.frame_buffer
+
+  (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid.
+   * Return what did not fit, or zero_line if there is nothing left to put on screen *)
+  let put_line screen line_y_offset line =
+    if line_y_offset < screen.size.y
+      then Line.blit_line (get_bytes_slice_for_line screen line_y_offset) line
+      else Line.zero_line
+
+  (* Same as put_line, but keeps writing the remaining of 'line' on the next row until all of 'line' is drawn.
+   * Returns the row y offset of the following line. *)
+  let rec put_line_with_wrapping screen line_y_offset line =
+    if line = Line.zero_line
+      then line_y_offset
+      else line |> put_line screen line_y_offset
+                |> put_line_with_wrapping screen (line_y_offset + 1)
+
+  let put_lines_with_wrapping screen line_y_offset lines =
+    let len = Slice.len lines in
+    let offset_map = Slice.init_slice len len (-1) in
+    let rec loop y line_idx =
+      if line_idx < len then
+        let line = Slice.get lines line_idx in
+        let y' = put_line_with_wrapping screen y line in
+        Slice.set offset_map line_idx y ;
+        loop y' (line_idx + 1)
+    in
+      loop 0 0 ;
+      offset_map
+
+  let put_lines_with_clipping screen line_y_offset lines =
+    let put_line_fn line_idx line =
+        put_line screen (line_y_offset + line_idx) line |> ignore
+    in
+      Slice.iteri put_line_fn lines ;
+      Slice.init_slice_fn (Slice.len lines) id
+
   let put_text screen (TextView { offset ; lines ; colors ; cursor ; (* TODO: linebreaking *) }) =
-    lines |> Slice.of_list
-          |> Slice.iteri (fun i l -> Framebuffer.put_block_no_color (mk_v2 0 (offset + i)) l screen.frame_buffer)
+    let offset_map = lines |> Slice.of_list |> put_lines_with_clipping screen offset in
+    (* TODO: put colors *)
+    (* TODO: compute cursor position *)
+    ignore offset_map
+
 end
 
 
@@ -1500,9 +1608,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     | CursorRelative  -> -t.cursor.y
 
   let get_line t offset i =
-    LineInfo {
-      blocks = [ offset + i |> Slice.get t.filebuffer.buffer |> Block.wrap_string ]
-    }
+    Line.mk_line [ offset + i |> Slice.get t.filebuffer.buffer |> Block.wrap_string ]
 
   let get_lines view_start view_max t =
     let start = t.view_start in
@@ -1531,7 +1637,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     (* PERF: cache this string in screen and only update when length change *)
     let header = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string)
     in
-      Screen.put_line screen header_offset (Block.mk_block header colors)
+      Screen.put_block_line screen header_offset (Block.mk_block header colors)
 
   let mk_line_number_block n =
     LineNumberCache.get n
@@ -1540,7 +1646,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     let rec loop n acc =
       function
       | [] -> List.rev acc
-      | LineInfo { blocks } :: t ->
+      | { Line.blocks } :: t ->
           let acc' = mk_line_number_block n |> conj blocks |> List.cons border_block |> conj acc
           in
             loop (n + 1) acc' t
@@ -2028,8 +2134,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-      Screen.put_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ;
-      Screen.put_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input)
+      Screen.put_block_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ;
+      Screen.put_block_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input)
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
