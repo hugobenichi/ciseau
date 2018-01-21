@@ -1370,7 +1370,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         Slice.set offset_map line_idx y ;
         loop y' (line_idx + 1)
     in
-      loop 0 0 ;
+      loop line_y_offset 0 ;
       offset_map
 
   let put_lines_with_clipping screen line_y_offset lines =
@@ -1380,8 +1380,13 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       Slice.iteri put_line_fn lines ;
       Slice.init_slice_fn (Slice.len lines) id
 
-  let put_text screen (TextView { offset ; lines ; colors ; cursor ; (* TODO: linebreaking *) }) =
-    let offset_map = lines |> Slice.of_list |> put_lines_with_clipping screen offset in
+  let put_text screen (TextView { offset ; lines ; colors ; cursor ; linebreaking }) =
+    let putter =
+      match linebreaking with
+      | Clip      -> put_lines_with_clipping
+      | Overflow  -> put_lines_with_wrapping
+    in
+    let offset_map = lines |> Slice.of_list |> putter screen offset in
     (* TODO: put colors *)
     (* TODO: compute cursor position *)
     ignore offset_map
@@ -1634,10 +1639,17 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
 
   let print_header t screen colors =
     let header_offset = 0 in
-    (* PERF: cache this string in screen and only update when length change *)
+    (* TODO: put cursor position in separate block *)
     let header = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string)
     in
-      Screen.put_block_line screen header_offset (Block.mk_block header colors)
+      (* Screen.put_block_line screen header_offset (Block.mk_block header colors) *)
+      Screen.put_text screen (TextView {
+        offset        = 0 ;
+        lines         = [Line.mk_line [Block.mk_block header colors]] ;
+        colors        = Slice.init_slice 0 0 zero_color_info ;
+        cursor        = v2_zero ;
+        linebreaking  = Block.Clip ;
+      })
 
   let mk_line_number_block n =
     LineNumberCache.get n
@@ -1661,13 +1673,25 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     lines |> prepend_line_numbers offset
           |> Screen.put_block_lines screen linebreaking y_offset
 
+  let print_file_buffer2 fileview screen =
+    let n_lines = (Screen.get_height screen) - 1 in
+    let TextView { offset ; lines ; linebreaking } = get_view n_lines fileview in
+    Screen.put_text screen (TextView {
+      offset        = 1 ; (* 1 below header *)
+      lines         = lines |> prepend_line_numbers offset (* TODO line number should be done by get_view ? *)
+                            |> List.map Line.mk_line ;
+      colors        = Slice.init_slice 0 0 zero_color_info ;
+      cursor        = v2_zero ;
+      linebreaking  = linebreaking ;
+    })
+
   let draw t screen is_focused =
     let header_colors =
       if is_focused then Config.default.colors.focus_header else Config.default.colors.header
     in
     print_header t screen header_colors ;
     print_default_fill screen ; (* PERF: only put default filling when needed *)
-    print_file_buffer t screen
+    print_file_buffer2 t screen
 
   let get_line_len_hacky t y_offset =
     y_offset |> Slice.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
@@ -2134,8 +2158,18 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-      Screen.put_block_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ;
-      Screen.put_block_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input)
+      (* Screen.put_block_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ; *)
+      (* Screen.put_block_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input) *)
+      Screen.put_text editor.status_screen (TextView {
+        offset        = 0 ;
+        lines         = [
+          Line.mk_line [Block.mk_block status_text1 Config.default.colors.status] ;
+          Line.mk_line [Block.mk_block status_text2 Config.default.colors.user_input]
+        ] ;
+        colors        = Slice.init_slice 0 0 zero_color_info ;
+        cursor        = v2_zero ;
+        linebreaking  = Block.Clip ;
+      })
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
