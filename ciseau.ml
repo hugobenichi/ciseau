@@ -678,7 +678,9 @@ module Block = struct
         len = want_len ;
       }
 
-  let split l b =
+  let split_block l b =
+    assert (l >= 0) ;
+    assert (l <= b.len) ;
     let blen = b.len in
     if blen <= l
       then
@@ -764,17 +766,22 @@ module Byteslice = struct
     len     : int ;
   }
 
-  let mk_byteslice bytes offset len = {
-    bytes = bytes ;
-    offset = offset ;
-    len  = len ;
-  }
+  let mk_byteslice bytes offset len =
+    assert (len >= 0) ;
+    {
+      bytes = bytes ;
+      offset = offset ;
+      len  = len ;
+    }
 
   let zero_byteslice =
     mk_byteslice Bytes.empty 0 0
 
   let drop n { bytes ; offset ; len } =
-    mk_byteslice bytes (offset + n) (len - n)
+    assert (n >= 0) ;
+    assert (n <= len) ;
+    let n' = min len n in
+    mk_byteslice bytes (offset + n') (len - n')
 
   open Block
 
@@ -811,7 +818,7 @@ module Line = struct
     | ls when byteslice.Byteslice.len = 0 ->
         mk_line ls
     | b :: t when b.Block.len > byteslice.Byteslice.len ->
-        let (left, right) = Block.split byteslice.Byteslice.len b in
+        let (left, right) = Block.split_block byteslice.Byteslice.len b in
         blit_blocks byteslice [left] |> ignore ;
         mk_line (right :: t)
     | b :: t -> (* covers b.len <= byteslice.len *)
@@ -1284,6 +1291,8 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.bg_colors vec_offset len' bg
 
   let get_bytes_slice pos len t =
+    assert (pos.x <= t.window.x) ;
+    assert (pos.y <= t.window.y) ;
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
     Byteslice.mk_byteslice t.text vec_offset len'
@@ -1315,9 +1324,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let get_height t =
     t.size.y
 
-  let init_screen cb { topleft = offset ; bottomright = size } = {
-    size                = size ;
-    screen_offset       = offset ;
+  let init_screen cb { topleft ; bottomright } = {
+    size                = bottomright <-> topleft ;
+    screen_offset       = topleft ;
     frame_buffer        = cb ;
   }
 
@@ -1725,9 +1734,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
         mk_v2 t.cursor.x (t.cursor.y - t.view_start)
     | Block.Overflow ->
         let table = mk_offset_table t bounds in
-        output_string logs
-          ("[ " ^ (table |> Array.map string_of_int |> Array.to_list |> String.concat" ") ^ " ]\n") ;
-        flush logs ;
         text_space_to_screen_space table t bounds.x t.cursor
 end
 
@@ -2054,13 +2060,10 @@ module Ciseau = struct
     mk_rect 0 0 term_dim.x (term_dim.y - 2)
 
   let status_screen_dimensions term_dim =
-    mk_rect 0 (term_dim.y - 2) term_dim.x 2
+    mk_rect 0 (term_dim.y - 2) term_dim.x term_dim.y
 
   let mk_status_screen frame_buffer term_dim =
     term_dim |> status_screen_dimensions |> Screen.init_screen frame_buffer
-
-  let mk_main_screen frame_buffer term_dim =
-    term_dim |> main_screen_dimensions |> Screen.init_screen frame_buffer
 
   let mk_window_size_descr { x = w ; y = h } =
     "(" ^ (string_of_int w) ^ " x " ^ (string_of_int h) ^ ")"
@@ -2164,7 +2167,7 @@ module Ciseau = struct
         offset        = 0 ;
         lines         = [
           Line.mk_line [Block.mk_block status_text1 Config.default.colors.status] ;
-          Line.mk_line [Block.mk_block status_text2 Config.default.colors.user_input]
+          Line.mk_line [Block.mk_block status_text2 Config.default.colors.user_input] ;
         ] ;
         colors        = Slice.init_slice 0 0 zero_color_info ;
         cursor        = v2_zero ;
