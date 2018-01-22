@@ -1,9 +1,19 @@
 (* next TODOs:
- *  - optimize a bit memory usage
- *      - The Framebuffer should only be cleared selectively by subrectangles to redraw stuff that needs to be redrawn
- *      - introduce an array slice type and replace a bunch of list with arrays or array slices
  *
- *  - add highlight fusion to get_view and support selections, cursor line highlight, ...
+ *  - fix the screen division for tiles that leaves some blank lines in Rows and RowMajor layout when
+ *    available vertical space is not a multiple of the number of screens
+ *  - fix crash when moving cursor into lower part of a tile, then changing the tilelayout so that the cursor
+ *    relative position becomes hiddern
+ *      - either the screens should all be recentered on layout change, or the cursor should be moved
+ *  - put back colors and restore status, header colors, and line number colors
+ *  - migrate cursor position computation to put_text
+ *  - hammer the code with asserts and search for more bugs in the drawing
+ *  - remove drawing API v2 and a bunch of other code
+ *  - optimize memory usage
+ *    - move lines and line info to Slice
+ *    - remove color_cell from block
+ *    - eliminate more string concatenations
+ *    - The Framebuffer should only be cleared selectively by subrectangles to redraw stuff that needs to be redrawn
  *)
 
 
@@ -999,6 +1009,7 @@ module type FileviewType = sig
   val cursor_next_line : t -> v2
   val cursor_prev_line : t -> v2
   val is_current_char_valid : t -> bool
+  val adjust_view : int -> t -> t
   val adjust_cursor : v2 -> t -> t
   val current_line : t -> string
   val current_char : t -> char
@@ -1664,6 +1675,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     LineNumberCache.get n
 
   let prepend_line_numbers offset lines =
+    (* TODO: use different color in Relative numbering and Absolute numbering mode *)
     let rec loop n acc =
       function
       | [] -> List.rev acc
@@ -1965,6 +1977,7 @@ module Tileset = struct
       )
 
   let apply_op t =
+    (* TODO: BUG - apply adjust_view on all views drawn for Resize, ScreenLayout*, RotateViews* *)
     function
       | Resize screen_size ->
           { t with screen_size = screen_size ; }
