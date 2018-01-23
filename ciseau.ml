@@ -780,7 +780,7 @@ end
 module Textview = struct
   type t = {
     offset        : int ;
-    lines         : Line.t list ; (* TODO: convert to slice ! *)
+    lines         : Line.t Slice.t ;
     colors        : Colorblock.t Slice.t ;
     cursor        : v2 ;
     linebreaking  : linebreak ;
@@ -1305,7 +1305,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   open Textview
 
   let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
-    let offset_map = lines |> Slice.of_list |> put_lines linebreaking screen offset in
+    let offset_map = lines |> put_lines linebreaking screen offset in
     Slice.iter
       (let open Colorblock in
       fun { segment ; colors } ->
@@ -1608,7 +1608,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     (* at last, return object *)
     let open Textview in {
       offset        = 0 ;
-      lines         = lines |> Slice.to_array |> Array.to_list ; (* PERF: use slice directly *)
+      lines         = lines ;
       colors        = mk_header_colorblock screen is_focused ;
       cursor        = t.cursor ;
       linebreaking  = t.linebreaking ;
@@ -2050,10 +2050,10 @@ module Ciseau = struct
       let open Textview in
       Screen.put_text editor.status_screen {
         offset        = 0 ;
-        lines         = [
+        lines         = Slice.wrap_array [|
           Line.mk_line [Block.mk_block status_text1] ;
           Line.mk_line [Block.mk_block status_text2] ;
-        ] ;
+        |] ;
         colors        = editor.status_colorblocks ;
         cursor        = v2_zero ;
         linebreaking  = Clip ;
