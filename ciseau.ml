@@ -20,8 +20,6 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
-let conj ls x = List.cons x ls
-
 (* TODO replace with List.init in ocaml 4.06 *)
 let mk_list size e =
   let rec loop acc n =
@@ -879,12 +877,11 @@ module type FramebufferType = sig
   type bytevector
   type segment
 
-  val init_frame_buffer : v2 -> t
+  val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
-  val put_block         : v2 -> Block.t -> t -> unit
   val put_color         : Segment.t -> Color.color_cell -> t -> unit (* TODO: use Colorblock ? *)
-  val get_bytes_slice   : v2 -> int -> t -> Byteslice.t
+  val get_byteslice     : v2 -> int -> t -> Byteslice.t
 end
 
 
@@ -899,8 +896,6 @@ module type ScreenType = sig
   val get_width       : t -> int
   val get_height      : t -> int
   val init_screen     : framebuffer -> rect -> t
-  val put_block_lines : t -> Block.linebreak -> int -> block list list -> unit
-  val put_block_line  : t -> int -> block -> unit
   val put_text        : t -> text_view -> unit
 end
 
@@ -1022,7 +1017,6 @@ module type FileviewType = sig
   val swap_linebreaking_mode : t -> t
   val recenter_view : int -> t -> t
   val cursor_relative_to_view : v2 -> t -> v2
-  val get_view : int -> t -> view
   val assemble_text_view : t -> screen -> bool -> view
 
   val draw : t -> screen -> bool -> unit
@@ -1264,7 +1258,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
         loop 0 bvec
   end
 
-  let init_frame_buffer vec2 =
+  let init_framebuffer vec2 =
     let len = vec2.x * vec2.y
     in {
       text        = Bytes.make len Default.text ;
@@ -1290,15 +1284,6 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
-  let put_block pos { Block.text ; Block.offset ; Block.len ; Block.colors } t =
-    let vec_offset = v2_to_offset t.window.x pos in
-    let len' = min len (t.len - vec_offset) in
-    if vec_offset < t.len then
-      let { Color.fg ; Color.bg } = colors in
-      Array.fill t.fg_colors vec_offset len' fg ;
-      Array.fill t.bg_colors vec_offset len' bg ;
-      Bytes.blit_string text offset t.text vec_offset len'
-
   let put_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
@@ -1307,7 +1292,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.fg_colors vec_offset len' fg ;
       Array.fill t.bg_colors vec_offset len' bg
 
-  let get_bytes_slice pos len t =
+  let get_byteslice pos len t =
     assert (pos.x <= t.window.x) ;
     assert (pos.y <= t.window.y) ;
     let vec_offset = v2_to_offset t.window.x pos in
@@ -1347,35 +1332,15 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     frame_buffer        = cb ;
   }
 
-  let put_block screen start blk =
-    let start' = start <+> screen.screen_offset in
-    Framebuffer.put_block start' blk screen.frame_buffer ;
-    mk_v2 (start.x + blk.Block.len) start.y
-
-  let put_block_lines screen linebreak y_offset block_lines =
-    let start = mk_v2 0 y_offset in
-    let bounds = screen.size <-> start in
-    let mk_line_start i = mk_v2 0 (y_offset + i) in
-    let put_block_line i blks =
-      blks |> List.fold_left (put_block screen) (mk_line_start i) |> ignore
-    in
-    block_lines
-      |> (Block.get_line_breaker linebreak) bounds
-      |> List.iteri put_block_line
-
-  let put_block_line screen y_offset blk =
-    put_block screen (mk_v2 0 y_offset) blk |> ignore
-    (* put_block screen (mk_v2 0 y_offset) (Block.adjust_length screen.size.x blk) |> ignore *)
-
-  let get_bytes_slice_for_line screen line_y_offset =
+  let get_byteslice_for_line screen line_y_offset =
     let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
-    Framebuffer.get_bytes_slice start screen.size.x screen.frame_buffer
+    Framebuffer.get_byteslice start screen.size.x screen.frame_buffer
 
   (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid.
    * Return what did not fit, or zero_line if there is nothing left to put on screen *)
   let put_line screen line_y_offset line =
     if line_y_offset < screen.size.y
-      then Line.blit_line (get_bytes_slice_for_line screen line_y_offset) line
+      then Line.blit_line (get_byteslice_for_line screen line_y_offset) line
       else Line.zero_line
 
   (* Same as put_line, but keeps writing the remaining of 'line' on the next row until all of 'line' is drawn.
@@ -1641,36 +1606,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       y = y' ;
     }
 
-  let get_line_numbering_offset t =
-    t.view_start + match t.numbering with
-    | Absolute        -> 1 ;
-    | CursorRelative  -> -t.cursor.y
-
-  let get_line t offset i =
-    Line.mk_line [ offset + i |> Slice.get t.filebuffer.buffer |> Block.wrap_string ]
-
-  let get_lines view_start view_max t =
-    let start = t.view_start in
-    let stop = min (buflen t) (start + view_max) in
-    Array.init (stop - start) (get_line t start) |> Array.to_list
-
-  let get_view maxlines t =
-    TextView {
-      offset        = get_line_numbering_offset t ;
-      lines         = get_lines t.view_start maxlines t ;
-      colors        = Slice.init_slice 0 0 zero_color_info ;
-      cursor        = t.cursor ;
-      linebreaking  = t.linebreaking ;
-    }
-
-  let border_block =
-    Block.mk_block " " Config.default.colors.border
-
-  let print_default_fill screen =
-    let fill_y_offset = 1 in
-    mk_list (Screen.get_height screen) [border_block]
-      |> Screen.put_block_lines screen Block.Overflow fill_y_offset
-
+  (* TODO: merge into assemble_text_view *)
   let mk_header_colorblock screen is_focused =
     let header_colors =
       if is_focused
@@ -1680,57 +1616,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       header_colors
         |> Colorblock.mk_colorblock 0 0 (Screen.get_width screen)
         |> Slice.init_slice 1 1
-
-  let print_header t screen is_focused =
-      Screen.put_text screen (TextView {
-        offset        = 0 ;
-        lines         = [Line.mk_line [
-          Block.mk_block t.filebuffer.Filebuffer.header Config.default.colors.default ;
-          Block.mk_block (t |> cursor |> v2_to_string) Config.default.colors.default ;
-        ]] ;
-        colors        = mk_header_colorblock screen is_focused ;
-        cursor        = v2_zero ;
-        linebreaking  = Block.Clip ;
-      })
-
-  (* DELETEME, and children *)
-  let mk_line_number_block n =
-    LineNumberCache.get n
-
-  (* DELETEME, and children *)
-  let prepend_line_numbers offset lines =
-    (* TODO: use different color in Relative numbering and Absolute numbering mode *)
-    let rec loop n acc =
-      function
-      | [] -> List.rev acc
-      | { Line.blocks } :: t ->
-          let acc' = mk_line_number_block n |> conj blocks |> List.cons border_block |> conj acc
-          in
-            loop (n + 1) acc' t
-    in
-      loop offset [] lines
-
-  (* DELETEME, and children *)
-  let print_file_buffer fileview screen =
-    let y_offset = 1 in
-    let n_lines = (Screen.get_height screen) - 1 in
-(* create function for making a textview, such that line number are automatically added *)
-    let TextView { offset ; lines ; linebreaking } = get_view n_lines fileview in
-    lines |> prepend_line_numbers offset
-          |> Screen.put_block_lines screen linebreaking y_offset
-
-  (* DELETEME, and children *)
-  let print_file_buffer2 fileview screen =
-    let n_lines = (Screen.get_height screen) - 1 in
-    let TextView { offset ; lines ; linebreaking } = get_view n_lines fileview in
-    Screen.put_text screen (TextView {
-      offset        = 1 ; (* 1 below header *)
-      lines         = lines |> prepend_line_numbers offset (* TODO line number should be done by get_view ? *)
-                            |> List.map Line.mk_line ;
-      colors        = Slice.init_slice 0 0 zero_color_info ;
-      cursor        = v2_zero ;
-      linebreaking  = linebreaking ;
-    })
 
   let get_line_len_hacky t y_offset =
     y_offset |> Slice.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
@@ -1758,6 +1643,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     let x' = x mod width in
     mk_v2 x' y'
 
+  (* TODO: migrate to new put_text api *)
   let cursor_relative_to_view bounds t =
     match t.linebreaking with
     | Block.Clip ->
@@ -1773,6 +1659,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     let screen_height = Screen.get_height screen in
     let lines = Slice.init_slice screen_height screen_height default_line in
     (* put header first *)
+    (* TODO: ensure header does not overflow when in Overflow mode ! *)
     Slice.set lines 0 (Line.mk_line [
       Block.mk_block t.filebuffer.Filebuffer.header Config.default.colors.default ;
       Block.mk_block (t |> cursor |> v2_to_string) Config.default.colors.default ;
@@ -1805,10 +1692,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
 
   let draw t screen is_focused =
     assemble_text_view t screen is_focused |> Screen.put_text screen
-    (* PERF: merge these three calls into one ! *)
-    (* print_header t screen is_focused ; *)
-    (* print_default_fill screen ; (* PERF: only put default filling when needed *) *)
-    (* print_file_buffer2 t screen *)
 end
 
 
@@ -2157,7 +2040,7 @@ module Ciseau = struct
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
-    let frame_buffer = Framebuffer.init_frame_buffer term_dim in
+    let frame_buffer = Framebuffer.init_framebuffer term_dim in
     let filebuffers = test_mk_filebuffers file in
     let fileviews = test_mk_fileviews term_dim filebuffers
     in {
@@ -2182,7 +2065,7 @@ module Ciseau = struct
 
   let resize_editor editor =
     let term_dim = Term.get_terminal_dimensions () in
-    let frame_buffer = Framebuffer.init_frame_buffer term_dim
+    let frame_buffer = Framebuffer.init_framebuffer term_dim
     in {
       editor with
       term_dim        = term_dim ;
