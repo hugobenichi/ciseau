@@ -22,8 +22,6 @@ let logs = open_out "/tmp/ciseau.log"
 
 let conj ls x = List.cons x ls
 
-let id x = x
-
 (* TODO replace with List.init in ocaml 4.06 *)
 let mk_list size e =
   let rec loop acc n =
@@ -767,6 +765,9 @@ module Segment = struct
     pos = mk_v2 x y ;
     len = l ;
   }
+
+  let translate { x ; y } { pos ; len } =
+    mk_segment (x + pos.x) (y + pos.y) len
 end
 
 module Byteslice = struct
@@ -839,22 +840,25 @@ module Line = struct
     blit_blocks byteslice blocks
 end
 
-module ColorBlock = struct
+module Colorblock = struct
   type t = {
     segment : Segment.t ;
     colors  : Color.color_cell ;
   }
+
+  let mk_colorblock x y len colors = {
+    segment = Segment.mk_segment x y len ;
+    colors  = colors;
+  }
 end
 
-let zero_color_info = {
-  ColorBlock.segment = Segment.mk_segment 0 0 0 ;
-  ColorBlock.colors  = Config.default.colors.default ;
-}
+let zero_color_info =
+  Colorblock.mk_colorblock 0 0 0 Config.default.colors.default
 
 type text_view = TextView of {
   offset        : int ;
   lines         : Line.t list ; (* TODO: convert to slice ! *)
-  colors        : ColorBlock.t Slice.t ;
+  colors        : Colorblock.t Slice.t ;
   cursor        : v2 ;
   linebreaking  : Block.linebreak ;
 }
@@ -879,7 +883,7 @@ module type FramebufferType = sig
   val clear             : t -> unit
   val render            : v2 -> t -> bytevector -> unit
   val put_block         : v2 -> Block.t -> t -> unit
-  val put_color         : Segment.t -> Color.color_cell -> t -> unit
+  val put_color         : Segment.t -> Color.color_cell -> t -> unit (* TODO: use Colorblock ? *)
   val get_bytes_slice   : v2 -> int -> t -> Byteslice.t
 end
 
@@ -1297,6 +1301,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
   let put_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
+    assert (vec_offset < t.len) ;
     if vec_offset < t.len then
       Array.fill t.fg_colors vec_offset len' fg ;
       Array.fill t.bg_colors vec_offset len' bg
@@ -1398,16 +1403,24 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         put_line screen (line_y_offset + line_idx) line |> ignore
     in
       Slice.iteri put_line_fn lines ;
-      Slice.init_slice_fn (Slice.len lines) id
+      Slice.init_slice (Slice.len lines) (Slice.len lines) 0
+
+  let put_lines =
+    let open Block in
+    function
+    | Clip      -> put_lines_with_clipping
+    | Overflow  -> put_lines_with_wrapping
 
   let put_text screen (TextView { offset ; lines ; colors ; cursor ; linebreaking }) =
-    let putter =
-      match linebreaking with
-      | Clip      -> put_lines_with_clipping
-      | Overflow  -> put_lines_with_wrapping
-    in
-    let offset_map = lines |> Slice.of_list |> putter screen offset in
-    (* TODO: put colors *)
+    let offset_map = lines |> Slice.of_list |> put_lines linebreaking screen offset in
+    Slice.iter
+      (let open Colorblock in
+      fun { segment ; colors } ->
+        let y_offset = Slice.get offset_map segment.pos.y in
+        let v2_offset = mk_v2 screen.screen_offset.x (screen.screen_offset.y + y_offset) in
+        let segment' = Segment.translate v2_offset segment in
+        Framebuffer.put_color segment' colors screen.frame_buffer)
+      colors ;
     (* TODO: compute cursor position *)
     ignore offset_map
 
@@ -1658,15 +1671,17 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       |> Screen.put_block_lines screen Block.Overflow fill_y_offset
 
   let print_header t screen colors =
-    let header_offset = 0 in
-    (* TODO: put cursor position in separate block *)
-    let header = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string)
+    (* TODO: hoist this color block in the Screen.t struct *)
+    let colorblock = Colorblock.mk_colorblock 0 0 (Screen.get_width screen) colors
     in
-      (* Screen.put_block_line screen header_offset (Block.mk_block header colors) *)
       Screen.put_text screen (TextView {
         offset        = 0 ;
-        lines         = [Line.mk_line [Block.mk_block header colors]] ;
-        colors        = Slice.init_slice 0 0 zero_color_info ;
+        lines         = [Line.mk_line [
+          (* TODO hoist block in Screen.t struct *)
+          Block.mk_block t.filebuffer.Filebuffer.header colors ;
+          Block.mk_block (t |> cursor |> v2_to_string) colors ;
+        ]] ;
+        colors        = Slice.init_slice 1 1 colorblock ;
         cursor        = v2_zero ;
         linebreaking  = Block.Clip ;
       })
@@ -2172,7 +2187,11 @@ module Ciseau = struct
                       ^ editor.term_dim_descr
                       ^ (Stats.format_stats editor.stats)
     in
-    let status_text2 = editor.user_input
+    let status_text2 = editor.user_input in
+    let w = Screen.get_width editor.status_screen in
+    (* TODO: hoist these blocks in editor struct *)
+    let colorblock1 = Colorblock.mk_colorblock 0 0 w Config.default.colors.status in
+    let colorblock2 = Colorblock.mk_colorblock 0 1 w Config.default.colors.user_input
     in
       (* Screen.put_block_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ; *)
       (* Screen.put_block_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input) *)
@@ -2182,7 +2201,7 @@ module Ciseau = struct
           Line.mk_line [Block.mk_block status_text1 Config.default.colors.status] ;
           Line.mk_line [Block.mk_block status_text2 Config.default.colors.user_input] ;
         ] ;
-        colors        = Slice.init_slice 0 0 zero_color_info ;
+        colors        = Slice.wrap_array [| colorblock1 ; colorblock2 |] ;
         cursor        = v2_zero ;
         linebreaking  = Block.Clip ;
       })
