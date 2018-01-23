@@ -1670,18 +1670,24 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     mk_list (Screen.get_height screen) [border_block]
       |> Screen.put_block_lines screen Block.Overflow fill_y_offset
 
-  let print_header t screen colors =
-    (* TODO: hoist this color block in the Screen.t struct *)
-    let colorblock = Colorblock.mk_colorblock 0 0 (Screen.get_width screen) colors
+  let mk_header_colorblock screen is_focused =
+    let header_colors =
+      if is_focused
+        then Config.default.colors.focus_header
+        else Config.default.colors.header
     in
+      header_colors
+        |> Colorblock.mk_colorblock 0 0 (Screen.get_width screen)
+        |> Slice.init_slice 1 1
+
+  let print_header t screen is_focused =
       Screen.put_text screen (TextView {
         offset        = 0 ;
         lines         = [Line.mk_line [
-          (* TODO hoist block in Screen.t struct *)
-          Block.mk_block t.filebuffer.Filebuffer.header colors ;
-          Block.mk_block (t |> cursor |> v2_to_string) colors ;
+          Block.mk_block t.filebuffer.Filebuffer.header Config.default.colors.default ;
+          Block.mk_block (t |> cursor |> v2_to_string) Config.default.colors.default ;
         ]] ;
-        colors        = Slice.init_slice 1 1 colorblock ;
+        colors        = mk_header_colorblock screen is_focused ;
         cursor        = v2_zero ;
         linebreaking  = Block.Clip ;
       })
@@ -1722,10 +1728,8 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     })
 
   let draw t screen is_focused =
-    let header_colors =
-      if is_focused then Config.default.colors.focus_header else Config.default.colors.header
-    in
-    print_header t screen header_colors ;
+    (* PERF: merge these three calls into one ! *)
+    print_header t screen is_focused ;
     print_default_fill screen ; (* PERF: only put default filling when needed *)
     print_file_buffer2 t screen
 
@@ -2081,6 +2085,7 @@ module Ciseau = struct
     filebuffers     : Filebuffer.t Slice.t ; (* TODO: turn this into buffer management layer *)
     user_input      : string ;
     pending_input   : pending_command ;
+    status_colorblocks : Colorblock.t Slice.t ;
     stats           : Stats.t
   }
 
@@ -2125,7 +2130,10 @@ module Ciseau = struct
 
       user_input      = "" ;
       pending_input   = None;
-
+      status_colorblocks = Slice.wrap_array [|
+        Colorblock.mk_colorblock 0 0 term_dim.x Config.default.colors.status ;
+        Colorblock.mk_colorblock 0 1 term_dim.x Config.default.colors.user_input ;
+      |] ;
       stats           = Stats.init_stats () ;
     }
 
@@ -2187,21 +2195,15 @@ module Ciseau = struct
                       ^ editor.term_dim_descr
                       ^ (Stats.format_stats editor.stats)
     in
-    let status_text2 = editor.user_input in
-    let w = Screen.get_width editor.status_screen in
-    (* TODO: hoist these blocks in editor struct *)
-    let colorblock1 = Colorblock.mk_colorblock 0 0 w Config.default.colors.status in
-    let colorblock2 = Colorblock.mk_colorblock 0 1 w Config.default.colors.user_input
+    let status_text2 = editor.user_input
     in
-      (* Screen.put_block_line editor.status_screen 0 (Block.mk_block status_text1 Config.default.colors.status) ; *)
-      (* Screen.put_block_line editor.status_screen 1 (Block.mk_block status_text2 Config.default.colors.user_input) *)
       Screen.put_text editor.status_screen (TextView {
         offset        = 0 ;
         lines         = [
           Line.mk_line [Block.mk_block status_text1 Config.default.colors.status] ;
           Line.mk_line [Block.mk_block status_text2 Config.default.colors.user_input] ;
         ] ;
-        colors        = Slice.wrap_array [| colorblock1 ; colorblock2 |] ;
+        colors        = editor.status_colorblocks ;
         cursor        = v2_zero ;
         linebreaking  = Block.Clip ;
       })
