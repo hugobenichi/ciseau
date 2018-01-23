@@ -679,7 +679,6 @@ module Block = struct
         let t2 = String.sub b.text l (blen - l) in
         (mk_block t1, mk_block t2)
 
-  type linebreak    = Clip | Overflow
 end
 
 module Segment = struct
@@ -731,6 +730,8 @@ module Byteslice = struct
 
 end
 
+type linebreak = Clip | Overflow
+
 module Line = struct
 
   type t = {
@@ -776,16 +777,15 @@ module Colorblock = struct
   }
 end
 
-let zero_color_info =
-  Colorblock.mk_colorblock 0 0 0 Config.default.colors.default
-
-type text_view = TextView of {
-  offset        : int ;
-  lines         : Line.t list ; (* TODO: convert to slice ! *)
-  colors        : Colorblock.t Slice.t ;
-  cursor        : v2 ;
-  linebreaking  : Block.linebreak ;
-}
+module Textview = struct
+  type t = {
+    offset        : int ;
+    lines         : Line.t list ; (* TODO: convert to slice ! *)
+    colors        : Colorblock.t Slice.t ;
+    cursor        : v2 ;
+    linebreaking  : linebreak ;
+  }
+end
 
 module type BytevectorType = sig
   type t
@@ -822,7 +822,7 @@ module type ScreenType = sig
   val get_width       : t -> int
   val get_height      : t -> int
   val init_screen     : framebuffer -> rect -> t
-  val put_text        : t -> text_view -> unit
+  val put_text        : t -> Textview.t -> unit
 end
 
 
@@ -1298,12 +1298,13 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       Slice.init_slice (Slice.len lines) (Slice.len lines) 0
 
   let put_lines =
-    let open Block in
     function
     | Clip      -> put_lines_with_clipping
     | Overflow  -> put_lines_with_wrapping
 
-  let put_text screen (TextView { offset ; lines ; colors ; cursor ; linebreaking }) =
+  open Textview
+
+  let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
     let offset_map = lines |> Slice.of_list |> put_lines linebreaking screen offset in
     Slice.iter
       (let open Colorblock in
@@ -1381,16 +1382,14 @@ end
          empty line, while move_next_word must absolutely do.
          Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
          representation. *)
-module Fileview : (FileviewType with type view = text_view and type filebuffer = Filebuffer.t and type screen = Screen.t) = struct
+module Fileview : (FileviewType with type view = Textview.t and type filebuffer = Filebuffer.t and type screen = Screen.t) = struct
   open Filebuffer
 
-  type view       = text_view
+  type view       = Textview.t
   type filebuffer = Filebuffer.t
   type screen     = Screen.t
 
   type numbering_mode = Absolute | CursorRelative
-
-
 
   module LineNumberCache = struct
     let line_number_cache_t1 = Sys.time () ;;
@@ -1420,7 +1419,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     cursor        : v2 ;       (* current position in file space: x = column index, y = row index *)
     view_start    : int ;      (* index of first row in view *)
     numbering     : numbering_mode ;
-    linebreaking  : Block.linebreak ;
+    linebreaking  : linebreak ;
   }
 
   let init_fileview filebuffer = {
@@ -1428,7 +1427,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Block.Overflow ;
+    linebreaking  = Overflow ;
   }
 
   let line_at t =
@@ -1477,7 +1476,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     in { t with numbering = new_mode }
 
   let swap_linebreaking_mode t =
-    let open Block in
     let new_mode = match t.linebreaking with
     | Clip      -> Overflow
     | Overflow  -> Clip
@@ -1572,9 +1570,9 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
   (* TODO: migrate to new put_text api *)
   let cursor_relative_to_view bounds t =
     match t.linebreaking with
-    | Block.Clip ->
+    | Clip ->
         mk_v2 t.cursor.x (t.cursor.y - t.view_start)
-    | Block.Overflow ->
+    | Overflow ->
         let table = mk_offset_table t bounds in
         text_space_to_screen_space table t bounds.x t.cursor
 
@@ -1608,7 +1606,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     (* TODO: line number colors *)
     (* TODO: cursor line x column color *)
     (* at last, return object *)
-    TextView {
+    let open Textview in {
       offset        = 0 ;
       lines         = lines |> Slice.to_array |> Array.to_list ; (* PERF: use slice directly *)
       colors        = mk_header_colorblock screen is_focused ;
@@ -2049,7 +2047,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-      Screen.put_text editor.status_screen (TextView {
+      let open Textview in
+      Screen.put_text editor.status_screen {
         offset        = 0 ;
         lines         = [
           Line.mk_line [Block.mk_block status_text1] ;
@@ -2057,8 +2056,8 @@ module Ciseau = struct
         ] ;
         colors        = editor.status_colorblocks ;
         cursor        = v2_zero ;
-        linebreaking  = Block.Clip ;
-      })
+        linebreaking  = Clip ;
+      }
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
