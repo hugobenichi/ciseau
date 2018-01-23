@@ -1023,6 +1023,7 @@ module type FileviewType = sig
   val recenter_view : int -> t -> t
   val cursor_relative_to_view : v2 -> t -> v2
   val get_view : int -> t -> view
+  val assemble_text_view : t -> screen -> bool -> view
 
   val draw : t -> screen -> bool -> unit
 end
@@ -1508,7 +1509,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     let hardcoded_size  = 10000 + negative_offset
 
     let format_n n =
-      Printf.sprintf "%3d " (n - negative_offset)
+      Printf.sprintf "%4d " (n - negative_offset)
 
     let mk_block n =
       Block.mk_block (format_n n) Config.default.colors.line_numbers
@@ -1692,9 +1693,11 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
         linebreaking  = Block.Clip ;
       })
 
+  (* DELETEME, and children *)
   let mk_line_number_block n =
     LineNumberCache.get n
 
+  (* DELETEME, and children *)
   let prepend_line_numbers offset lines =
     (* TODO: use different color in Relative numbering and Absolute numbering mode *)
     let rec loop n acc =
@@ -1707,6 +1710,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     in
       loop offset [] lines
 
+  (* DELETEME, and children *)
   let print_file_buffer fileview screen =
     let y_offset = 1 in
     let n_lines = (Screen.get_height screen) - 1 in
@@ -1715,6 +1719,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     lines |> prepend_line_numbers offset
           |> Screen.put_block_lines screen linebreaking y_offset
 
+  (* DELETEME, and children *)
   let print_file_buffer2 fileview screen =
     let n_lines = (Screen.get_height screen) - 1 in
     let TextView { offset ; lines ; linebreaking } = get_view n_lines fileview in
@@ -1726,12 +1731,6 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       cursor        = v2_zero ;
       linebreaking  = linebreaking ;
     })
-
-  let draw t screen is_focused =
-    (* PERF: merge these three calls into one ! *)
-    print_header t screen is_focused ;
-    print_default_fill screen ; (* PERF: only put default filling when needed *)
-    print_file_buffer2 t screen
 
   let get_line_len_hacky t y_offset =
     y_offset |> Slice.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
@@ -1766,6 +1765,50 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     | Block.Overflow ->
         let table = mk_offset_table t bounds in
         text_space_to_screen_space table t bounds.x t.cursor
+
+  let default_line =
+    Line.mk_line [ Block.mk_block " ~" Config.default.colors.border ]
+
+  let assemble_text_view t screen is_focused =
+    let screen_height = Screen.get_height screen in
+    let lines = Slice.init_slice screen_height screen_height default_line in
+    (* put header first *)
+    Slice.set lines 0 (Line.mk_line [
+      Block.mk_block t.filebuffer.Filebuffer.header Config.default.colors.default ;
+      Block.mk_block (t |> cursor |> v2_to_string) Config.default.colors.default ;
+    ]) ;
+    (* put text *)
+    let text_height = screen_height - 1 in
+    let start = t.view_start in
+    let stop = min (buflen t) (start + text_height) in
+    let line_n_offset =
+      match t.numbering with
+      | Absolute        -> 1 ;
+      | CursorRelative  -> -t.cursor.y
+    in
+    for line_idx = start to stop - 1 do
+      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.wrap_string in
+      let n = LineNumberCache.get (line_idx + line_n_offset) in
+      Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ; l ])
+    done ;
+    (* TODO: left border color column *)
+    (* TODO: line number colors *)
+    (* TODO: cursor line x column color *)
+    (* at last, return object *)
+    TextView {
+      offset        = 0 ;
+      lines         = lines |> Slice.to_array |> Array.to_list ; (* PERF: use slice directly *)
+      colors        = mk_header_colorblock screen is_focused ;
+      cursor        = t.cursor ;
+      linebreaking  = t.linebreaking ;
+    }
+
+  let draw t screen is_focused =
+    assemble_text_view t screen is_focused |> Screen.put_text screen
+    (* PERF: merge these three calls into one ! *)
+    (* print_header t screen is_focused ; *)
+    (* print_default_fill screen ; (* PERF: only put default filling when needed *) *)
+    (* print_file_buffer2 t screen *)
 end
 
 
