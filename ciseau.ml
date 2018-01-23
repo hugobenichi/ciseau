@@ -656,33 +656,16 @@ module Block = struct
     text    : string ;
     offset  : int ;
     len     : int ;
-    colors  : Color.color_cell ;
   }
 
-  let mk_block t c = {
+  let mk_block t = {
     text    = t ;
     offset  = 0 ;
     len     = slen t ;
-    colors  = c ;
   }
 
-  let wrap_string s =
-    mk_block s Config.default.colors.default
-
   let zero_block =
-    wrap_string ""
-
-  let rec adjust_length want_len blk =
-    if want_len > blk.len
-      then {
-        blk with
-        text = blk.text ^ (String.make (want_len - blk.len) ' ') ;
-        len = want_len ;
-      }
-      else {
-        blk with
-        len = want_len ;
-      }
+    mk_block ""
 
   let split_block l b =
     assert (l >= 0) ;
@@ -694,66 +677,9 @@ module Block = struct
       else
         let t1 = String.sub b.text 0 l in
         let t2 = String.sub b.text l (blen - l) in
-        ( mk_block t1 b.colors, mk_block t2 b.colors)
-
-  (* TODO: delete me *)
-  let split_at l b =
-    let blen = b.len in
-    if blen <= l
-      then (b, None)
-      else
-        let t1 = String.sub b.text 0 l in
-        let t2 = String.sub b.text l (blen - l) in
-        ( mk_block t1 b.colors, Some (mk_block t2 b.colors) )
-
-  let break_block_line left ls =
-    let rec loop left acc ls =
-      match ls with
-        | [] -> (acc, ls)
-        | _ when left < 1 -> (acc, ls)
-        | b :: r ->
-            match split_at left b with
-            | (b1, Some b2) -> (b1 :: acc, b2 :: r)
-            | (_, None) -> loop (left - b.len) (b :: acc) r
-    in
-      let (rev_first_line, remainder) = loop left [] ls
-      in  (List.rev rev_first_line, remainder)
-
-  let rec drop n ls =
-    if n = 0
-      then []
-      else match ls with
-        | [] -> []
-        | h :: t -> h :: (drop (n - 1) t)
-
-  let break_block_line_text bounds block_lines =
-    let rec loop acc =
-      function
-      | [] -> acc
-      | blocks :: rest_lines ->
-          match break_block_line bounds.x blocks with
-          | (blocks', [])         -> loop (blocks' :: acc) rest_lines
-          | (blocks', remainder)  -> loop (blocks' :: acc) (remainder :: rest_lines)
-    in
-      block_lines |> loop [] |> List.rev |> drop bounds.y
-
-  let clip_block_line_text bounds block_lines =
-    let rec loop acc =
-      function
-      | [] -> acc
-      | blocks :: rest_lines ->
-          let (blocks', _) = break_block_line bounds.x blocks in
-          loop (blocks' :: acc) rest_lines
-    in
-      block_lines |> loop [] |> List.rev |> drop bounds.y
+        (mk_block t1, mk_block t2)
 
   type linebreak    = Clip | Overflow
-
-  let get_line_breaker =
-    function
-    | Clip      -> clip_block_line_text
-    | Overflow  -> break_block_line_text
-
 end
 
 module Segment = struct
@@ -1477,7 +1403,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       Printf.sprintf "%4d " (n - negative_offset)
 
     let mk_block n =
-      Block.mk_block (format_n n) Config.default.colors.line_numbers
+      Block.mk_block (format_n n)
 
     let cache =
       Array.init hardcoded_size mk_block
@@ -1653,7 +1579,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
         text_space_to_screen_space table t bounds.x t.cursor
 
   let default_line =
-    Line.mk_line [ Block.mk_block " ~" Config.default.colors.border ]
+    Line.mk_line [ Block.mk_block " ~" ]
 
   let assemble_text_view t screen is_focused =
     let screen_height = Screen.get_height screen in
@@ -1661,8 +1587,8 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
     (* put header first *)
     (* TODO: ensure header does not overflow when in Overflow mode ! *)
     Slice.set lines 0 (Line.mk_line [
-      Block.mk_block t.filebuffer.Filebuffer.header Config.default.colors.default ;
-      Block.mk_block (t |> cursor |> v2_to_string) Config.default.colors.default ;
+      Block.mk_block t.filebuffer.Filebuffer.header ;
+      Block.mk_block (t |> cursor |> v2_to_string) ;
     ]) ;
     (* put text *)
     let text_height = screen_height - 1 in
@@ -1674,7 +1600,7 @@ module Fileview : (FileviewType with type view = text_view and type filebuffer =
       | CursorRelative  -> -t.cursor.y
     in
     for line_idx = start to stop - 1 do
-      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.wrap_string in
+      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.mk_block in
       let n = LineNumberCache.get (line_idx + line_n_offset) in
       Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ; l ])
     done ;
@@ -2126,8 +2052,8 @@ module Ciseau = struct
       Screen.put_text editor.status_screen (TextView {
         offset        = 0 ;
         lines         = [
-          Line.mk_line [Block.mk_block status_text1 Config.default.colors.status] ;
-          Line.mk_line [Block.mk_block status_text2 Config.default.colors.user_input] ;
+          Line.mk_line [Block.mk_block status_text1] ;
+          Line.mk_line [Block.mk_block status_text2] ;
         ] ;
         colors        = editor.status_colorblocks ;
         cursor        = v2_zero ;
