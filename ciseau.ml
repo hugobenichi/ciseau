@@ -855,7 +855,6 @@ module type FileviewType = sig
   val swap_line_number_mode : t -> t
   val swap_linebreaking_mode : t -> t
   val recenter_view : int -> t -> t
-  val cursor_relative_to_view : screen -> t -> v2
   val assemble_text_view : t -> screen -> bool -> view
 
   val draw : t -> screen -> bool -> unit
@@ -1221,10 +1220,33 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     | Clip      -> put_lines_with_clipping
     | Overflow  -> put_lines_with_wrapping
 
+  let text_space_to_screen_space offset_map w { x ; y } =
+    let y' = y + (Slice.get offset_map y) + (x / w) in
+    let x' = x mod w in
+    mk_v2 x' y'
+
+  let put_cursor linebreaking offset_map screen textview_position =
+    let corrected_textview_position =
+      match linebreaking with
+        | Clip ->
+            (* TODO: how to properly take into account overflow in Clip mode ? horizontal scrolling ?? *)
+            textview_position
+        | Overflow ->
+            (* TODO: apply offset map in Overflow mode *)
+            textview_position
+            (* text_space_to_screen_space offset_map screen.size.x textview_position *)
+    in
+    let screen_position =
+      corrected_textview_position <+> (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
+    in
+    let frame_position = screen_position <+> screen.screen_offset in
+    Framebuffer.put_cursor frame_position screen.frame_buffer
+
   open Textview
 
   let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
     let offset_map = lines |> put_lines linebreaking screen offset in
+
     Slice.iter
       (let open Colorblock in
       fun { segment ; colors } ->
@@ -1233,12 +1255,10 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         let segment' = Segment.translate v2_offset segment in
         Framebuffer.put_color segment' colors screen.frame_buffer)
       colors ;
-    match cursor with
-    | Some pos -> Framebuffer.put_cursor pos screen.frame_buffer
-    | None -> () ;
-    (* TODO: compute cursor position *)
-    ignore offset_map
 
+    match cursor with
+    | Some textview_pos -> put_cursor linebreaking offset_map screen textview_pos
+    | None -> ()
 end
 
 
@@ -1453,57 +1473,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     }
 
   (* TODO: merge into assemble_text_view *)
-  let mk_header_colorblock screen is_focused =
-    let header_colors =
-      if is_focused
-        then Config.default.colors.focus_header
-        else Config.default.colors.header
-    in
-      header_colors
-        |> Colorblock.mk_colorblock 0 0 (Screen.get_width screen)
-        |> Slice.init_slice 1 1
-
-  let get_line_len_hacky t y_offset =
-    y_offset |> Slice.get t.filebuffer.buffer |> slen (* TODO: take into account '\t' characters *)
-
-  let mk_offset_table t bounds =
-    let table_len =
-      min bounds.y (t.filebuffer.Filebuffer.buflen - t.view_start)
-    in
-    let offset0 = -t.view_start in
-    let line_offset_table = Array.make table_len offset0 in
-    let rec loop i offset =
-      if i < table_len
-        then
-          let line_len = get_line_len_hacky t (i + t.view_start) in
-          let offset' = offset + (line_len / bounds.x) in
-          line_offset_table.(i) <- offset ;
-          loop (i + 1) offset'
-        else
-          line_offset_table
-    in
-      loop 0 offset0
-
-  let text_space_to_screen_space line_offset_table t width { x ; y } =
-    let y' = y + line_offset_table.(y - t.view_start) + (x / width) in
-    let x' = x mod width in
-    mk_v2 x' y'
-
-  let cursor_relative_to_view screen t =
-    let screen_bounds = Screen.get_size screen in
-    let screen_offset = Screen.get_offset screen in
-    let screen_position =
-      match t.linebreaking with
-        | Clip ->
-            (* BUG: how to properly take into account overflow ? horizontal scrolling ?? *)
-            mk_v2 t.cursor.x (t.cursor.y - t.view_start)
-        | Overflow ->
-            (* TODO: Pass in the real offset table, do not recompute it *)
-            let table = mk_offset_table t screen_bounds in
-            text_space_to_screen_space table t screen_bounds.x t.cursor
-    in
-      screen_position <+> screen_offset <+> (mk_v2 5 1)  (* +5 for line numbers, +1 for header *)
-
   let default_line =
     Line.mk_line [ Block.mk_block " ~" ]
 
@@ -1533,13 +1502,23 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ; l ])
     done ;
 
+    (* header color block *)
+    let header_color =
+      if is_focused
+        then Config.default.colors.focus_header
+        else Config.default.colors.header
+    in
+    let header_colorblock =
+      Colorblock.mk_colorblock 0 0 (Screen.get_width screen) header_color
+    in
+
     (* TODO: left border color column *)
     (* TODO: line number colors *)
     (* TODO: cursor line x column color *)
 
     let cursor =
       if is_focused
-        then Some (cursor_relative_to_view screen t)
+        then Some (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
         else None
     in
 
@@ -1547,7 +1526,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     let open Textview in {
       offset        = 0 ;
       lines         = lines ;
-      colors        = mk_header_colorblock screen is_focused ;
+      colors        = Slice.wrap_array [| header_colorblock  |];
       cursor        = cursor ;
       linebreaking  = t.linebreaking ;
     }
