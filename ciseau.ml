@@ -1,16 +1,3 @@
-(* next TODOs:
- *
- *  - fix crash when moving cursor into lower part of a tile, then changing the tilelayout so that the cursor
- *    relative position becomes hiddern
- *      - either the screens should all be recentered on layout change, or the cursor should be moved
- *  - put back line number colors, column border
- *  - migrate cursor position computation to put_text
- *  - hammer the code with asserts and search for more bugs in the drawing
- *  - optimize memory usage
- *    - The Framebuffer should only be cleared selectively by subrectangles to redraw stuff that needs to be redrawn
- *)
-
-
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
@@ -1245,8 +1232,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   open Textview
 
   let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
+    (* First, push text to framebuffer and get the line breaking offset map *)
     let offset_map = lines |> put_lines linebreaking screen offset in
-
+    (* Using the offset map, push colors *)
     Slice.iter
       (let open Colorblock in
       fun { segment ; colors } ->
@@ -1255,7 +1243,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         let segment' = Segment.translate v2_offset segment in
         Framebuffer.put_color segment' colors screen.frame_buffer)
       colors ;
-
+    (* Finally compute and set cursor if this is the focused screen *)
     match cursor with
     | Some textview_pos -> put_cursor linebreaking offset_map screen textview_pos
     | None -> ()
@@ -2098,3 +2086,22 @@ let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
   Ciseau.main () ;
   close_out logs
+
+
+(* next TODOs:
+ *
+ *  - finish implemeting Overflow correction for cursor
+ *  - fix cursor not draging a fileview in some tilelayout:
+ *      - either the screens should all be recentered on layout change, or the cursor should be moved
+ *  - put back line number colors, column border:
+ *    - change the put_color api to take Column, Line, Rectangle shapes
+ *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
+ *  - hammer the code with asserts and search for more bugs in the drawing
+ *  - write function docs and comments
+ *
+ * next features:
+ *  - finish file navigation
+ *  - word selections ?
+ *  - find
+ *  - tokenizer + static keyword hightlightning
+ *)
