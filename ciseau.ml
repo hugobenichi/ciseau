@@ -686,7 +686,7 @@ module Textview = struct
     offset        : int ;
     lines         : Line.t Slice.t ;
     colors        : Colorblock.t Slice.t ;
-    cursor        : v2 ;
+    cursor        : v2 option ;
     linebreaking  : linebreak ;
   }
 end
@@ -709,9 +709,10 @@ module type FramebufferType = sig
 
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
-  val render            : v2 -> t -> bytevector -> unit
+  val render            : t -> bytevector -> unit
   val put_color         : Segment.t -> Color.color_cell -> t -> unit (* TODO: use Colorblock ? *)
   val get_byteslice     : v2 -> int -> t -> Byteslice.t
+  val put_cursor        : v2 -> t -> unit
 end
 
 
@@ -854,7 +855,7 @@ module type FileviewType = sig
   val swap_line_number_mode : t -> t
   val swap_linebreaking_mode : t -> t
   val recenter_view : int -> t -> t
-  val cursor_relative_to_view : v2 -> t -> v2
+  val cursor_relative_to_view : screen -> t -> v2
   val assemble_text_view : t -> screen -> bool -> view
 
   val draw : t -> screen -> bool -> unit
@@ -1036,6 +1037,8 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     z_index     : int array ;
     len         : int ;
     window      : v2 ;
+
+    mutable cursor : v2 ;
   }
 
   module Priv = struct
@@ -1105,6 +1108,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       z_index     = Array.make len Default.z ;
       len         = len ;
       window      = vec2 ;
+      cursor      = v2_zero ;
     }
 
   let clear t =
@@ -1113,12 +1117,12 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     Array.fill t.bg_colors 0 t.len Default.bg ;
     Array.fill t.z_index 0 t.len Default.z
 
-  let render cursor frame_buffer render_buffer =
+  let render frame_buffer render_buffer =
     render_buffer |> Bytevector.reset
                   |> Bytevector.append Term.Control.cursor_hide
                   |> Bytevector.append Term.Control.gohome
                   |> Priv.render_all_sections frame_buffer
-                  |> Bytevector.append (Term.Control.cursor_control_string cursor)
+                  |> Bytevector.append (Term.Control.cursor_control_string frame_buffer.cursor)
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
@@ -1136,6 +1140,9 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
     Byteslice.mk_byteslice t.text vec_offset len'
+
+  let put_cursor cursor t =
+    t.cursor <- cursor
 
 end
 
@@ -1226,6 +1233,9 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         let segment' = Segment.translate v2_offset segment in
         Framebuffer.put_color segment' colors screen.frame_buffer)
       colors ;
+    match cursor with
+    | Some pos -> Framebuffer.put_cursor pos screen.frame_buffer
+    | None -> () ;
     (* TODO: compute cursor position *)
     ignore offset_map
 
@@ -1479,14 +1489,20 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     let x' = x mod width in
     mk_v2 x' y'
 
-  (* TODO: migrate to new put_text api *)
-  let cursor_relative_to_view bounds t =
-    match t.linebreaking with
-    | Clip ->
-        mk_v2 t.cursor.x (t.cursor.y - t.view_start)
-    | Overflow ->
-        let table = mk_offset_table t bounds in
-        text_space_to_screen_space table t bounds.x t.cursor
+  let cursor_relative_to_view screen t =
+    let screen_bounds = Screen.get_size screen in
+    let screen_offset = Screen.get_offset screen in
+    let screen_position =
+      match t.linebreaking with
+        | Clip ->
+            (* BUG: how to properly take into account overflow ? horizontal scrolling ?? *)
+            mk_v2 t.cursor.x (t.cursor.y - t.view_start)
+        | Overflow ->
+            (* TODO: Pass in the real offset table, do not recompute it *)
+            let table = mk_offset_table t screen_bounds in
+            text_space_to_screen_space table t screen_bounds.x t.cursor
+    in
+      screen_position <+> screen_offset <+> (mk_v2 5 1)  (* +5 for line numbers, +1 for header *)
 
   let default_line =
     Line.mk_line [ Block.mk_block " ~" ]
@@ -1494,12 +1510,14 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   let assemble_text_view t screen is_focused =
     let screen_height = Screen.get_height screen in
     let lines = Slice.init_slice screen_height screen_height default_line in
+
     (* put header first *)
     (* TODO: ensure header does not overflow when in Overflow mode ! *)
     Slice.set lines 0 (Line.mk_line [
       Block.mk_block t.filebuffer.Filebuffer.header ;
       Block.mk_block (t |> cursor |> v2_to_string) ;
     ]) ;
+
     (* put text *)
     let text_height = screen_height - 1 in
     let start = t.view_start in
@@ -1514,15 +1532,23 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       let n = LineNumberCache.get (line_idx + line_n_offset) in
       Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ; l ])
     done ;
+
     (* TODO: left border color column *)
     (* TODO: line number colors *)
     (* TODO: cursor line x column color *)
+
+    let cursor =
+      if is_focused
+        then Some (cursor_relative_to_view screen t)
+        else None
+    in
+
     (* at last, return object *)
     let open Textview in {
       offset        = 0 ;
       lines         = lines ;
       colors        = mk_header_colorblock screen is_focused ;
-      cursor        = t.cursor ;
+      cursor        = cursor ;
       linebreaking  = t.linebreaking ;
     }
 
@@ -1731,11 +1757,6 @@ module Tileset = struct
     fileviews     = fileviews ;
   }
 
-  let get_cursor focused_screen focused_fileview =
-    Fileview.cursor_relative_to_view (Screen.get_size focused_screen) focused_fileview
-                  |> (<+>) (Screen.get_offset focused_screen)
-                  |> (<+>) (mk_v2 5 1)  (* +5 for line numbers, +1 for header *)
-
   let make_screens t frame_buffer =
     t.screen_config
       |> ScreenConfiguration.mk_view_ports t.screen_size (Slice.len t.fileviews)
@@ -1748,13 +1769,11 @@ module Tileset = struct
       then (
         let main_screen = Slice.get screens 0 in
         let focused_fileview = Slice.get t.fileviews t.focus_index in
-        Fileview.draw focused_fileview main_screen true ;
-        get_cursor main_screen focused_fileview
+        Fileview.draw focused_fileview main_screen true
       ) else (
         for i = 0 to n_screens - 1 do
           Fileview.draw (Slice.get t.fileviews i) (Slice.get screens i) (i = t.focus_index)
         done ;
-        get_cursor (Slice.get screens t.focus_index) (Slice.get t.fileviews t.focus_index)
       )
 
   let apply_op t =
@@ -1971,7 +1990,7 @@ module Ciseau = struct
           Line.mk_line [Block.mk_block status_text2] ;
         |] ;
         colors        = editor.status_colorblocks ;
-        cursor        = v2_zero ;
+        cursor        = None ;
         linebreaking  = Clip ;
       }
 
@@ -1979,8 +1998,8 @@ module Ciseau = struct
     (* PERF: only clear rectangles per subscreen *)
     Framebuffer.clear editor.frame_buffer ;
     show_status editor ;
-    let cursor_position = Tileset.draw_fileviews editor.tileset editor.frame_buffer in
-    Framebuffer.render cursor_position editor.frame_buffer editor.render_buffer ;
+    Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
+    Framebuffer.render editor.frame_buffer editor.render_buffer ;
     editor
 
   let key_to_command = function
