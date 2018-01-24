@@ -1874,6 +1874,12 @@ module Ciseau = struct
   let test_mk_fileviews term_dim =
     Slice.map Fileview.init_fileview
 
+  let mk_status_colorblocks term_width =
+    Slice.wrap_array [|
+      Colorblock.mk_colorblock 0 0 term_width Config.default.colors.status ;
+      Colorblock.mk_colorblock 0 1 term_width Config.default.colors.user_input ;
+    |]
+
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
@@ -1892,10 +1898,7 @@ module Ciseau = struct
 
       user_input      = "" ;
       pending_input   = None;
-      status_colorblocks = Slice.wrap_array [|
-        Colorblock.mk_colorblock 0 0 term_dim.x Config.default.colors.status ;
-        Colorblock.mk_colorblock 0 1 term_dim.x Config.default.colors.user_input ;
-      |] ;
+      status_colorblocks = mk_status_colorblocks term_dim.x ;
       stats           = Stats.init_stats () ;
     }
 
@@ -1909,6 +1912,7 @@ module Ciseau = struct
       frame_buffer    = frame_buffer ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
       tileset         = Tileset.apply_op editor.tileset (Tileset.Resize (main_screen_dimensions term_dim)) ;
+      status_colorblocks = mk_status_colorblocks term_dim.x ;
     }
 
   let queue_pending_command editor = function
