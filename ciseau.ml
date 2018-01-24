@@ -1,7 +1,5 @@
 (* next TODOs:
  *
- *  - fix the screen division for tiles that leaves some blank lines in Rows and RowMajor layout when
- *    available vertical space is not a multiple of the number of screens
  *  - fix crash when moving cursor into lower part of a tile, then changing the tilelayout so that the cursor
  *    relative position becomes hiddern
  *      - either the screens should all be recentered on layout change, or the cursor should be moved
@@ -792,7 +790,15 @@ module ScreenConfiguration = struct
 
   let split l n =
     let a = l / n in
-    Slice.init_slice_fn n (fun i -> (a * i, a * ( i + 1) ))
+    let r = l mod n in
+    let compute_segment i =
+      (* For the first 'r' tiles, add a cumulative offset of 1 for using the remainder of 'l / n'.
+       * That cumulative offset happens to be min(tile index, remainder) *)
+      let k = min i r in
+      let l = min (i + 1) r in
+      (k + i * a, l + (i + 1) * a)
+    in
+    Slice.init_slice_fn n compute_segment
 
   let flip_xy_rect { topleft ; bottomright } =
     mk_rect topleft.y topleft.x bottomright.y bottomright.x
@@ -1720,7 +1726,7 @@ module Tileset = struct
 
   let mk_tileset term_size fileviews = {
     screen_size   = term_size ;
-    screen_config = ScreenConfiguration.Configs.zero ;
+    screen_config = ScreenConfiguration.Configs.rows ;
     focus_index   = 0 ;
     fileviews     = fileviews ;
   }
