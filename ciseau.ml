@@ -761,7 +761,6 @@ module type FramebufferType = sig
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val render            : t -> bytevector -> unit
-  val put_color         : Segment.t -> Color.color_cell -> t -> unit (* TODO: use Colorblock ? *)
   val put_color_rect    : Color.color_cell -> rect -> t -> unit
   val get_byteslice     : v2 -> int -> t -> Byteslice.t
   val put_cursor        : v2 -> t -> unit
@@ -1177,14 +1176,6 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
-  let put_color { Segment.pos ; Segment.len } { Color.fg ; Color.bg } t =
-    let vec_offset = v2_to_offset t.window.x pos in
-    let len' = min len (t.len - vec_offset) in
-    assert (vec_offset < t.len) ;
-    if vec_offset < t.len then
-      Array.fill t.fg_colors vec_offset len' fg ;
-      Array.fill t.bg_colors vec_offset len' bg
-
   let put_color_rect { Color.fg ; Color.bg } { topleft ; bottomright } t =
     for y = topleft.y to bottomright.y do
       let offset = y * t.window.x + topleft.x in
@@ -1306,12 +1297,6 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   let put_color_segment screen offset_map { Colorblock.segment ; Colorblock.colors } =
     let y_offset = Slice.get offset_map segment.pos.y in
-    let v2_offset = mk_v2 screen.screen_offset.x (screen.screen_offset.y + y_offset) in
-    let segment' = Segment.translate v2_offset segment in
-    Framebuffer.put_color segment' colors screen.frame_buffer
-
-  let put_color_segment_new screen offset_map { Colorblock.segment ; Colorblock.colors } =
-    let y_offset = Slice.get offset_map segment.pos.y in
     let v2_offset = mk_v2 0 y_offset in
     let segment' = Segment.translate v2_offset segment in
     (Area.HorizontalSegment segment'
@@ -1322,7 +1307,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     (* First, push text to framebuffer and get the line breaking offset map *)
     let offset_map = lines |> put_lines linebreaking screen offset in
     (* Using the offset map, push colors *)
-    Slice.iter (put_color_segment_new screen offset_map) colors ;
+    Slice.iter (put_color_segment screen offset_map) colors ;
     (* Hacky: add line number info, and border *)
     (Area.Rectangle (mk_rect 1 1 6 (screen.size.y - 1))
       |> Area.area_to_rectangle screen.screen_offset screen.size
