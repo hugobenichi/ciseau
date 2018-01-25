@@ -678,6 +678,7 @@ module Textview = struct
   }
 end
 
+
 module type BytevectorType = sig
   type t
 
@@ -686,6 +687,66 @@ module type BytevectorType = sig
   val append : string -> t -> t
   val append_bytes : Bytes.t -> int -> int -> t -> t
   val write : Unix.file_descr -> t -> unit
+end
+
+
+module Area = struct
+
+  (* Specifies an area w.r.t to a Screen, typically to be converted to a rectangle in Frambuffer
+   * space for blitting colors or text *)
+  type t =
+      HorizontalSegment of Segment.t
+    | VerticalSegment of Segment.t
+    | Rectangle of rect
+      (* Bounds for Line and Column are implicitly defined w.r.t some Screen bounds *)
+    | Line of int
+    | Column of int
+
+  (* Converts an area in screen space into a rectangle in framebuffer space *)
+  let area_to_rectangle screen_offset screen_size =
+    function
+      | HorizontalSegment { Segment.pos ; Segment.len } ->
+          assert (pos.x < screen_size.x) ;
+          assert (pos.y < screen_size.y) ;
+          assert (pos.x + len <= screen_size.x) ;
+          mk_rect
+            (screen_offset.x + pos.x)
+            (screen_offset.y + pos.y)
+            (screen_offset.x + len)
+            (screen_offset.y + pos.y)
+      | VerticalSegment { Segment.pos ; Segment.len } ->
+          assert (pos.x < screen_size.x) ;
+          assert (pos.y < screen_size.y) ;
+          assert (len <= screen_size.y) ;
+          mk_rect
+            (screen_offset.x + pos.x)
+            (screen_offset.y + pos.y)
+            (screen_offset.x + pos.x)
+            (screen_offset.y + len)
+      | Line y ->
+          assert (y < screen_size.y) ;
+          mk_rect
+            (screen_offset.x + 0)
+            (screen_offset.y + y)
+            (screen_offset.x + screen_size.x)
+            (screen_offset.y + y)
+      | Column x ->
+          assert (x < screen_size.x) ;
+          mk_rect
+            (screen_offset.x + x)
+            (screen_offset.y + 0)
+            (screen_offset.x + x)
+            (screen_offset.y + screen_size.y)
+      | Rectangle { topleft ; bottomright } ->
+          assert (topleft.x < screen_size.x) ;
+          assert (topleft.y < screen_size.y) ;
+          assert (bottomright.x < screen_size.x) ;
+          assert (bottomright.y < screen_size.y) ;
+          mk_rect
+            (screen_offset.x + topleft.x)
+            (screen_offset.y + topleft.y)
+            (screen_offset.x + bottomright.x)
+            (screen_offset.y + bottomright.y)
 end
 
 
@@ -698,6 +759,7 @@ module type FramebufferType = sig
   val clear             : t -> unit
   val render            : t -> bytevector -> unit
   val put_color         : Segment.t -> Color.color_cell -> t -> unit (* TODO: use Colorblock ? *)
+  val put_color_rect    : Color.color_cell -> rect -> t -> unit
   val get_byteslice     : v2 -> int -> t -> Byteslice.t
   val put_cursor        : v2 -> t -> unit
 end
@@ -1120,6 +1182,14 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.fg_colors vec_offset len' fg ;
       Array.fill t.bg_colors vec_offset len' bg
 
+  let put_color_rect { Color.fg ; Color.bg } { topleft ; bottomright } t =
+    for y = topleft.y to bottomright.y do
+      let offset = y * t.window.x + topleft.x in
+      let len = bottomright.x - topleft.x in
+      Array.fill t.fg_colors offset len fg ;
+      Array.fill t.bg_colors offset len bg
+    done
+
   let get_byteslice pos len t =
     assert (pos.x <= t.window.x) ;
     assert (pos.y <= t.window.y) ;
@@ -1231,18 +1301,32 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   open Textview
 
+  let put_color_segment screen offset_map { Colorblock.segment ; Colorblock.colors } =
+    let y_offset = Slice.get offset_map segment.pos.y in
+    let v2_offset = mk_v2 screen.screen_offset.x (screen.screen_offset.y + y_offset) in
+    let segment' = Segment.translate v2_offset segment in
+    Framebuffer.put_color segment' colors screen.frame_buffer
+
+  let put_color_segment_new screen offset_map { Colorblock.segment ; Colorblock.colors } =
+    let y_offset = Slice.get offset_map segment.pos.y in
+    let v2_offset = mk_v2 0 y_offset in
+    let segment' = Segment.translate v2_offset segment in
+    (Area.HorizontalSegment segment'
+      |> Area.area_to_rectangle screen.screen_offset screen.size
+      |> Framebuffer.put_color_rect colors) screen.frame_buffer
+
   let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
     (* First, push text to framebuffer and get the line breaking offset map *)
     let offset_map = lines |> put_lines linebreaking screen offset in
     (* Using the offset map, push colors *)
-    Slice.iter
-      (let open Colorblock in
-      fun { segment ; colors } ->
-        let y_offset = Slice.get offset_map segment.pos.y in
-        let v2_offset = mk_v2 screen.screen_offset.x (screen.screen_offset.y + y_offset) in
-        let segment' = Segment.translate v2_offset segment in
-        Framebuffer.put_color segment' colors screen.frame_buffer)
-      colors ;
+    Slice.iter (put_color_segment_new screen offset_map) colors ;
+    (* Hacky: add line number info, and border *)
+    (Area.Rectangle (mk_rect 0 1 4 (screen.size.y-1))
+      |> Area.area_to_rectangle screen.screen_offset screen.size
+      |> Framebuffer.put_color_rect Config.default.colors.line_numbers) screen.frame_buffer ;
+    (Area.VerticalSegment (Segment.mk_segment 0 1 (screen.size.y - 1))
+      |> Area.area_to_rectangle screen.screen_offset screen.size
+      |> Framebuffer.put_color_rect Config.default.colors.border) screen.frame_buffer ;
     (* Finally compute and set cursor if this is the focused screen *)
     match cursor with
     | Some textview_pos -> put_cursor linebreaking offset_map screen textview_pos
