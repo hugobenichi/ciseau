@@ -1783,11 +1783,17 @@ module Tileset = struct
   }
 
   let adjust_fileviews screen_tiles fileviews =
+    let n_tiles = Slice.len screen_tiles in
     let adjust_fileview i =
       let view = Slice.get fileviews i in
-      let tile = Slice.get screen_tiles i in
-      let height = tile.bottomright.y - tile.topleft.y in (* CHECK: -1 for header ? *)
-      Fileview.adjust_view height view
+      (* In Single tile mode, len tiles < len fileviews *)
+      if i < n_tiles
+        then
+          let tile = Slice.get screen_tiles i in
+          let height = tile.bottomright.y - tile.topleft.y - 1 in (* CHECK: -1 for header ? *)
+          Fileview.adjust_view height view
+        else
+          view
     in
     Slice.init_slice_fn (Slice.len fileviews) adjust_fileview
 
@@ -1798,8 +1804,7 @@ module Tileset = struct
       screen_config = screenconfig ;
       screen_tiles  = screen_tiles ;
       focus_index   = focus_index ;
-      fileviews     = fileviews ;
-      (* fileviews     = adjust_fileviews screen_tiles fileviews ; *)
+      fileviews     = adjust_fileviews screen_tiles fileviews ;
     }
 
   let draw_fileviews t frame_buffer =
@@ -1817,7 +1822,6 @@ module Tileset = struct
       )
 
   let apply_op t =
-    (* TODO: BUG - apply adjust_view on all views drawn for Resize, ScreenLayout*, RotateViews* *)
     (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
      * Any operation that remaps tiles and fileviews has to use mk_tileset for adusting fileview height *)
     function
@@ -1825,13 +1829,14 @@ module Tileset = struct
           mk_tileset
             t.focus_index new_screen_size t.screen_config t.fileviews
       | FileviewOp fileview_op ->
-          let t' = { t with fileviews = Slice.clone t.fileviews } in
-          t'.focus_index
-            |> Slice.get t'.fileviews
-            (* BUG: this need the size of the main screen to work ! *)
-            |> fileview_op (t.screen_size.bottomright.y - 2)
-            |> Slice.set t'.fileviews t'.focus_index ;
-          t'
+          let fileviews' = Slice.clone t.fileviews in
+          let focused_tile = Slice.get t.screen_tiles t.focus_index in
+          let height = focused_tile.bottomright.y - focused_tile.topleft.y - 1 in
+          t.focus_index
+            |> Slice.get fileviews'
+            |> fileview_op height
+            |> Slice.set fileviews' t.focus_index ;
+          { t with fileviews = fileviews' }
       | ScreenLayoutCycleNext ->
           let new_config = ScreenConfiguration.cycle_config_layout_next t.screen_config in
           mk_tileset
@@ -1954,7 +1959,7 @@ module Ciseau = struct
   let mk_tileset term_dim filebuffers =
     filebuffers
       |> Slice.map Fileview.init_fileview
-      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
+      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.zero
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
@@ -2179,11 +2184,14 @@ let () =
 
 (* next TODOs:
  *
- *  - finish implemeting Overflow correction for cursor
- *  - fix cursor not draging a fileview in some tilelayout:
- *      - either the screens should all be recentered on layout change, or the cursor should be moved
- *  - put back line number colors, column border:
- *    - change the put_color api to take Column, Line, Rectangle shapes
+ *  - finish fixig Overflow correction for cursor
+ *    - the cursor does not correctly go to next line when line overflow: missing line_width / screen_width div
+ *  - fix cursor dragging fileview at the bottom:
+ *    - there are some offsets issues
+ *  - put back cursor vertical and horizontal line highlights
+ *  - put back status highlight !
+ *  - correctly break down line number coloring in Overflow mode
+ *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
  *  - write function docs and comments
