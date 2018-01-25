@@ -1777,24 +1777,33 @@ module Tileset = struct
   type t = {
     screen_size   : rect ;
     screen_config : ScreenConfiguration.t ;
+    screen_tiles  : rect Slice.t ;
     focus_index   : int ;
     fileviews     : Fileview.t Slice.t ;
   }
 
-  let mk_tileset term_size fileviews = {
-    screen_size   = term_size ;
-    screen_config = ScreenConfiguration.Configs.columns ;
-    focus_index   = 0 ;
-    fileviews     = fileviews ;
-  }
+  let adjust_fileviews screen_tiles fileviews =
+    let adjust_fileview i =
+      let view = Slice.get fileviews i in
+      let tile = Slice.get screen_tiles i in
+      let height = tile.bottomright.y - tile.topleft.y in (* CHECK: -1 for header ? *)
+      Fileview.adjust_view height view
+    in
+    Slice.init_slice_fn (Slice.len fileviews) adjust_fileview
 
-  let make_screens t frame_buffer =
-    t.screen_config
-      |> ScreenConfiguration.mk_view_ports t.screen_size (Slice.len t.fileviews)
-      |> Slice.map (Screen.init_screen frame_buffer)
+  let mk_tileset focus_index size screenconfig fileviews =
+    let screen_tiles  = ScreenConfiguration.mk_view_ports size (Slice.len fileviews) screenconfig
+    in {
+      screen_size   = size ;
+      screen_config = screenconfig ;
+      screen_tiles  = screen_tiles ;
+      focus_index   = focus_index ;
+      fileviews     = fileviews ;
+      (* fileviews     = adjust_fileviews screen_tiles fileviews ; *)
+    }
 
   let draw_fileviews t frame_buffer =
-    let screens = make_screens t frame_buffer in
+    let screens = Slice.map (Screen.init_screen frame_buffer) t.screen_tiles in
     let n_screens = Slice.len screens in
     if n_screens = 1
       then (
@@ -1809,9 +1818,12 @@ module Tileset = struct
 
   let apply_op t =
     (* TODO: BUG - apply adjust_view on all views drawn for Resize, ScreenLayout*, RotateViews* *)
+    (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
+     * Any operation that remaps tiles and fileviews has to use mk_tileset for adusting fileview height *)
     function
-      | Resize screen_size ->
-          { t with screen_size = screen_size ; }
+      | Resize new_screen_size ->
+          mk_tileset
+            t.focus_index new_screen_size t.screen_config t.fileviews
       | FileviewOp fileview_op ->
           let t' = { t with fileviews = Slice.clone t.fileviews } in
           t'.focus_index
@@ -1821,13 +1833,17 @@ module Tileset = struct
             |> Slice.set t'.fileviews t'.focus_index ;
           t'
       | ScreenLayoutCycleNext ->
-          { t with screen_config = ScreenConfiguration.cycle_config_layout_next t.screen_config }
-          (* NEEDADJUST *)
+          let new_config = ScreenConfiguration.cycle_config_layout_next t.screen_config in
+          mk_tileset
+            t.focus_index t.screen_size new_config t.fileviews
       | ScreenLayoutCyclePrev ->
-          { t with screen_config = ScreenConfiguration.cycle_config_layout_prev t.screen_config }
-          (* NEEDADJUST *)
+          let new_config = ScreenConfiguration.cycle_config_layout_prev t.screen_config in
+          mk_tileset
+            t.focus_index t.screen_size new_config t.fileviews
       | ScreenLayoutFlip ->
-          { t with screen_config = ScreenConfiguration.flip_config_orientation t.screen_config }
+          let new_config = ScreenConfiguration.flip_config_orientation t.screen_config in
+          mk_tileset
+            t.focus_index t.screen_size new_config t.fileviews
       | FocusNext ->
           let new_focus = (t.focus_index + 1) mod Slice.len t.fileviews  in
           { t with focus_index = new_focus }
@@ -1837,25 +1853,25 @@ module Tileset = struct
       | FocusMain ->
           { t with focus_index = 0 }
       | BringFocusToMain ->
-          (* NEEDADJUST *)
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews t.focus_index |> Slice.set fileviews' 0 ;
           Slice.get t.fileviews 0             |> Slice.set fileviews' t.focus_index ;
-          { t with fileviews = fileviews' ; focus_index = 0 }
+          mk_tileset
+            0 t.screen_size t.screen_config fileviews'
       | RotateViewsLeft ->
-          (* NEEDADJUST *)
           let last_index = (Slice.len t.fileviews) - 1 in
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
           Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
-          { t with fileviews = fileviews' }
+          mk_tileset
+            t.focus_index t.screen_size t.screen_config fileviews'
       | RotateViewsRight ->
-          (* NEEDADJUST *)
           let last_index = (Slice.len t.fileviews) - 1 in
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
           Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
-          { t with fileviews = fileviews' }
+          mk_tileset
+            t.focus_index t.screen_size t.screen_config fileviews'
 end
 
 
@@ -1935,11 +1951,15 @@ module Ciseau = struct
       Colorblock.mk_colorblock 0 1 term_width Config.default.colors.user_input ;
     |]
 
+  let mk_tileset term_dim filebuffers =
+    filebuffers
+      |> Slice.map Fileview.init_fileview
+      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
+
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
-    let filebuffers = test_mk_filebuffers file in
-    let fileviews = test_mk_fileviews term_dim filebuffers
+    let filebuffers = test_mk_filebuffers file
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
@@ -1948,7 +1968,7 @@ module Ciseau = struct
       running         = true ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
 
-      tileset         = Tileset.mk_tileset (main_screen_dimensions term_dim) fileviews ;
+      tileset         = mk_tileset term_dim filebuffers ;
       filebuffers     = filebuffers ;
 
       user_input      = "" ;
