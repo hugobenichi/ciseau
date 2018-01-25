@@ -392,8 +392,8 @@ module Config = struct
         bg    = darkgray ;
       } ;
       border = {
-        fg    = darkgray ;
-        bg    = Gray 8 ;
+        fg    = white ;
+        bg    = white ;
       } ;
     } ;
     page_size = 50;
@@ -702,7 +702,10 @@ module Area = struct
     | Line of int
     | Column of int
 
-  (* Converts an area in screen space into a rectangle in framebuffer space *)
+  (* Converts an area in screen space into a rectangle in framebuffer space.
+   * This follows the Framebuffer.put_color_rect convention:
+   *  - last line in included: y length is correct for for loops
+   *  - right-most column is excluded: horizontal length is correct for blit like functions *)
   let area_to_rectangle screen_offset screen_size =
     function
       | HorizontalSegment { Segment.pos ; Segment.len } ->
@@ -721,7 +724,7 @@ module Area = struct
           mk_rect
             (screen_offset.x + pos.x)
             (screen_offset.y + pos.y)
-            (screen_offset.x + pos.x)
+            (screen_offset.x + pos.x + 1)
             (screen_offset.y + len)
       | Line y ->
           assert (y < screen_size.y) ;
@@ -1294,7 +1297,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
             (* text_space_to_screen_space offset_map screen.size.x textview_position *)
     in
     let screen_position =
-      corrected_textview_position <+> (mk_v2 5 1) (* +5 for line numbers, +1 for header *)
+      corrected_textview_position <+> (mk_v2 6 1) (* +6 for line numbers, +1 for header *)
     in
     let frame_position = screen_position <+> screen.screen_offset in
     Framebuffer.put_cursor frame_position screen.frame_buffer
@@ -1321,7 +1324,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     (* Using the offset map, push colors *)
     Slice.iter (put_color_segment_new screen offset_map) colors ;
     (* Hacky: add line number info, and border *)
-    (Area.Rectangle (mk_rect 0 1 4 (screen.size.y-1))
+    (Area.Rectangle (mk_rect 1 1 6 (screen.size.y - 1))
       |> Area.area_to_rectangle screen.screen_offset screen.size
       |> Framebuffer.put_color_rect Config.default.colors.line_numbers) screen.frame_buffer ;
     (Area.VerticalSegment (Segment.mk_segment 0 1 (screen.size.y - 1))
@@ -1413,7 +1416,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     let hardcoded_size  = 10000 + negative_offset
 
     let format_n n =
-      Printf.sprintf "%4d " (n - negative_offset)
+      Printf.sprintf "%5d " (n - negative_offset)
 
     let mk_block n =
       Block.mk_block (format_n n)
@@ -1584,8 +1587,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       Colorblock.mk_colorblock 0 0 (Screen.get_width screen) header_color
     in
 
-    (* TODO: left border color column *)
-    (* TODO: line number colors *)
     (* TODO: cursor line x column color *)
 
     let cursor =
