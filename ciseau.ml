@@ -579,9 +579,6 @@ module Segment = struct
     pos = mk_v2 x y ;
     len = l ;
   }
-
-  let translate { x ; y } { pos ; len } =
-    mk_segment (x + pos.x) (y + pos.y) len
 end
 
 module Byteslice = struct
@@ -761,9 +758,9 @@ module type FramebufferType = sig
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val render            : t -> bytevector -> unit
-  val put_color_rect    : Color.color_cell -> rect -> t -> unit
-  val get_byteslice     : v2 -> int -> t -> Byteslice.t
-  val put_cursor        : v2 -> t -> unit
+  val put_color_rect    : t -> Color.color_cell -> rect -> unit
+  val put_cursor        : t -> v2 -> unit
+  val get_byteslice     : t -> v2 -> int -> Byteslice.t
 end
 
 
@@ -1176,7 +1173,7 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
                   |> Bytevector.append Term.Control.cursor_show
                   |> Bytevector.write Unix.stdout
 
-  let put_color_rect { Color.fg ; Color.bg } { topleft ; bottomright } t =
+  let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
     for y = topleft.y to bottomright.y do
       let offset = y * t.window.x + topleft.x in
       let len = bottomright.x - topleft.x in
@@ -1184,14 +1181,14 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.bg_colors offset len bg
     done
 
-  let get_byteslice pos len t =
+  let get_byteslice t pos len =
     assert (pos.x <= t.window.x) ;
     assert (pos.y <= t.window.y) ;
     let vec_offset = v2_to_offset t.window.x pos in
     let len' = min len (t.len - vec_offset) in
     Byteslice.mk_byteslice t.text vec_offset len'
 
-  let put_cursor cursor t =
+  let put_cursor t cursor =
     t.cursor <- cursor
 
 end
@@ -1229,7 +1226,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   let get_byteslice_for_line screen line_y_offset =
     let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
-    Framebuffer.get_byteslice start screen.size.x screen.frame_buffer
+    Framebuffer.get_byteslice screen.frame_buffer start screen.size.x
 
   (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid.
    * Return what did not fit, or zero_line if there is nothing left to put on screen *)
@@ -1253,7 +1250,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       if line_idx < len then
         let line = Slice.get lines line_idx in
         let y' = put_line_with_wrapping screen y line in
-        Slice.set offset_map line_idx y ;
+        Slice.set offset_map line_idx (y' - 1) ;
         loop y' (line_idx + 1)
     in
       loop line_y_offset 0 ;
@@ -1283,25 +1280,22 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
             (* TODO: how to properly take into account overflow in Clip mode ? horizontal scrolling ?? *)
             textview_position
         | Overflow ->
-            (* TODO: apply offset map in Overflow mode *)
-            textview_position
-            (* text_space_to_screen_space offset_map screen.size.x textview_position *)
+            mk_v2 textview_position.x (Slice.get offset_map textview_position.y)
     in
-    let screen_position =
-      corrected_textview_position <+> (mk_v2 6 1) (* +6 for line numbers, +1 for header *)
-    in
-    let frame_position = screen_position <+> screen.screen_offset in
-    Framebuffer.put_cursor frame_position screen.frame_buffer
+      corrected_textview_position
+        <+> screen.screen_offset
+        <+> (mk_v2 6 1) (* +6 for line numbers, +1 for header *)
+        |> Framebuffer.put_cursor screen.frame_buffer
 
   open Textview
 
   let put_color_segment screen offset_map { Colorblock.segment ; Colorblock.colors } =
-    let y_offset = Slice.get offset_map segment.pos.y in
-    let v2_offset = mk_v2 0 y_offset in
-    let segment' = Segment.translate v2_offset segment in
-    (Area.HorizontalSegment segment'
-      |> Area.area_to_rectangle screen.screen_offset screen.size
-      |> Framebuffer.put_color_rect colors) screen.frame_buffer
+    let { x ; y } = segment.pos in
+    let segment' = Segment.mk_segment x (Slice.get offset_map y) segment.len
+    in
+      Area.HorizontalSegment segment'
+        |> Area.area_to_rectangle screen.screen_offset screen.size
+        |> Framebuffer.put_color_rect screen.frame_buffer colors
 
   let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
     (* First, push text to framebuffer and get the line breaking offset map *)
@@ -1309,12 +1303,12 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
     (* Using the offset map, push colors *)
     Slice.iter (put_color_segment screen offset_map) colors ;
     (* Hacky: add line number info, and border *)
-    (Area.Rectangle (mk_rect 1 1 6 (screen.size.y - 1))
+    Area.Rectangle (mk_rect 1 1 6 (screen.size.y - 1))
       |> Area.area_to_rectangle screen.screen_offset screen.size
-      |> Framebuffer.put_color_rect Config.default.colors.line_numbers) screen.frame_buffer ;
-    (Area.VerticalSegment (Segment.mk_segment 0 1 (screen.size.y - 1))
+      |> Framebuffer.put_color_rect screen.frame_buffer Config.default.colors.line_numbers ;
+    Area.VerticalSegment (Segment.mk_segment 0 1 (screen.size.y - 1))
       |> Area.area_to_rectangle screen.screen_offset screen.size
-      |> Framebuffer.put_color_rect Config.default.colors.border) screen.frame_buffer ;
+      |> Framebuffer.put_color_rect screen.frame_buffer Config.default.colors.border ;
     (* Finally compute and set cursor if this is the focused screen *)
     match cursor with
     | Some textview_pos -> put_cursor linebreaking offset_map screen textview_pos
@@ -1789,7 +1783,7 @@ module Tileset = struct
 
   let mk_tileset term_size fileviews = {
     screen_size   = term_size ;
-    screen_config = ScreenConfiguration.Configs.rows ;
+    screen_config = ScreenConfiguration.Configs.columns ;
     focus_index   = 0 ;
     fileviews     = fileviews ;
   }
@@ -1822,14 +1816,16 @@ module Tileset = struct
           let t' = { t with fileviews = Slice.clone t.fileviews } in
           t'.focus_index
             |> Slice.get t'.fileviews
+            (* BUG: this need the size of the main screen to work ! *)
             |> fileview_op (t.screen_size.bottomright.y - 2)
             |> Slice.set t'.fileviews t'.focus_index ;
           t'
-
       | ScreenLayoutCycleNext ->
           { t with screen_config = ScreenConfiguration.cycle_config_layout_next t.screen_config }
+          (* NEEDADJUST *)
       | ScreenLayoutCyclePrev ->
           { t with screen_config = ScreenConfiguration.cycle_config_layout_prev t.screen_config }
+          (* NEEDADJUST *)
       | ScreenLayoutFlip ->
           { t with screen_config = ScreenConfiguration.flip_config_orientation t.screen_config }
       | FocusNext ->
@@ -1841,17 +1837,20 @@ module Tileset = struct
       | FocusMain ->
           { t with focus_index = 0 }
       | BringFocusToMain ->
+          (* NEEDADJUST *)
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews t.focus_index |> Slice.set fileviews' 0 ;
           Slice.get t.fileviews 0             |> Slice.set fileviews' t.focus_index ;
           { t with fileviews = fileviews' ; focus_index = 0 }
       | RotateViewsLeft ->
+          (* NEEDADJUST *)
           let last_index = (Slice.len t.fileviews) - 1 in
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
           Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
           { t with fileviews = fileviews' }
       | RotateViewsRight ->
+          (* NEEDADJUST *)
           let last_index = (Slice.len t.fileviews) - 1 in
           let fileviews' = Slice.clone t.fileviews in
           Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
