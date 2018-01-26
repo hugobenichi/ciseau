@@ -1278,13 +1278,19 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       match linebreaking with
         | Clip ->
             (* TODO: how to properly take into account overflow in Clip mode ? horizontal scrolling ?? *)
-            textview_position
+            textview_position <+> (mk_v2 6 1) (* +6 for line numbers, +1 for header *)
         | Overflow ->
-            mk_v2 textview_position.x (Slice.get offset_map textview_position.y)
+            let x_raw_screen_position = textview_position.x + 6 in (* +6 for line numbers *)
+            let x_screen_position = x_raw_screen_position mod screen.size.x in
+            let y_screen_position =
+              (Slice.get offset_map textview_position.y)  (* correct for all previous line breaks *)
+              + x_raw_screen_position / screen.size.x     (* Number of line break for that text line *)
+              + 1                                         (* +! for header *)
+            in
+            mk_v2 x_screen_position y_screen_position
     in
       corrected_textview_position
         <+> screen.screen_offset
-        <+> (mk_v2 6 1) (* +6 for line numbers, +1 for header *)
         |> Framebuffer.put_cursor screen.frame_buffer
 
   open Textview
@@ -1959,7 +1965,7 @@ module Ciseau = struct
   let mk_tileset term_dim filebuffers =
     filebuffers
       |> Slice.map Fileview.init_fileview
-      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.zero
+      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
@@ -2184,8 +2190,6 @@ let () =
 
 (* next TODOs:
  *
- *  - finish fixig Overflow correction for cursor
- *    - the cursor does not correctly go to next line when line overflow: missing line_width / screen_width div
  *  - fix cursor dragging fileview at the bottom:
  *    - there are some offsets issues
  *  - put back cursor vertical and horizontal line highlights
