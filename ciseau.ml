@@ -1534,19 +1534,23 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       y = y' ;
     }
 
-  (* TODO: merge into assemble_text_view *)
   let default_line =
     Line.mk_line [ Block.mk_block " ~" ]
 
   let assemble_text_view t screen is_focused =
+    let screen_width = Screen.get_width screen in
     let screen_height = Screen.get_height screen in
     let lines = Slice.init_slice screen_height screen_height default_line in
 
     (* put header first *)
-    (* TODO: ensure header does not overflow when in Overflow mode ! *)
+    let header_text = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string) in
     Slice.set lines 0 (Line.mk_line [
-      Block.mk_block t.filebuffer.Filebuffer.header ;
-      Block.mk_block (t |> cursor |> v2_to_string) ;
+      {
+        Block.text = header_text ;
+        Block.offset = 0 ;
+        (* ensure header does not overflow regardless of Clip|Overflow mode *)
+        Block.len = min (slen header_text) screen_width
+      }
     ]) ;
 
     (* put text *)
