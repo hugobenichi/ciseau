@@ -1,6 +1,8 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
+let id x = x
+
 let tab_to_spaces = "  "
 
 let alen = Array.length ;;
@@ -1261,7 +1263,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         put_line screen (line_y_offset + line_idx) line |> ignore
     in
       Slice.iteri put_line_fn lines ;
-      Slice.init_slice (Slice.len lines) (Slice.len lines) 0
+      Slice.init_slice_fn (Slice.len lines) id
 
   let put_lines =
     function
@@ -2193,7 +2195,6 @@ let () =
  *  - fix cursor dragging fileview at the bottom:
  *    - there are some offsets issues
  *  - put back cursor vertical and horizontal line highlights
- *  - put back status highlight !
  *  - correctly break down line number coloring in Overflow mode
  *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
