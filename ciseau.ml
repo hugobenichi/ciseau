@@ -234,6 +234,20 @@ module Vec2 = struct
 
   let offset_to_v2 stride offset =
     mk_v2 (offset mod stride) (offset / stride)
+
+  exception V2_out_of_bound
+
+  (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
+   * and first v2 argument as bottomright corner. *)
+  let assert_v2_inside { x = xlim ; y = ylim } { x ; y } =
+    if x < 0 then
+      raise V2_out_of_bound ;
+    if y < 0 then
+      raise V2_out_of_bound ;
+    if x > xlim then
+      raise V2_out_of_bound ;
+    if y > ylim then
+      raise V2_out_of_bound
 end
 
 
@@ -655,39 +669,6 @@ module Line = struct
     blit_blocks byteslice blocks
 end
 
-module Colorblock = struct
-  type t = {
-    segment : Segment.t ;
-    colors  : Color.color_cell ;
-  }
-
-  let mk_colorblock x y len colors = {
-    segment = Segment.mk_segment x y len ;
-    colors  = colors;
-  }
-end
-
-module Textview = struct
-  type t = {
-    offset        : int ; (* TODO: remove *)
-    lines         : Line.t Slice.t ;
-    colors        : Colorblock.t Slice.t ;
-    cursor        : v2 option ;
-    linebreaking  : linebreak ;
-  }
-end
-
-
-module type BytevectorType = sig
-  type t
-
-  val init_bytevector : int -> t
-  val reset : t -> t
-  val append : string -> t -> t
-  val append_bytes : Bytes.t -> int -> int -> t -> t
-  val write : Unix.file_descr -> t -> unit
-end
-
 
 module Area = struct
 
@@ -749,6 +730,42 @@ module Area = struct
             (screen_offset.y + topleft.y)
             (screen_offset.x + bottomright.x)
             (screen_offset.y + bottomright.y)
+end
+
+
+module Colorblock = struct
+  type t = {
+    area    : Area.t ;
+    colors  : Color.color_cell ;
+  }
+
+  let mk_colorblock area colors = {
+    area    = area ;
+    colors  = colors;
+  }
+
+  let mk_colorsegment x y len colors =
+    mk_colorblock (Area.HorizontalSegment (Segment.mk_segment x y len)) colors
+end
+
+module Textview = struct
+  type t = {
+    lines         : Line.t Slice.t ;
+    colors        : Colorblock.t Slice.t ;
+    cursor        : v2 option ;
+    linebreaking  : linebreak ;
+  }
+end
+
+
+module type BytevectorType = sig
+  type t
+
+  val init_bytevector : int -> t
+  val reset : t -> t
+  val append : string -> t -> t
+  val append_bytes : Bytes.t -> int -> int -> t -> t
+  val write : Unix.file_descr -> t -> unit
 end
 
 
@@ -906,8 +923,6 @@ module type FileviewType = sig
   val swap_line_number_mode : t -> t
   val swap_linebreaking_mode : t -> t
   val recenter_view : int -> t -> t
-  val assemble_text_view : t -> screen -> bool -> view
-
   val draw : t -> screen -> bool -> unit
 end
 
@@ -1221,21 +1236,23 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let get_height t =
     t.size.y
 
+  (* Makes a screen with 'fb' as the backend framebuffer.
+   * Passed in rectangle defines the screen absolute coordinates w.r.t the framebuffer *)
   let mk_screen fb { topleft ; bottomright } = {
     size                = bottomright <-> topleft ;
     screen_offset       = topleft ;
     frame_buffer        = fb ;
   }
 
+  (* Makes a subscreen from this screen.
+   * Passed in rectangle defines the subscreen absolut coordinates w.r.t the parent screen *)
   let mk_subscreen { size ; screen_offset ; frame_buffer } { topleft ; bottomright } =
-    assert (topleft.x < size.x) ;
-    assert (topleft.y < size.y) ;
-    assert (bottomright.x + topleft.x <= size.x) ;
-    assert (bottomright.y + topleft.y <= size.y) ;
-    let subrect = mk_rect
-        (screen_offset.x + topleft.x) (screen_offset.y + topleft.y) bottomright.x bottomright.y
-    in
-      mk_screen frame_buffer subrect
+    assert_v2_inside size topleft ;
+    assert_v2_inside size bottomright ;
+    mk_screen frame_buffer {
+      topleft = (screen_offset <+> topleft) ;
+      bottomright = (screen_offset <+> bottomright) ;
+    }
 
   let get_byteslice_for_line screen line_y_offset =
     let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
@@ -1256,7 +1273,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       else line |> put_line screen line_y_offset
                 |> put_line_with_wrapping screen (line_y_offset + 1)
 
-  let put_lines_with_wrapping screen line_y_offset lines =
+  let put_lines_with_wrapping screen lines =
     let len = Slice.len lines in
     let offset_map = Slice.init_slice len len (-1) in
     let rec loop y line_idx =
@@ -1266,12 +1283,12 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
         Slice.set offset_map line_idx (y' - 1) ;
         loop y' (line_idx + 1)
     in
-      loop line_y_offset 0 ;
+      loop 0 0 ;
       offset_map
 
-  let put_lines_with_clipping screen line_y_offset lines =
+  let put_lines_with_clipping screen lines =
     let put_line_fn line_idx line =
-        put_line screen (line_y_offset + line_idx) line |> ignore
+        put_line screen line_idx line |> ignore
     in
       Slice.iteri put_line_fn lines ;
       Slice.init_slice_fn (Slice.len lines) id
@@ -1291,14 +1308,12 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       match linebreaking with
         | Clip ->
             (* TODO: how to properly take into account overflow in Clip mode ? horizontal scrolling ?? *)
-            textview_position <+> (mk_v2 6 1) (* +6 for line numbers, +1 for header *)
+            textview_position
         | Overflow ->
-            let x_raw_screen_position = textview_position.x + 6 in (* +6 for line numbers *)
-            let x_screen_position = x_raw_screen_position mod screen.size.x in
+            let x_screen_position = textview_position.x mod screen.size.x in
             let y_screen_position =
               (Slice.get offset_map textview_position.y)  (* correct for all previous line breaks *)
-              + x_raw_screen_position / screen.size.x     (* Number of line break for that text line *)
-              + 1                                         (* +! for header *)
+              + textview_position.x / screen.size.x       (* Number of line break for that text line *)
             in
             mk_v2 x_screen_position y_screen_position
     in
@@ -1308,30 +1323,19 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   open Textview
 
-  let put_color_segment screen offset_map { Colorblock.segment ; Colorblock.colors } =
-    let { x ; y } = segment.pos in
-    let segment' = Segment.mk_segment x (Slice.get offset_map y) segment.len
-    in
-      Area.HorizontalSegment segment'
-        |> Area.area_to_rectangle screen.screen_offset screen.size
-        |> Framebuffer.put_color_rect screen.frame_buffer colors
+  let put_colorblock screen offset_map { Colorblock.area ; Colorblock.colors } =
+    area
+      |> Area.area_to_rectangle screen.screen_offset screen.size
+      |> Framebuffer.put_color_rect screen.frame_buffer colors
 
-  let put_text screen { offset ; lines ; colors ; cursor ; linebreaking } =
-    (* First, push text to framebuffer and get the line breaking offset map *)
-    let offset_map = lines |> put_lines linebreaking screen offset in
-    (* Using the offset map, push colors *)
-    Slice.iter (put_color_segment screen offset_map) colors ;
-    (* Hacky: add line number info, and border *)
-    Area.Rectangle (mk_rect 1 1 6 (screen.size.y - 1))
-      |> Area.area_to_rectangle screen.screen_offset screen.size
-      |> Framebuffer.put_color_rect screen.frame_buffer Config.default.colors.line_numbers ;
-    Area.VerticalSegment (Segment.mk_segment 0 1 (screen.size.y - 1))
-      |> Area.area_to_rectangle screen.screen_offset screen.size
-      |> Framebuffer.put_color_rect screen.frame_buffer Config.default.colors.border ;
-    (* Finally compute and set cursor if this is the focused screen *)
+  let put_text screen { lines ; colors ; cursor ; linebreaking } =
+    let offset_map = put_lines linebreaking screen lines in
+    Slice.iter (put_colorblock screen offset_map) colors ;
     match cursor with
-    | Some textview_pos -> put_cursor linebreaking offset_map screen textview_pos
-    | None -> ()
+    | Some textview_pos ->
+          put_cursor linebreaking offset_map screen textview_pos
+    | None ->
+          ()
 end
 
 
@@ -1545,26 +1549,51 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       y = y' ;
     }
 
-  let default_line =
+  let default_frame_line =
     Line.mk_line [ Block.mk_block " ~" ]
 
-  let assemble_text_view t screen is_focused =
-    let screen_width = Screen.get_width screen in
-    let screen_height = Screen.get_height screen in
-    let lines = Slice.init_slice screen_height screen_height default_line in
+  let default_text_line =
+    Line.mk_line [ Block.mk_block "" ]
 
-    (* put header first *)
+  let draw_text t screen is_focused =
+    let subscreen_rect = {
+        topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
+        bottomright = Screen.get_size screen ;
+    } in
+    let textscreen = Screen.mk_subscreen screen subscreen_rect in
+    let text_height = Screen.get_height textscreen in
+    let lines = Slice.init_slice text_height text_height default_text_line in
+    let start = t.view_start in
+    let stop = min (buflen t) (start + text_height) in
+    for line_idx = start to stop - 1 do
+      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.mk_block in
+      Slice.set lines (line_idx - start) (Line.mk_line [ l ])
+    done ;
+    let cursor =
+      if is_focused
+        then Some (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
+        else None
+    in
+    let open Textview in {
+      lines         = lines ;
+      colors        = Slice.wrap_array [| |];
+      cursor        = cursor ;
+      linebreaking  = t.linebreaking ;
+    } |> Screen.put_text textscreen
+
+  let draw_frame t screen is_focused =
+    let screen_height = Screen.get_height screen in
+    let lines = Slice.init_slice screen_height screen_height default_frame_line in
+    (* header *)
     let header_text = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string) in
     Slice.set lines 0 (Line.mk_line [
       {
         Block.text = header_text ;
         Block.offset = 0 ;
-        (* ensure header does not overflow regardless of Clip|Overflow mode *)
-        Block.len = min (slen header_text) screen_width
+        Block.len = slen header_text ;
       }
     ]) ;
-
-    (* put text *)
+    (* line numbering *)
     let text_height = screen_height - 1 in
     let start = t.view_start in
     let stop = min (buflen t) (start + text_height) in
@@ -1574,70 +1603,35 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       | CursorRelative  -> -t.cursor.y
     in
     for line_idx = start to stop - 1 do
-      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.mk_block in
       let n = LineNumberCache.get (line_idx + line_n_offset) in
-      Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ; l ])
+      Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ])
     done ;
-
     (* header color block *)
     let header_color =
       if is_focused
         then Config.default.colors.focus_header
         else Config.default.colors.header
     in
-    let header_colorblock =
-      Colorblock.mk_colorblock 0 0 (Screen.get_width screen) header_color
-    in
-
-    (* TODO: cursor line x column color *)
-
-    let cursor =
-      if is_focused
-        then Some (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
-        else None
-    in
-
-    (* at last, return object *)
-    let open Textview in {
-      offset        = 0 ;
-      lines         = lines ;
-      colors        = Slice.wrap_array [| header_colorblock  |];
-      cursor        = cursor ;
-      linebreaking  = t.linebreaking ;
-    }
-
-  let draw_text t screen is_focused =
-    let text_width = (Screen.get_width screen) - 6 in
-    let text_height = (Screen.get_height screen) - 1 in
-    let textscreen = Screen.mk_subscreen screen (mk_rect 6 1 text_width text_height) in
-    let lines = Slice.init_slice text_height text_height default_line in
-    (* put text *)
-    (* TODO: use Slice map *)
-    let start = t.view_start in
-    let stop = min (buflen t) (start + text_height) in
-    for line_idx = start to stop - 1 do
-      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.mk_block in
-      Slice.set lines (line_idx - start) (Line.mk_line [ l ])
-    done ;
-
-    let cursor =
-      if is_focused
-        then Some (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
-        else None
-    in
 
     let open Textview in {
-      offset        = 0 ;
       lines         = lines ;
-      colors        = Slice.wrap_array [| |];
-      cursor        = cursor ;
-      linebreaking  = t.linebreaking ;
-    } |> Screen.put_text textscreen
+      colors        = Slice.wrap_array [|
+        (* TODO: replace with Line *)
+        Colorblock.mk_colorsegment 0 0 (Screen.get_width screen) header_color ;
+        Colorblock.mk_colorblock
+          (Area.Rectangle (mk_rect 1 1 6 text_height))
+          Config.default.colors.line_numbers ;
+        Colorblock.mk_colorblock
+          (Area.VerticalSegment (Segment.mk_segment 0 1 text_height))
+          Config.default.colors.border ;
+      |];
+      cursor        = None ;
+      linebreaking  = Clip ;
+    } |> Screen.put_text screen
 
   let draw t screen is_focused =
-    (* draw_text t screen is_focused ; *)
-    assemble_text_view t screen is_focused |> Screen.put_text screen ;
-    ()
+    draw_frame t screen is_focused ;
+    draw_text t screen is_focused
 end
 
 
@@ -2005,8 +1999,9 @@ module Ciseau = struct
 
   let mk_status_colorblocks term_width =
     Slice.wrap_array [|
-      Colorblock.mk_colorblock 0 0 term_width Config.default.colors.status ;
-      Colorblock.mk_colorblock 0 1 term_width Config.default.colors.user_input ;
+      (* TODO: replace with Area.Line *)
+      Colorblock.mk_colorsegment 0 0 term_width Config.default.colors.status ;
+      Colorblock.mk_colorsegment 0 1 term_width Config.default.colors.user_input ;
     |]
 
   let mk_tileset term_dim filebuffers =
@@ -2098,7 +2093,6 @@ module Ciseau = struct
     in
       let open Textview in
       Screen.put_text editor.status_screen {
-        offset        = 0 ;
         lines         = Slice.wrap_array [|
           Line.mk_line [Block.mk_block status_text1] ;
           Line.mk_line [Block.mk_block status_text2] ;
