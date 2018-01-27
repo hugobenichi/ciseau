@@ -669,7 +669,7 @@ end
 
 module Textview = struct
   type t = {
-    offset        : int ;
+    offset        : int ; (* TODO: remove *)
     lines         : Line.t Slice.t ;
     colors        : Colorblock.t Slice.t ;
     cursor        : v2 option ;
@@ -772,12 +772,13 @@ module type ScreenType = sig
   type block
   type segment
 
-  val get_size        : t -> v2
-  val get_offset      : t -> v2
-  val get_width       : t -> int
-  val get_height      : t -> int
-  val init_screen     : framebuffer -> rect -> t
-  val put_text        : t -> Textview.t -> unit
+  val get_size      : t -> v2
+  val get_offset    : t -> v2
+  val get_width     : t -> int
+  val get_height    : t -> int
+  val mk_screen     : framebuffer -> rect -> t
+  val mk_subscreen  : t -> rect -> t
+  val put_text      : t -> Textview.t -> unit
 end
 
 
@@ -1220,11 +1221,21 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   let get_height t =
     t.size.y
 
-  let init_screen cb { topleft ; bottomright } = {
+  let mk_screen fb { topleft ; bottomright } = {
     size                = bottomright <-> topleft ;
     screen_offset       = topleft ;
-    frame_buffer        = cb ;
+    frame_buffer        = fb ;
   }
+
+  let mk_subscreen { size ; screen_offset ; frame_buffer } { topleft ; bottomright } =
+    assert (topleft.x < size.x) ;
+    assert (topleft.y < size.y) ;
+    assert (bottomright.x + topleft.x <= size.x) ;
+    assert (bottomright.y + topleft.y <= size.y) ;
+    let subrect = mk_rect
+        (screen_offset.x + topleft.x) (screen_offset.y + topleft.y) bottomright.x bottomright.y
+    in
+      mk_screen frame_buffer subrect
 
   let get_byteslice_for_line screen line_y_offset =
     let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
@@ -1595,8 +1606,38 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       linebreaking  = t.linebreaking ;
     }
 
+  let draw_text t screen is_focused =
+    let text_width = (Screen.get_width screen) - 6 in
+    let text_height = (Screen.get_height screen) - 1 in
+    let textscreen = Screen.mk_subscreen screen (mk_rect 6 1 text_width text_height) in
+    let lines = Slice.init_slice text_height text_height default_line in
+    (* put text *)
+    (* TODO: use Slice map *)
+    let start = t.view_start in
+    let stop = min (buflen t) (start + text_height) in
+    for line_idx = start to stop - 1 do
+      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.mk_block in
+      Slice.set lines (line_idx - start) (Line.mk_line [ l ])
+    done ;
+
+    let cursor =
+      if is_focused
+        then Some (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
+        else None
+    in
+
+    let open Textview in {
+      offset        = 0 ;
+      lines         = lines ;
+      colors        = Slice.wrap_array [| |];
+      cursor        = cursor ;
+      linebreaking  = t.linebreaking ;
+    } |> Screen.put_text textscreen
+
   let draw t screen is_focused =
-    assemble_text_view t screen is_focused |> Screen.put_text screen
+    (* draw_text t screen is_focused ; *)
+    assemble_text_view t screen is_focused |> Screen.put_text screen ;
+    ()
 end
 
 
@@ -1820,7 +1861,7 @@ module Tileset = struct
     }
 
   let draw_fileviews t frame_buffer =
-    let screens = Slice.map (Screen.init_screen frame_buffer) t.screen_tiles in
+    let screens = Slice.map (Screen.mk_screen frame_buffer) t.screen_tiles in
     let n_screens = Slice.len screens in
     if n_screens = 1
       then (
@@ -1946,7 +1987,7 @@ module Ciseau = struct
     mk_rect 0 (term_dim.y - 2) term_dim.x term_dim.y
 
   let mk_status_screen frame_buffer term_dim =
-    term_dim |> status_screen_dimensions |> Screen.init_screen frame_buffer
+    term_dim |> status_screen_dimensions |> Screen.mk_screen frame_buffer
 
   let mk_window_size_descr { x = w ; y = h } =
     Printf.sprintf "(%d x %d)" w h
