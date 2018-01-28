@@ -83,8 +83,11 @@ module Slice = struct
       range = (s, e) ;
     }
 
-  let init_slice len capacity zero =
+  let init_slice_with_capacity len capacity zero =
     mk_slice 0 len (Array.make capacity zero)
+
+  let init_slice len zero =
+    mk_slice 0 len (Array.make len zero)
 
   let wrap_array data =
     mk_slice 0 (alen data) data
@@ -179,7 +182,7 @@ module Slice = struct
       then slice1
     else
       (* TODO: see if slice2 fits in slice1 backing array *)
-      let output = init_slice (l1 + l2) (l1 + l2) (get slice1 0) in
+      let output = init_slice (l1 + l2) (get slice1 0) in
       copy output slice1 ;
       copy (slice_right l1 output) slice2 ;
       output
@@ -385,7 +388,7 @@ module Config = struct
       } ;
       cursor_line = {
         fg    = white ;
-        bg    = Gray 4 ;
+        bg    = black ;
       } ;
       line_numbers = {
         fg    = green ;
@@ -718,7 +721,7 @@ module Area = struct
           mk_rect
             (screen_offset.x + x)
             (screen_offset.y + 0)
-            (screen_offset.x + x)
+            (screen_offset.x + x + 1)
             (screen_offset.y + screen_size.y)
       | Rectangle { topleft ; bottomright } ->
           assert (topleft.x < screen_size.x) ;
@@ -875,7 +878,7 @@ module ScreenConfiguration = struct
   let rec mk_view_ports total_area n_screen =
     function
       | { layout = Single } ->
-          Slice.init_slice 1 1 total_area
+          Slice.init_slice 1 total_area
       | _ when n_screen = 1 ->
           mk_view_ports total_area 1 Configs.zero
       | { layout = Columns ; orientation = Normal } ->
@@ -1275,7 +1278,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   let put_lines_with_wrapping screen lines =
     let len = Slice.len lines in
-    let offset_map = Slice.init_slice len len (-1) in
+    let offset_map = Slice.init_slice len (-1) in
     let rec loop y line_idx =
       if line_idx < len then
         let line = Slice.get lines line_idx in
@@ -1323,14 +1326,14 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
 
   open Textview
 
-  let put_colorblock screen offset_map { Colorblock.area ; Colorblock.colors } =
+  let put_colorblock screen { Colorblock.area ; Colorblock.colors } =
     area
       |> Area.area_to_rectangle screen.screen_offset screen.size
       |> Framebuffer.put_color_rect screen.frame_buffer colors
 
   let put_text screen { lines ; colors ; cursor ; linebreaking } =
     let offset_map = put_lines linebreaking screen lines in
-    Slice.iter (put_colorblock screen offset_map) colors ;
+    Slice.iter (put_colorblock screen) colors ;
     match cursor with
     | Some textview_pos ->
           put_cursor linebreaking offset_map screen textview_pos
@@ -1355,7 +1358,7 @@ module Filebuffer = struct
       | exception End_of_file -> lines
     in
     let ch = open_in f in
-    let action () = loop (Slice.init_slice 0 32 "") ch in
+    let action () = loop (Slice.init_slice_with_capacity 0 32 "") ch in
     let cleanup () = close_in ch in
     try_finally action cleanup
 
@@ -1382,7 +1385,7 @@ module FileNavigator = struct
       | exception End_of_file -> entries |> Slice.sort_slice String.compare
     in
     let handle = Unix.opendir path in
-    let entries = loop (Slice.init_slice 0 16 "") handle in
+    let entries = loop (Slice.init_slice_with_capacity 0 16 "") handle in
       Unix.closedir handle ;
       entries
 
@@ -1446,7 +1449,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Overflow ;
+    linebreaking  = Clip ;
   }
 
   let line_at t =
@@ -1549,11 +1552,13 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       y = y' ;
     }
 
-  let default_frame_line =
-    Line.mk_line [ Block.mk_block " ~" ]
+  module DrawingDefault = struct
+    let frame_line  = Line.mk_line [ Block.mk_block " ~" ]
+    let text_line   = Line.mk_line [ Block.mk_block "" ]
 
-  let default_text_line =
-    Line.mk_line [ Block.mk_block "" ]
+    let header_focused_colorblock   = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.focus_header
+    let header_unfocused_colorblock = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.header
+  end
 
   let draw_text t screen is_focused =
     let subscreen_rect = {
@@ -1562,7 +1567,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     } in
     let textscreen = Screen.mk_subscreen screen subscreen_rect in
     let text_height = Screen.get_height textscreen in
-    let lines = Slice.init_slice text_height text_height default_text_line in
+    let lines = Slice.init_slice text_height DrawingDefault.text_line in
     let start = t.view_start in
     let stop = min (buflen t) (start + text_height) in
     for line_idx = start to stop - 1 do
@@ -1576,25 +1581,24 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     in
     let open Textview in {
       lines         = lines ;
-      colors        = Slice.wrap_array [| |];
+      colors        = Slice.wrap_array [|
+        Colorblock.mk_colorblock (Area.Line (t.cursor.y - t.view_start)) Config.default.colors.cursor_line ;
+        Colorblock.mk_colorblock (Area.Column t.cursor.x) Config.default.colors.cursor_line ;
+      |];
       cursor        = cursor ;
       linebreaking  = t.linebreaking ;
     } |> Screen.put_text textscreen
 
   let draw_frame t screen is_focused =
     let screen_height = Screen.get_height screen in
-    let lines = Slice.init_slice screen_height screen_height default_frame_line in
+    let text_height = screen_height - 1 in
+    let lines = Slice.init_slice screen_height DrawingDefault.frame_line in
     (* header *)
-    let header_text = t.filebuffer.Filebuffer.header ^ (t |> cursor |> v2_to_string) in
     Slice.set lines 0 (Line.mk_line [
-      {
-        Block.text = header_text ;
-        Block.offset = 0 ;
-        Block.len = slen header_text ;
-      }
+      Block.mk_block t.filebuffer.Filebuffer.header  ;
+      Block.mk_block (v2_to_string t.cursor) ;
     ]) ;
     (* line numbering *)
-    let text_height = screen_height - 1 in
     let start = t.view_start in
     let stop = min (buflen t) (start + text_height) in
     let line_n_offset =
@@ -1607,20 +1611,21 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ])
     done ;
     (* header color block *)
-    let header_color =
+    let header_colorblock =
       if is_focused
-        then Config.default.colors.focus_header
-        else Config.default.colors.header
+        then DrawingDefault.header_focused_colorblock
+        else DrawingDefault.header_unfocused_colorblock
     in
-
     let open Textview in {
       lines         = lines ;
       colors        = Slice.wrap_array [|
-        (* TODO: replace with Line *)
-        Colorblock.mk_colorsegment 0 0 (Screen.get_width screen) header_color ;
+        (* PERF: this array could be hoisted into the fileview *)
+        header_colorblock ;
+        (* line numbers *)
         Colorblock.mk_colorblock
           (Area.Rectangle (mk_rect 1 1 6 text_height))
           Config.default.colors.line_numbers ;
+        (* border *)
         Colorblock.mk_colorblock
           (Area.VerticalSegment (Segment.mk_segment 0 1 text_height))
           Config.default.colors.border ;
@@ -2231,10 +2236,8 @@ let () =
 
 (* next TODOs:
  *
- *  - fix cursor dragging fileview at the bottom:
- *    - there are some offsets issues
- *  - put back cursor vertical and horizontal line highlights
- *  - correctly break down line number coloring in Overflow mode
+ *  - move the line breaking down algorithm one layer up into Fileview ?
+ *    otherwise, how can I correctly offset cursor position and line numbers ?
  *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
