@@ -649,6 +649,9 @@ module Line = struct
     blocks  = blocks ;
   }
 
+  let block_to_line block =
+    mk_line [ block ]
+
   let zero_line =
     mk_line []
 
@@ -1449,7 +1452,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Clip ;
+    linebreaking  = Overflow ;
   }
 
   let line_at t =
@@ -1560,6 +1563,121 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     let header_unfocused_colorblock = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.header
   end
 
+  let fill_slices_with_clipping t text_height text_width line_slice line_number_slice line_number_offset =
+    assert (Slice.len line_slice = Slice.len line_number_slice) ;
+    for i = 0 to text_height - 1 do
+      let l = i + t.view_start |> Slice.get t.filebuffer.buffer |> Block.mk_block in
+      (* TODO: put a Line.t into the LineNumberCache ! *)
+      let n = LineNumberCache.get (i + line_number_offset) in
+      Slice.set line_slice i (Line.block_to_line l) ;
+      Slice.set line_number_slice i (Line.block_to_line n)
+    done
+
+  let fill_slices_with_wrapping t text_height text_width line_slice line_number_slice line_number_offset =
+    (* 'i' is the input index, 'j' is the output index *)
+    let rec loop j i line_offset =
+      Printf.fprintf logs "fill_slice %d %d\n" j i ; flush logs ;
+      if j < text_height then (
+        let l = Slice.get t.filebuffer.buffer (i + t.view_start) in
+        let line_len = slen l in (* TODO: replace with Line.len for supporting tabs *)
+        let b = {
+          Block.text = l ;
+          Block.offset = line_offset ;
+          Block.len = min (line_len - line_offset) text_width ;
+        } in
+        let len_left = line_len - b.len in
+        let (next_i, next_offset) =
+          if len_left = 0
+            then (i + 1, 0)
+            else (i, line_offset + b.len)
+        in
+        Slice.set line_slice j (Line.mk_line [ b ]) ;
+        if line_offset = 0 then (
+          let n = LineNumberCache.get (i + line_number_offset) in
+          Slice.set line_number_slice j (Line.mk_line [ n ])
+        ) ;
+        loop (j + 1) next_i next_offset
+      )
+    in
+      loop 0 t.view_start 0
+
+  let fill_slices =
+    function
+    | Clip      -> fill_slices_with_clipping
+    | Overflow  -> fill_slices_with_wrapping
+
+  let put_text_lines text_screen line_slice cursor is_focused =
+    let open Textview in {
+      lines         = line_slice ;
+      colors        = Slice.wrap_array [|
+        Colorblock.mk_colorblock (Area.Line cursor.y) Config.default.colors.cursor_line ;
+        Colorblock.mk_colorblock (Area.Column cursor.x) Config.default.colors.cursor_line ;
+      |] ;
+      cursor        = if is_focused then Some cursor else None ;
+      linebreaking  = Clip ;
+    } |> Screen.put_text text_screen
+
+  let put_frame screen frame_slice text_height is_focused =
+    let open Textview in {
+      lines         = frame_slice ;
+      colors        = Slice.wrap_array [|
+        (* PERF: this array could be hoisted into the fileview *)
+        (if is_focused
+          then DrawingDefault.header_focused_colorblock
+          else DrawingDefault.header_unfocused_colorblock) ;
+        (* line numbers *)
+        Colorblock.mk_colorblock
+          (Area.Rectangle (mk_rect 1 1 6 text_height))
+          Config.default.colors.line_numbers ;
+        (* border *)
+        Colorblock.mk_colorblock
+          (Area.VerticalSegment (Segment.mk_segment 0 1 text_height))
+          Config.default.colors.border ;
+      |] ;
+      cursor        = None ;
+      linebreaking  = Clip ;
+    } |> Screen.put_text screen
+
+  let draw_text_and_frame t screen is_focused =
+    let subscreen_rect = {
+        topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
+        bottomright = Screen.get_size screen ;
+    } in
+    let screen_height = Screen.get_height screen in
+    let text_height = screen_height - 1 in
+    let text_width = (Screen.get_width screen) - 6 in
+    let line_slice = Slice.init_slice text_height DrawingDefault.text_line in
+    let frame_slice = Slice.init_slice screen_height DrawingDefault.frame_line in
+    let line_number_slice = Slice.slice_right 1 frame_slice in
+    let line_n_offset =
+      match t.numbering with
+      | Absolute        -> 1 ;
+      | CursorRelative  -> -t.cursor.y
+    in
+    Slice.set frame_slice 0 (Line.mk_line [
+      Block.mk_block t.filebuffer.Filebuffer.header  ;
+      Block.mk_block (v2_to_string t.cursor) ;
+    ]) ;
+    if true then
+    fill_slices
+      t.linebreaking
+      t
+      (min text_height ((buflen t) - t.view_start))
+      text_width
+      line_slice
+      line_number_slice
+      line_n_offset ;
+    put_text_lines
+      (Screen.mk_subscreen screen subscreen_rect)
+      line_slice
+      (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
+      is_focused ;
+    put_frame
+      screen
+      frame_slice
+      text_height
+      is_focused
+
   let draw_text t screen is_focused =
     let subscreen_rect = {
         topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
@@ -1635,8 +1753,12 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     } |> Screen.put_text screen
 
   let draw t screen is_focused =
-    draw_frame t screen is_focused ;
-    draw_text t screen is_focused
+    if true then
+      draw_text_and_frame t screen is_focused
+    else (
+      draw_frame t screen is_focused ;
+      draw_text t screen is_focused
+    )
 end
 
 
@@ -2012,7 +2134,7 @@ module Ciseau = struct
   let mk_tileset term_dim filebuffers =
     filebuffers
       |> Slice.map Fileview.init_fileview
-      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
+      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.zero
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
