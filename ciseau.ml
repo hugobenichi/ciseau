@@ -644,6 +644,8 @@ type linebreak = Clip | Overflow
 
 module Line = struct
 
+  (* PERF: this should be a variant with a case for the most common case of a full string *)
+  (* type t = String of string | Blocks of Block.t list *)
   type t = {
     blocks  : Block.t list ;
   }
@@ -1505,26 +1507,40 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   (* facilitates passing data in and out of fill_linesinfo, put_text_lines, put_frame, ... *)
   type linesinfo = {
     (* input *)
-    text_size           : v2 ;
-    line_number_offset  : int ;
+    text_size       : v2 ;
+    line_offset     : int ;
     (* output *)
-    lines               : Line.t Slice.t ;
-    lines_number        : Line.t Slice.t ;
-    mutable cursor      : v2 ;
+    line_buffer     : Line.t Slice.t ;
+    frame_buffer    : Line.t Slice.t ;
+    mutable cursor  : v2 ;
   }
 
-  let fill_linesinfo_with_clipping t { text_size ; line_number_offset ; lines ; lines_number } =
-    assert (Slice.len lines = Slice.len lines_number) ;
+  (* PERF: hoist in fileview struct *)
+  let mk_linesinfo t screen_size =
+    let text_width = screen_size.x - 6 in
+    let text_height = screen_size.y - 1 in
+    {
+      text_size     = mk_v2 text_width (min text_height ((buflen t) - t.view_start)) ;
+      line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
+      frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
+      line_offset   =
+        (match t.numbering with
+        | Absolute        -> 1
+        | CursorRelative  -> -t.cursor.y) ;
+      cursor        = mk_v2 t.cursor.x (t.cursor.y - t.view_start) ;
+    }
+
+  let fill_linesinfo_with_clipping t { text_size ; line_offset ; line_buffer ; frame_buffer } =
     for i = 0 to text_size.y - 1 do
       let l = i + t.view_start |> Slice.get t.filebuffer.buffer |> Block.mk_block in
       (* TODO: put a Line.t into the LineNumberCache ! *)
-      let n = LineNumberCache.get (i + line_number_offset) in
-      Slice.set lines i (Line.block_to_line l) ;
-      Slice.set lines_number i (Line.block_to_line n)
+      let n = LineNumberCache.get (i + line_offset) in
+      Slice.set line_buffer i (Line.block_to_line l) ;
+      Slice.set frame_buffer (i + 1) (Line.block_to_line n)
     done
 
   let fill_linesinfo_with_wrapping t linesinfo =
-    let { text_size ; line_number_offset ; lines ; lines_number ; cursor } = linesinfo in
+    let { text_size ; line_offset ; line_buffer ; frame_buffer ; cursor } = linesinfo in
     (* 'i' is the input index, 'j' is the output index *)
     let { x = cursor_x ; y = cursor_y } = cursor in
     let rec loop j i line_offset =
@@ -1543,12 +1559,13 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
             then (i + 1, 0)
             else (i, line_offset + b.len)
         in
-        Slice.set lines j (Line.mk_line [ b ]) ;
+        Slice.set line_buffer j (Line.mk_line [ b ]) ;
+        (* set cursor position in screen space if current segment contains cursor in text space *)
         if i = cursor_y && line_offset <= cursor_x && cursor_x < (line_offset + text_size.x) then
           linesinfo.cursor <- mk_v2 (cursor_x mod text_size.x) j ;
         if line_offset = 0 then (
-          let n = LineNumberCache.get (i + line_number_offset) in
-          Slice.set lines_number j (Line.mk_line [ n ])
+          let n = LineNumberCache.get (i + line_offset) in
+          Slice.set frame_buffer (j + 1) (Line.mk_line [ n ])
         ) ;
         loop (j + 1) next_i next_offset
       )
@@ -1594,6 +1611,12 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       cursor        = None ;
     } |> Screen.put_text screen
 
+  let mk_text_subscreen screen =
+    Screen.mk_subscreen screen {
+      topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
+      bottomright = Screen.get_size screen ;
+    }
+
   (* BUGS:
    *  - crash in Clip mode when the cursor goes off the screen:
    *    - let's try to implement horizontal scrolling
@@ -1601,41 +1624,22 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
    *    - total screen height is probably off by 1
    *)
   let draw t screen is_focused =
-    let subscreen_rect = {
-        topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
-        bottomright = Screen.get_size screen ;
-    } in
     let screen_height = Screen.get_height screen in
     let text_height = screen_height - 1 in
-    let text_width = (Screen.get_width screen) - 6 in
-    let line_slice = Slice.init_slice text_height DrawingDefault.text_line in
-    let frame_slice = Slice.init_slice screen_height DrawingDefault.frame_line in
-    let line_number_slice = Slice.slice_right 1 frame_slice in
-    let line_n_offset =
-      match t.numbering with
-      | Absolute        -> 1 ;
-      | CursorRelative  -> -t.cursor.y
-    in
-    Slice.set frame_slice 0 (Line.mk_line [
+    let linesinfo = mk_linesinfo t (Screen.get_size screen) in
+    fill_linesinfo t.linebreaking t linesinfo ;
+    Slice.set linesinfo.frame_buffer 0 (Line.mk_line [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
       Block.mk_block (v2_to_string t.cursor) ;
     ]) ;
-    let linesinfo = {
-      text_size           = mk_v2 text_width (min text_height ((buflen t) - t.view_start)) ;
-      lines               = line_slice ;
-      lines_number        = line_number_slice ;
-      line_number_offset  = line_n_offset ;
-      cursor              = mk_v2 t.cursor.x (t.cursor.y - t.view_start) ;
-    } in
-    fill_linesinfo t.linebreaking t linesinfo ;
     put_text_lines
-      (Screen.mk_subscreen screen subscreen_rect)
-      line_slice
+      (mk_text_subscreen screen)
+      linesinfo.line_buffer
       linesinfo.cursor
       is_focused ;
     put_frame
       screen
-      frame_slice
+      linesinfo.frame_buffer
       text_height
       is_focused
 end
