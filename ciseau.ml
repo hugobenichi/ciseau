@@ -1492,6 +1492,8 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       y = y' ;
     }
 
+  (* TODO: move drawing in separate module ? *)
+
   module DrawingDefault = struct
     let frame_line  = Line.mk_line [ Block.mk_block " ~" ]
     let text_line   = Line.mk_line [ Block.mk_block "" ]
@@ -1598,7 +1600,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
    *  = crash in Fullview mode when scrolling down
    *    - total screen height is probably off by 1
    *)
-  let draw_text_and_frame t screen is_focused =
+  let draw t screen is_focused =
     let subscreen_rect = {
         topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
         bottomright = Screen.get_size screen ;
@@ -1636,86 +1638,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       frame_slice
       text_height
       is_focused
-
-  let draw_text t screen is_focused =
-    let subscreen_rect = {
-        topleft = mk_v2 6 1 ; (* 6 for border + line number, 1 for header space *)
-        bottomright = Screen.get_size screen ;
-    } in
-    let textscreen = Screen.mk_subscreen screen subscreen_rect in
-    let text_height = Screen.get_height textscreen in
-    let lines = Slice.init_slice text_height DrawingDefault.text_line in
-    let start = t.view_start in
-    let stop = min (buflen t) (start + text_height) in
-    for line_idx = start to stop - 1 do
-      let l = line_idx |> Slice.get t.filebuffer.buffer |> Block.mk_block in
-      Slice.set lines (line_idx - start) (Line.mk_line [ l ])
-    done ;
-    let cursor =
-      if is_focused
-        then Some (mk_v2 t.cursor.x (t.cursor.y - t.view_start))
-        else None
-    in
-    let open Textview in {
-      lines         = lines ;
-      colors        = Slice.wrap_array [|
-        Colorblock.mk_colorblock (Area.Line (t.cursor.y - t.view_start)) Config.default.colors.cursor_line ;
-        Colorblock.mk_colorblock (Area.Column t.cursor.x) Config.default.colors.cursor_line ;
-      |];
-      cursor        = cursor ;
-    } |> Screen.put_text textscreen
-
-  let draw_frame t screen is_focused =
-    let screen_height = Screen.get_height screen in
-    let text_height = screen_height - 1 in
-    let lines = Slice.init_slice screen_height DrawingDefault.frame_line in
-    (* header *)
-    Slice.set lines 0 (Line.mk_line [
-      Block.mk_block t.filebuffer.Filebuffer.header  ;
-      Block.mk_block (v2_to_string t.cursor) ;
-    ]) ;
-    (* line numbering *)
-    let start = t.view_start in
-    let stop = min (buflen t) (start + text_height) in
-    let line_n_offset =
-      match t.numbering with
-      | Absolute        -> 1 ;
-      | CursorRelative  -> -t.cursor.y
-    in
-    for line_idx = start to stop - 1 do
-      let n = LineNumberCache.get (line_idx + line_n_offset) in
-      Slice.set lines (line_idx - start + 1) (Line.mk_line [ n ])
-    done ;
-    (* header color block *)
-    let header_colorblock =
-      if is_focused
-        then DrawingDefault.header_focused_colorblock
-        else DrawingDefault.header_unfocused_colorblock
-    in
-    let open Textview in {
-      lines         = lines ;
-      colors        = Slice.wrap_array [|
-        (* PERF: this array could be hoisted into the fileview *)
-        header_colorblock ;
-        (* line numbers *)
-        Colorblock.mk_colorblock
-          (Area.Rectangle (mk_rect 1 1 6 text_height))
-          Config.default.colors.line_numbers ;
-        (* border *)
-        Colorblock.mk_colorblock
-          (Area.VerticalSegment (Segment.mk_segment 0 1 text_height))
-          Config.default.colors.border ;
-      |];
-      cursor        = None ;
-    } |> Screen.put_text screen
-
-  let draw t screen is_focused =
-    if true then
-      draw_text_and_frame t screen is_focused
-    else (
-      draw_frame t screen is_focused ;
-      draw_text t screen is_focused
-    )
 end
 
 
@@ -2314,9 +2236,7 @@ let () =
 
 (* next TODOs:
  *
- *  - move the line breaking down algorithm one layer up into Fileview ?
- *    otherwise, how can I correctly offset cursor position and line numbers ?
- *
+ *  - fix bugs in Fileview.draw
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
  *  - write function docs and comments
