@@ -638,28 +638,26 @@ module Byteslice = struct
     Bytes.blit_string text block_offset bytes bytes_offset blit_len ;
     blit_len
 
+  let blit_string { bytes ; offset ; len } text =
+    Bytes.blit_string text 0 bytes offset (min (slen text) len)
 end
 
 type linebreak = Clip | Overflow
 
 module Line = struct
 
-  (* PERF: this should be a variant with a case for the most common case of a full string *)
-  (* type t = String of string | Blocks of Block.t list *)
-  type t = {
-    blocks  : Block.t list ;
-  }
+  type t = String of string | Blocks of Block.t list
 
-  let mk_line blocks = {
-    blocks  = blocks ;
-  }
+  let mk_line blocks =
+    Blocks blocks
 
   let block_to_line block =
-    mk_line [ block ]
+    let open Block in
+    if (block.offset = 0) && (block.len = (slen block.text))
+      then String block.text
+      else Blocks [ block ]
 
-  let zero_line =
-    mk_line []
-
+  (* TODO: simplify so that I don't recreate blocks with split_block *)
   (* Blit 'left' chars of from line into 'bytes' starting at 'offset'. *)
   let rec blit_blocks byteslice =
     function
@@ -672,8 +670,10 @@ module Line = struct
         let blit_len = Byteslice.blit_block byteslice b in
         blit_blocks (Byteslice.drop blit_len byteslice) t
 
-  let blit_line byteslice { blocks } =
-    blit_blocks byteslice blocks
+  let blit_line byteslice =
+    function
+    | String s      -> Byteslice.blit_string byteslice s
+    | Blocks blocks -> blit_blocks byteslice blocks
 end
 
 
@@ -1260,8 +1260,7 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       bottomright = (screen_offset <+> bottomright) ;
     }
 
-  (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid.
-   * Return what did not fit, or zero_line if there is nothing left to put on screen *)
+  (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
   let put_line screen line_y_offset line =
     if line_y_offset < screen.size.y then
       let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
@@ -1497,8 +1496,12 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   (* TODO: move drawing in separate module ? *)
 
   module DrawingDefault = struct
+    let frame_line  = Line.String " ~"
+    let text_line   = Line.String ""
+    (*
     let frame_line  = Line.mk_line [ Block.mk_block " ~" ]
     let text_line   = Line.mk_line [ Block.mk_block "" ]
+    *)
 
     let header_focused_colorblock   = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.focus_header
     let header_unfocused_colorblock = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.header
