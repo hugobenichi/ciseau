@@ -651,6 +651,9 @@ module Line = struct
   let mk_line blocks =
     Blocks blocks
 
+  let of_string s =
+    String s
+
   let block_to_line block =
     let open Block in
     if (block.offset = 0) && (block.len = (slen block.text))
@@ -755,6 +758,7 @@ module Colorblock = struct
     mk_colorblock (Area.HorizontalSegment (Segment.mk_segment x y len)) colors
 end
 
+
 module Textview = struct
   type t = {
     lines         : Line.t Slice.t ;
@@ -825,7 +829,6 @@ module ScreenConfiguration = struct
     let columns = mk_config Columns Normal
     let rows    = mk_config Rows    Normal
   end
-
 
   let flip_orientation =
     function
@@ -1370,8 +1373,8 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     let cache =
       Array.init hardcoded_size mk_block
 
-    let get n =
-      Array.get cache (n + negative_offset)
+    let get base_offset n =
+      Array.get cache (base_offset + n + negative_offset)
 
     let line_number_cache_t2 = Sys.time () ;;
     Printf.fprintf logs "cache %f\n" (line_number_cache_t2 -. line_number_cache_t1) ;;
@@ -1416,14 +1419,15 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   let buflen t =
     Slice.len t.filebuffer.buffer
 
-  let adjust_view view_height t =
+  let adjust_view screen_height t =
+    let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     if t.cursor.y < t.view_start then
       { t with
         view_start  = t.cursor.y ;
       }
-    else if t.cursor.y > t.view_start + view_height then
+    else if t.cursor.y > t.view_start + text_height then
       { t with
-        view_start  = t.cursor.y - view_height ;
+        view_start  = t.cursor.y - text_height ;
       }
     else t
 
@@ -1511,7 +1515,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   type linesinfo = {
     (* input *)
     text_size       : v2 ;
-    line_offset     : int ;
+    line_number : int -> Line.t ;
     (* output *)
     line_buffer     : Line.t Slice.t ;
     frame_buffer    : Line.t Slice.t ;
@@ -1522,58 +1526,60 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   let mk_linesinfo t screen_size =
     let text_width = screen_size.x - 6 in
     let text_height = screen_size.y - 1 in
+    let line_number_offset =
+      match t.numbering with
+        | Absolute        -> 1
+        | CursorRelative  -> -t.cursor.y
+    in
     {
       text_size     = mk_v2 text_width (min text_height ((buflen t) - t.view_start)) ;
       line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
       frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
-      line_offset   =
-        (match t.numbering with
-        | Absolute        -> 1
-        | CursorRelative  -> -t.cursor.y) ;
+      line_number   =
+        (* PERF: use Line.String instead ! put the Line.t inside the cache directly *)
+        LineNumberCache.get line_number_offset >> Line.block_to_line ;
       cursor        = mk_v2 t.cursor.x (t.cursor.y - t.view_start) ;
     }
 
-  let fill_linesinfo_with_clipping t { text_size ; line_offset ; line_buffer ; frame_buffer } =
+  let fill_linesinfo_with_clipping t { text_size ; line_number ; line_buffer ; frame_buffer } =
     for i = 0 to text_size.y - 1 do
-      let l = i + t.view_start |> Slice.get t.filebuffer.buffer |> Block.mk_block in
-      (* TODO: put a Line.t into the LineNumberCache ! *)
-      let n = LineNumberCache.get (i + line_offset) in
+      let line_idx = i + t.view_start in
+      let l = Slice.get t.filebuffer.buffer line_idx |> Block.mk_block in
       Slice.set line_buffer i (Line.block_to_line l) ;
-      Slice.set frame_buffer (i + 1) (Line.block_to_line n)
+      Slice.set frame_buffer (i + 1) (line_number line_idx)
     done
 
   let fill_linesinfo_with_wrapping t linesinfo =
-    let { text_size ; line_offset ; line_buffer ; frame_buffer ; cursor } = linesinfo in
+    let { text_size ; line_number ; line_buffer ; frame_buffer ; cursor } = linesinfo in
     (* 'i' is the input index, 'j' is the output index *)
     let { x = cursor_x ; y = cursor_y } = cursor in
-    let rec loop j i line_offset =
-      Printf.fprintf logs "fill_slice out:%d in:%d +%d\n" j i line_offset ; flush logs ;
+    let rec loop j i line_x_pos =
       if j < text_size.y then (
-        let l = Slice.get t.filebuffer.buffer (i + t.view_start) in
+        let line_y_pos = i + t.view_start in
+        let l = Slice.get t.filebuffer.buffer line_y_pos in
         let line_len = slen l in (* TODO: replace with Line.len for supporting tabs *)
         let b = {
           Block.text = l ;
-          Block.offset = line_offset ;
-          Block.len = min (line_len - line_offset) text_size.x ;
+          Block.offset = line_x_pos ;
+          Block.len = min (line_len - line_x_pos) text_size.x ;
         } in
-        let len_left = line_len - b.len - line_offset in
+        let len_left = line_len - b.len - line_x_pos in
         let (next_i, next_offset) =
           if len_left = 0
             then (i + 1, 0)
-            else (i, line_offset + b.len)
+            (* the line_x_pos should always moves in increments equal to 'text_size.x' *)
+            else (i, line_x_pos + b.len)
         in
         Slice.set line_buffer j (Line.mk_line [ b ]) ;
         (* set cursor position in screen space if current segment contains cursor in text space *)
-        if i = cursor_y && line_offset <= cursor_x && cursor_x < (line_offset + text_size.x) then
+        if line_y_pos = cursor_y && line_x_pos <= cursor_x && cursor_x < (line_x_pos + text_size.x) then
           linesinfo.cursor <- mk_v2 (cursor_x mod text_size.x) j ;
-        if line_offset = 0 then (
-          let n = LineNumberCache.get (i + line_offset) in
-          Slice.set frame_buffer (j + 1) (Line.mk_line [ n ])
-        ) ;
+        if line_x_pos = 0 then
+          Slice.set frame_buffer (j + 1) (line_number line_y_pos) ;
         loop (j + 1) next_i next_offset
       )
     in
-      loop 0 t.view_start 0
+      loop 0 0 0
 
   let fill_linesinfo =
     function
@@ -1850,7 +1856,7 @@ module Tileset = struct
       if i < n_tiles
         then
           let tile = Slice.get screen_tiles i in
-          let height = tile.bottomright.y - tile.topleft.y - 1 in (* CHECK: -1 for header ? *)
+          let height = tile.bottomright.y - tile.topleft.y in
           Fileview.adjust_view height view
         else
           view
@@ -1891,10 +1897,10 @@ module Tileset = struct
       | FileviewOp fileview_op ->
           let fileviews' = Slice.clone t.fileviews in
           let focused_tile = Slice.get t.screen_tiles t.focus_index in
-          let height = focused_tile.bottomright.y - focused_tile.topleft.y - 1 in
+          let screen_height = focused_tile.bottomright.y - focused_tile.topleft.y in
           t.focus_index
             |> Slice.get fileviews'
-            |> fileview_op height
+            |> fileview_op screen_height
             |> Slice.set fileviews' t.focus_index ;
           { t with fileviews = fileviews' }
       | ScreenLayoutCycleNext ->
@@ -2243,7 +2249,14 @@ let () =
 
 (* next TODOs:
  *
- *  - fix bugs in Fileview.draw
+ *  - fix bugs after all this rewrite and refactoring of Fileview.draw
+ *    - cursor position is a bit off in Overflow mode:
+ *      - there is a negative y offset on the cursor that is equal to the number of line wraps
+ *        that are visible in the view and that before the true position !
+ *    - when line number is too high, it gets colored with the 'no_text' magenta color for '~'
+ *    - still incorrect when cursor goes of the screen in Clip mode due to a long line:
+ *      - let's do horizontal scrolling !
+ *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
  *  - write function docs and comments
