@@ -1367,11 +1367,8 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     let format_n n =
       Printf.sprintf "%5d " (n - negative_offset)
 
-    let mk_block n =
-      Block.mk_block (format_n n)
-
     let cache =
-      Array.init hardcoded_size mk_block
+      Array.init hardcoded_size (format_n >> Line.of_string)
 
     let get base_offset n =
       Array.get cache (base_offset + n + negative_offset)
@@ -1502,10 +1499,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   module DrawingDefault = struct
     let frame_line  = Line.String " ~"
     let text_line   = Line.String ""
-    (*
-    let frame_line  = Line.mk_line [ Block.mk_block " ~" ]
-    let text_line   = Line.mk_line [ Block.mk_block "" ]
-    *)
 
     let header_focused_colorblock   = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.focus_header
     let header_unfocused_colorblock = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.header
@@ -1535,17 +1528,15 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       text_size     = mk_v2 text_width (min text_height ((buflen t) - t.view_start)) ;
       line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
       frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
-      line_number   =
-        (* PERF: use Line.String instead ! put the Line.t inside the cache directly *)
-        LineNumberCache.get line_number_offset >> Line.block_to_line ;
+      line_number   = LineNumberCache.get line_number_offset ;
       cursor        = mk_v2 t.cursor.x (t.cursor.y - t.view_start) ;
     }
 
   let fill_linesinfo_with_clipping t { text_size ; line_number ; line_buffer ; frame_buffer } =
     for i = 0 to text_size.y - 1 do
       let line_idx = i + t.view_start in
-      let l = Slice.get t.filebuffer.buffer line_idx |> Block.mk_block in
-      Slice.set line_buffer i (Line.block_to_line l) ;
+      let l = Slice.get t.filebuffer.buffer line_idx |> Line.of_string in
+      Slice.set line_buffer i l ;
       Slice.set frame_buffer (i + 1) (line_number line_idx)
     done
 
@@ -1570,6 +1561,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
             (* the line_x_pos should always moves in increments equal to 'text_size.x' *)
             else (i, line_x_pos + b.len)
         in
+        (* PERF: introduce a Line.Block variant to avoid the case of singleton list *)
         Slice.set line_buffer j (Line.mk_line [ b ]) ;
         (* set cursor position in screen space if current segment contains cursor in text space *)
         if line_y_pos = cursor_y && line_x_pos <= cursor_x && cursor_x < (line_x_pos + text_size.x) then
@@ -1629,8 +1621,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   (* BUGS:
    *  - crash in Clip mode when the cursor goes off the screen:
    *    - let's try to implement horizontal scrolling
-   *  = crash in Fullview mode when scrolling down
-   *    - total screen height is probably off by 1
    *)
   let draw t screen is_focused =
     let screen_height = Screen.get_height screen in
@@ -2113,8 +2103,8 @@ module Ciseau = struct
       let open Textview in
       Screen.put_text editor.status_screen {
         lines         = Slice.wrap_array [|
-          Line.mk_line [Block.mk_block status_text1] ;
-          Line.mk_line [Block.mk_block status_text2] ;
+          Line.String status_text1 ;
+          Line.String status_text2 ;
         |] ;
         colors        = editor.status_colorblocks ;
         cursor        = None ;
