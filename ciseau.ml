@@ -1384,7 +1384,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Overflow ;
+    linebreaking  = Clip ;
   }
 
   let line_at t =
@@ -1531,7 +1531,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
 
   let fill_linesinfo_with_clipping (t : t) (linesinfo : linesinfo) =
     let { text_size ; line_number ; line_buffer ; frame_buffer } = linesinfo in
-    let x_last_index = text_size.x - 1 in (* BUG: this hides the last char in the line ??? *)
+    let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
     let x_scrolling = max 0 (t.cursor.x - x_last_index) in
     linesinfo.cursor <- mk_v2 (t.cursor.x - x_scrolling) (t.cursor.y - t.view_start) ;
     for i = 0 to linesinfo.text_stop_y - 1 do
@@ -1542,7 +1542,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
         if x_len < 1 then Line.zero_line else {
           Block.text = l ;
           Block.offset = x_scrolling ;
-          Block.len = min x_len x_last_index ;
+          Block.len = min x_len text_size.x ;
         } |> Line.of_block
       in
       Slice.set line_buffer i b ;
@@ -2248,7 +2248,6 @@ let () =
 (* next TODOs:
  *
  *  - fix bugs after all this rewrite and refactoring of Fileview.draw
- *    - in Clip mode the right most character is hidden
  *    - in Overflow mode, the cursor dragging in adjust_view is off
  *    - when line number is too high, it gets colored with the 'no_text' magenta color for '~'
  *      - simply put the '~' magenta block only at text_stop_y offset wih len text_height - text_stop_y
