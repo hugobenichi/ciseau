@@ -1397,7 +1397,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Clip ;
+    linebreaking  = Overflow ;
   }
 
   let line_at t =
@@ -1505,6 +1505,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
 
   module DrawingDefault = struct
     let frame_line  = Line.String " ~"
+    let line_continuation  = Line.String " ..."
     let text_line   = Line.String ""
 
     let header_focused_colorblock   = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.focus_header
@@ -1582,11 +1583,13 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
         in
         (* PERF: introduce a Line.Block variant to avoid the case of singleton list *)
         Slice.set line_buffer j (Line.mk_line [ b ]) ;
+        Slice.set frame_buffer (j + 1)
+          (if line_x_pos = 0
+            then (line_number line_y_pos)
+            else DrawingDefault.line_continuation) ;
         (* set cursor position in screen space if current segment contains cursor in text space *)
         if line_y_pos = cursor_y && line_x_pos <= cursor_x && cursor_x < (line_x_pos + text_size.x) then
           linesinfo.cursor <- mk_v2 (cursor_x mod text_size.x) j ;
-        if line_x_pos = 0 then
-          Slice.set frame_buffer (j + 1) (line_number line_y_pos) ;
         loop (j + 1) next_i next_offset
       )
     in
@@ -1607,9 +1610,9 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       cursor        = if is_focused then Some cursor else None ;
     } |> Screen.put_text text_screen
 
-  let put_frame screen frame_slice text_height is_focused =
+  let put_frame screen linesinfo text_height is_focused =
     let open Textview in {
-      lines         = frame_slice ;
+      lines         = linesinfo.frame_buffer ;
       colors        = Slice.wrap_array [|
         (* PERF: this array could be hoisted into the fileview *)
         (if is_focused
@@ -1627,6 +1630,10 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
         Colorblock.mk_colorblock
           (Area.VerticalSegment (Segment.mk_segment 1 1 text_height))
           Config.default.colors.no_text ;
+        Colorblock.mk_colorblock
+          (Area.HorizontalSegment
+            (Segment.mk_segment 1 (linesinfo.cursor.y + 1 (* +1 for header *)) 5))
+          Config.default.colors.string ;
       |] ;
       cursor        = None ;
     } |> Screen.put_text screen
@@ -1653,7 +1660,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       is_focused ;
     put_frame
       screen
-      linesinfo.frame_buffer
+      linesinfo
       text_height
       is_focused
 end
