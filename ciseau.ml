@@ -634,6 +634,11 @@ module Byteslice = struct
   let blit_block
       { bytes ; offset = bytes_offset ; len = bytes_len }
       { text ; offset = block_offset ; len = block_len } =
+    assert (bytes_offset >= 0);
+    assert (block_offset >= 0);
+    assert (bytes_len >= 0);
+    assert (block_len >= 0);
+    assert (block_len = 0 || block_len <= (slen text) - block_offset) ;
     let blit_len = min block_len bytes_len in
     Bytes.blit_string text block_offset bytes bytes_offset blit_len ;
     blit_len
@@ -647,6 +652,8 @@ type linebreak = Clip | Overflow
 module Line = struct
 
   type t = String of string | Blocks of Block.t list
+
+  let zero_line = String ""
 
   let mk_line blocks =
     Blocks blocks
@@ -1390,7 +1397,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Overflow ;
+    linebreaking  = Clip ;
   }
 
   let line_at t =
@@ -1532,11 +1539,23 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       cursor        = mk_v2 t.cursor.x (t.cursor.y - t.view_start) ;
     }
 
-  let fill_linesinfo_with_clipping t { text_size ; line_number ; line_buffer ; frame_buffer } =
+  let fill_linesinfo_with_clipping t linesinfo =
+    let { text_size ; line_number ; line_buffer ; frame_buffer ; cursor } = linesinfo in
+    let x_last_index = text_size.x - 1 in
+    let x_scrolling = max 0 (cursor.x - x_last_index) in
+    linesinfo.cursor  <- mk_v2 (cursor.x - x_scrolling) cursor.y ;
     for i = 0 to text_size.y - 1 do
       let line_idx = i + t.view_start in
-      let l = Slice.get t.filebuffer.buffer line_idx |> Line.of_string in
-      Slice.set line_buffer i l ;
+      let l = Slice.get t.filebuffer.buffer line_idx in
+      let x_len = (slen l) - x_scrolling in
+      let b =
+        if x_len < 1 then Line.zero_line else {
+          Block.text = l ;
+          Block.offset = x_scrolling ;
+          Block.len = min x_len x_last_index ;
+        } |> Line.block_to_line
+      in
+      Slice.set line_buffer i b ;
       Slice.set frame_buffer (i + 1) (line_number line_idx)
     done
 
@@ -1618,10 +1637,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       bottomright = Screen.get_size screen ;
     }
 
-  (* BUGS:
-   *  - crash in Clip mode when the cursor goes off the screen:
-   *    - let's try to implement horizontal scrolling
-   *)
   let draw t screen is_focused =
     let screen_height = Screen.get_height screen in
     let text_height = screen_height - 1 in
@@ -2244,8 +2259,6 @@ let () =
  *      - there is a negative y offset on the cursor that is equal to the number of line wraps
  *        that are visible in the view and that before the true position !
  *    - when line number is too high, it gets colored with the 'no_text' magenta color for '~'
- *    - still incorrect when cursor goes of the screen in Clip mode due to a long line:
- *      - let's do horizontal scrolling !
  *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
