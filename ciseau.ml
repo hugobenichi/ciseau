@@ -1526,14 +1526,14 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
       frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
       line_number   = LineNumberCache.get line_number_offset ;
-      cursor        = mk_v2 t.cursor.x (t.cursor.y - t.view_start) ;
+      cursor        = v2_zero ;
     }
 
-  let fill_linesinfo_with_clipping t linesinfo =
-    let { text_size ; line_number ; line_buffer ; frame_buffer ; cursor } = linesinfo in
+  let fill_linesinfo_with_clipping (t : t) (linesinfo : linesinfo) =
+    let { text_size ; line_number ; line_buffer ; frame_buffer } = linesinfo in
     let x_last_index = text_size.x - 1 in (* BUG: this hides the last char in the line ??? *)
-    let x_scrolling = max 0 (cursor.x - x_last_index) in
-    linesinfo.cursor  <- mk_v2 (cursor.x - x_scrolling) cursor.y ;
+    let x_scrolling = max 0 (t.cursor.x - x_last_index) in
+    linesinfo.cursor <- mk_v2 (t.cursor.x - x_scrolling) (t.cursor.y - t.view_start) ;
     for i = 0 to linesinfo.text_stop_y - 1 do
       let line_idx = i + t.view_start in
       let l = Slice.get t.filebuffer.buffer line_idx in
@@ -1550,9 +1550,8 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     done
 
   let fill_linesinfo_with_wrapping t linesinfo =
-    let { text_size ; line_number ; line_buffer ; frame_buffer ; cursor } = linesinfo in
+    let { text_size ; line_number ; line_buffer ; frame_buffer } = linesinfo in
     (* 'i' is the input index, 'j' is the output index *)
-    let { x = cursor_x ; y = cursor_y } = cursor in
     let rec loop j i line_x_pos =
       if j < linesinfo.text_stop_y then (
         let line_y_pos = i + t.view_start in
@@ -1567,7 +1566,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
         let (next_i, next_offset) =
           if len_left = 0
             then (i + 1, 0)
-            (* the line_x_pos should always moves in increments equal to 'text_size.x' *)
+            (* TODO: the line_x_pos should always moves in increments equal to 'text_size.x' *)
             else (i, line_x_pos + b.len)
         in
         Slice.set line_buffer j (Line.of_block b) ;
@@ -1575,9 +1574,11 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
           (if line_x_pos = 0
             then (line_number line_y_pos)
             else DrawingDefault.line_continuation) ;
-        (* set cursor position in screen space if current segment contains cursor in text space *)
-        if line_y_pos = cursor_y && line_x_pos <= cursor_x && cursor_x < (line_x_pos + text_size.x) then
-          linesinfo.cursor <- mk_v2 (cursor_x mod text_size.x) j ;
+        if line_y_pos = t.cursor.y && line_x_pos = 0 then (
+          linesinfo.cursor <- mk_v2 (t.cursor.x mod text_size.x) (j + t.cursor.x / text_size.x) ;
+          Printf.fprintf logs "line_y_pox=%d j=%d i=%d <-cursor.y=%d\n" line_y_pos j i linesinfo.cursor.y ;
+          flush logs
+        ) ;
         loop (j + 1) next_i next_offset
       )
     in
@@ -1925,6 +1926,7 @@ module Tileset = struct
           Slice.get t.fileviews 0             |> Slice.set fileviews' t.focus_index ;
           mk_tileset
             0 t.screen_size t.screen_config fileviews'
+      (* TODO: for RotateViews, consider also rotating the focus_index *)
       | RotateViewsLeft ->
           let last_index = (Slice.len t.fileviews) - 1 in
           let fileviews' = Slice.clone t.fileviews in
@@ -2246,10 +2248,10 @@ let () =
 (* next TODOs:
  *
  *  - fix bugs after all this rewrite and refactoring of Fileview.draw
- *    - cursor position is a bit off in Overflow mode:
- *      - there is a negative y offset on the cursor that is equal to the number of line wraps
- *        that are visible in the view and that before the true position !
+ *    - in Clip mode the right most character is hidden
+ *    - in Overflow mode, the cursor dragging in adjust_view is off
  *    - when line number is too high, it gets colored with the 'no_text' magenta color for '~'
+ *      - simply put the '~' magenta block only at text_stop_y offset wih len text_height - text_stop_y
  *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
