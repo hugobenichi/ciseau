@@ -1509,6 +1509,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     line_buffer     : Line.t Slice.t ;
     frame_buffer    : Line.t Slice.t ;
     mutable cursor  : v2 ;
+    mutable last_y  : int ; (* index of the last line in line_buffer *)
   }
 
   (* PERF: hoist in fileview struct *)
@@ -1527,6 +1528,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
       frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
       line_number   = LineNumberCache.get line_number_offset ;
       cursor        = v2_zero ;
+      last_y        = 0 ;
     }
 
   let fill_linesinfo_with_clipping (t : t) (linesinfo : linesinfo) =
@@ -1546,7 +1548,8 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
         } |> Line.of_block
       in
       Slice.set line_buffer i b ;
-      Slice.set frame_buffer (i + 1) (line_number line_idx)
+      Slice.set frame_buffer (i + 1) (line_number line_idx) ;
+      linesinfo.last_y <- i
     done
 
   let fill_linesinfo_with_wrapping t linesinfo =
@@ -1579,6 +1582,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
           Printf.fprintf logs "line_y_pox=%d j=%d i=%d <-cursor.y=%d\n" line_y_pos j i linesinfo.cursor.y ;
           flush logs
         ) ;
+        linesinfo.last_y <- j ;
         loop (j + 1) next_i next_offset
       )
     in
@@ -1607,18 +1611,19 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
         (if is_focused
           then DrawingDefault.header_focused_colorblock
           else DrawingDefault.header_unfocused_colorblock) ;
+        (* default '~' column *)
+        Colorblock.mk_colorblock
+          (Area.VerticalSegment (Segment.mk_segment 1 1 linesinfo.text_size.y))
+          Config.default.colors.no_text ;
         (* line numbers *)
         Colorblock.mk_colorblock
-          (Area.Rectangle (mk_rect 1 1 6 linesinfo.text_size.y))
+          (Area.Rectangle (mk_rect 1 1 6 (1 + linesinfo.last_y)))
           Config.default.colors.line_numbers ;
         (* border *)
         Colorblock.mk_colorblock
           (Area.VerticalSegment (Segment.mk_segment 0 1 linesinfo.text_size.y))
           Config.default.colors.border ;
-        (* default '~' column *)
-        Colorblock.mk_colorblock
-          (Area.VerticalSegment (Segment.mk_segment 1 1 linesinfo.text_size.y))
-          Config.default.colors.no_text ;
+        (* current cursor line *)
         Colorblock.mk_colorblock
           (Area.HorizontalSegment
             (Segment.mk_segment 1 (linesinfo.cursor.y + 1 (* +1 for header *)) 5))
@@ -2249,8 +2254,8 @@ let () =
  *
  *  - fix bugs after all this rewrite and refactoring of Fileview.draw
  *    - in Overflow mode, the cursor dragging in adjust_view is off
- *    - when line number is too high, it gets colored with the 'no_text' magenta color for '~'
- *      - simply put the '~' magenta block only at text_stop_y offset wih len text_height - text_stop_y
+ *      - since in Clip mode the view is correct, it seems that the issue is an incorrect cursor position (again !)
+ *      - the adjust_view error seems to be equal to the number of overflow lines in the screenview.
  *
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - hammer the code with asserts and search for more bugs in the drawing
