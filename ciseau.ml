@@ -492,7 +492,7 @@ module Keys = struct
 
   let code_to_key_table = Array.init (256 + 32) mk_unknown_key
 
-  let _ = [
+  let defined_keys = [
     mk_key Ctrl_c      "Ctrl_c"        3 ;
     mk_key Ctrl_d      "Ctrl_d"        4 ;
     mk_key Ctrl_j      "Ctrl_j"        10 ;
@@ -539,7 +539,9 @@ module Keys = struct
     mk_key BraceLeft   "{"             123 ;
     mk_key BraceRight  "}"             125 ;
     mk_key EINTR       "EINTR"         256 ;
-  ] |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
+  ]
+
+  let _ = defined_keys |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
 
   let code_to_key = Array.get code_to_key_table
 
@@ -2206,19 +2208,24 @@ module Ciseau = struct
         stats = Stats.update_stats now input_duration editor.stats
     }
 
-  let process_events editor =
-    let before_input = Sys.time () in
-    let key = () |> Keys.next_key in
-    let after_input = Sys.time () in
-      editor |> process_key editor key.Keys.symbol
-             |> make_user_input key
-             |> update_stats (after_input -. before_input)
+  let process_events (next_key_fn : unit -> Keys.key) (editor : editor) : editor =
+    let t1 = Sys.time () in
+    let key = next_key_fn () in
+    let t2 = Sys.time () in
+      editor
+        |> process_key editor key.Keys.symbol
+        |> make_user_input key
+        |> update_stats (t2 -. t1)
 
-  let rec loop editor =
+  let rec loop (next_key_fn : unit -> Keys.key) (editor : editor) : unit =
     if editor.running then
-      editor |> refresh_screen |> process_events |> loop
+      editor
+        |> refresh_screen
+        |> process_events next_key_fn
+        |> loop next_key_fn
 
-  let run_editor_loop editor () = loop editor
+  let run_editor_loop editor () =
+    loop Keys.next_key editor
 
   let main () =
     try
@@ -2237,6 +2244,52 @@ module Ciseau = struct
 
 end
 
+
+module Fuzzer = struct
+
+  let fuzz_keys =
+    Keys.defined_keys
+      |> List.filter (fun k -> k.Keys.symbol <> Keys.Ctrl_c)
+      |> Array.of_list
+
+  let stop_key =
+    Keys.code_to_key 3 (* Ctrl_c *)
+
+  let next_key_fuzzer r n =
+    let l = alen fuzz_keys in
+    let i = ref 0 in
+    let rec loop () =
+      (* Unix.sleepf 0.01 ; *)
+      incr i ;
+      if !i > n
+        then stop_key
+        else
+          Random.State.int r l |> Array.get fuzz_keys
+    in loop
+
+  let run_editor_loop editor () =
+    let n = 100 in
+    let r = Random.State.make [| 0 ; 1 ; 2 |] in
+    Ciseau.loop (next_key_fuzzer r n) editor
+
+  let main () =
+    try
+      Printexc.record_backtrace true ;
+      let file =
+        if alen Sys.argv > 1
+          then Sys.argv.(1)
+          else __FILE__
+      in file |> Ciseau.init_editor
+              |> run_editor_loop
+              |> Term.do_with_raw_mode
+    with
+      e ->
+          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n" ;
+          Printexc.print_backtrace stdout
+
+end
+
+
 let log_sigwinch sig_n =
   (* Nothing to do: when SIGWINCH is handled, the read pending on keyboard input is interrupted.
    * The EINTR interrupt codepath there will trigger the resizing *)
@@ -2246,7 +2299,8 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
+  (* Ciseau.main () ; *)
+  Fuzzer.main ();
   close_out logs
 
 

@@ -14,7 +14,7 @@ $(OUTDIR)/iter: iter.ml
 	ocamlopt -o $@ $<
 
 $(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
-	ocamlopt $(OUTDIR)/ioctl.o unix.cmxa -o $@ $<
+	ocamlopt -p -g -inline 0 $(OUTDIR)/ioctl.o unix.cmxa -o $@ $<
 #	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
 
 $(OUTDIR)/ioctl.o: ioctl.c
