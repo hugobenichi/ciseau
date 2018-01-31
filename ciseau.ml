@@ -38,6 +38,30 @@ let write fd buffer len =
   if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
 
 
+module Backtrace = struct
+  open Printexc
+
+  let default_depth = 20
+
+  let format_loc =
+    function
+      | None -> "unknown loc"
+      | Some { filename ; line_number ; start_char ; end_char } ->
+          Printf.sprintf "at %s:\t%5d\t%d - %d" filename line_number start_char end_char
+
+  let get () =
+    get_callstack default_depth
+      |> backtrace_slots
+      |> function
+          | None -> "no stacktrace info"
+          | Some slots ->
+              slots
+                |> Array.map (Slot.location >> format_loc)
+                |> Array.to_list
+                |> String.concat "\n"
+end
+
+
 module Slice = struct
 
   type range = int * int
@@ -48,7 +72,7 @@ module Slice = struct
   }
 
   exception Bad_range of string
-  exception Out_of_bounds of string
+  exception Out_of_bounds of string * string
 
   let bound_checking = true
 
@@ -58,7 +82,7 @@ module Slice = struct
 
   let shift (s, e) i =
     if bound_checking && (i < 0 || (e - s) < i)
-      then raise (Out_of_bounds (Printf.sprintf "index %d is out of bounds (%d,%d)" i s e)) ;
+      then raise (Out_of_bounds (Printf.sprintf "index %d is out of bounds (%d,%d)" i s e, Backtrace.get ())) ;
     s + i
 
   let shift_range (s, e) (s', e') =
@@ -2290,12 +2314,25 @@ module Fuzzer = struct
 end
 
 
+module Debug = struct
+    let exception_printer =
+      function
+        | Slice.Out_of_bounds (msg, stacktrace)   ->  Some (msg ^ "\n" ^ stacktrace)
+        (* Other custom exceptions go there *)
+
+        | _ -> None
+
+    let _ = Printexc.register_printer exception_printer
+end
+
+
 let log_sigwinch sig_n =
   (* Nothing to do: when SIGWINCH is handled, the read pending on keyboard input is interrupted.
    * The EINTR interrupt codepath there will trigger the resizing *)
   ()
 
 let sigwinch = 28 (* That's for OSX *)
+
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
