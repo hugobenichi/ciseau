@@ -1892,6 +1892,7 @@ module Tileset = struct
     Slice.init_slice_fn (Slice.len fileviews) adjust_fileview
 
   let mk_tileset focus_index size screenconfig fileviews =
+    assert (focus_index < Slice.len fileviews) ;
     let screen_tiles  = ScreenConfiguration.mk_view_ports size (Slice.len fileviews) screenconfig
     in {
       screen_size   = size ;
@@ -1901,19 +1902,25 @@ module Tileset = struct
       fileviews     = adjust_fileviews screen_tiles fileviews ;
     }
 
+  let draw_fileview t frame_buffer view_idx tile_idx =
+      Fileview.draw
+        (Slice.get t.fileviews view_idx)
+        (Slice.get t.screen_tiles tile_idx |> Screen.mk_screen frame_buffer)
+
   let draw_fileviews t frame_buffer =
-    let screens = Slice.map (Screen.mk_screen frame_buffer) t.screen_tiles in
-    let n_screens = Slice.len screens in
+    let n_screens = Slice.len t.screen_tiles in
     if n_screens = 1
-      then (
-        let main_screen = Slice.get screens 0 in
-        let focused_fileview = Slice.get t.fileviews t.focus_index in
-        Fileview.draw focused_fileview main_screen true
-      ) else (
+      then
+        draw_fileview t frame_buffer t.focus_index 0 true
+      else
         for i = 0 to n_screens - 1 do
-          Fileview.draw (Slice.get t.fileviews i) (Slice.get screens i) (i = t.focus_index)
-        done ;
-      )
+          draw_fileview t frame_buffer i i (i = t.focus_index)
+        done
+
+  let get_focused_tile t =
+    if Slice.len t.screen_tiles > 1
+      then Slice.get t.screen_tiles t.focus_index
+      else Slice.get t.screen_tiles 0
 
   let apply_op t =
     (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
@@ -1924,7 +1931,7 @@ module Tileset = struct
             t.focus_index new_screen_size t.screen_config t.fileviews
       | FileviewOp fileview_op ->
           let fileviews' = Slice.clone t.fileviews in
-          let focused_tile = Slice.get t.screen_tiles t.focus_index in
+          let focused_tile = get_focused_tile t in
           let screen_height = focused_tile.bottomright.y - focused_tile.topleft.y in
           t.focus_index
             |> Slice.get fileviews'
@@ -2283,7 +2290,7 @@ module Fuzzer = struct
     let l = alen fuzz_keys in
     let i = ref 0 in
     let rec loop () =
-      (* Unix.sleepf 0.01 ; *)
+      (* Unix.sleepf 0.1 ; *)
       incr i ;
       if !i > n
         then stop_key
@@ -2292,7 +2299,7 @@ module Fuzzer = struct
     in loop
 
   let run_editor_loop editor () =
-    let n = 100 in
+    let n = 1000 in
     let r = Random.State.make [| 0 ; 1 ; 2 |] in
     Ciseau.loop (next_key_fuzzer r n) editor
 
