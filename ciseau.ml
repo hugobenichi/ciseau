@@ -1,6 +1,8 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
+let kLOG_STATS = true
+
 let tab_to_spaces = "  "
 
 let alen = Array.length ;;
@@ -20,6 +22,12 @@ let try_finally action cleanup =
     | Error error -> raise error
 
 let (>>) f g x = g (f x)
+
+let output_int f =
+  string_of_int >> output_string f
+
+let output_float f =
+  string_of_float >> output_string f
 
 let string_of_char c = String.make 1 c
 
@@ -1815,6 +1823,7 @@ module Stats = struct
     timestamp           : float ;
     last_input_duration : float ;
     last_cycle_duration : float ;
+    last_key_input      : Keys.key ;
   }
 
   let init_stats () = {
@@ -1824,15 +1833,17 @@ module Stats = struct
     timestamp           = Sys.time () ;
     last_input_duration = 0. ;
     last_cycle_duration = 0. ;
+    last_key_input      = Keys.mk_unknown_key 0 ;
   }
 
-  let update_stats now input_duration stats = {
+  let update_stats key now input_duration stats = {
     gc_stats            = Gc.quick_stat () ;
     last_major_words    = stats.gc_stats.Gc.major_words ;
     last_minor_words    = stats.gc_stats.Gc.minor_words ;
     timestamp           = now ;
     last_input_duration = input_duration ;
     last_cycle_duration = now -. stats.timestamp ;
+    last_key_input      = key ;
   }
 
   let word_byte_size =
@@ -1851,6 +1862,22 @@ module Stats = struct
       (format_memory_counter (stats.gc_stats.Gc.major_words -. stats.last_major_words))
       (format_memory_counter (stats.gc_stats.Gc.minor_words -. stats.last_minor_words))
       (1000. *. (stats.last_cycle_duration -. stats.last_input_duration))
+
+  let log_stats f stats =
+    output_string f "frame_time_ms " ;
+    output_float f stats.last_cycle_duration ;
+    output_string f "\n" ;
+    output_string f "heap_words " ;
+    output_int f stats.gc_stats.Gc.heap_words ;
+    output_string f "\n" ;
+    output_string f "minor_words " ;
+    output_float f (stats.gc_stats.Gc.minor_words -. stats.last_minor_words) ;
+    output_string logs "\n" ;
+    output_string f "key " ;
+    output_string f stats.last_key_input.repr ;
+    output_string f " " ;
+    output_int f stats.last_key_input.code ;
+    output_string logs "\n"
 end
 
 
@@ -2026,7 +2053,8 @@ module Ciseau = struct
     user_input      : string ;
     pending_input   : pending_command ;
     status_colorblocks : Colorblock.t Slice.t ;
-    stats           : Stats.t
+    stats           : Stats.t ;
+    log_stats       : bool ;
   }
 
   let main_screen_dimensions term_dim =
@@ -2083,6 +2111,7 @@ module Ciseau = struct
       pending_input   = None;
       status_colorblocks = mk_status_colorblocks term_dim.x ;
       stats           = Stats.init_stats () ;
+      log_stats       = kLOG_STATS ;
     }
 
   let resize_editor editor =
@@ -2219,7 +2248,8 @@ module Ciseau = struct
     | None          -> apply_command
     | Number digits -> apply_command_with_repetition (max 1 (dequeue_digits digits))
 
-  let process_key editor = key_to_command >> (process_command editor)
+  let process_key editor =
+    key_to_command >> (process_command editor)
 
   (* TODO: replace by a proper history of previous inputs *)
   let make_user_input key editor =
@@ -2232,11 +2262,14 @@ module Ciseau = struct
       user_input = truncate_string editor.term_dim.x new_user_input ;
     }
 
-  let update_stats input_duration editor =
-    let now = Sys.time ()
-    in {
+  let update_stats key input_duration editor =
+    let now = Sys.time () in
+    let stats' = Stats.update_stats key now input_duration editor.stats in
+    if editor.log_stats then
+      Stats.log_stats logs stats' ;
+    {
       editor with
-        stats = Stats.update_stats now input_duration editor.stats
+        stats = stats'
     }
 
   let process_events (next_key_fn : unit -> Keys.key) (editor : editor) : editor =
@@ -2246,7 +2279,7 @@ module Ciseau = struct
       editor
         |> process_key editor key.Keys.symbol
         |> make_user_input key
-        |> update_stats (t2 -. t1)
+        |> update_stats key (t2 -. t1)
 
   let rec loop (next_key_fn : unit -> Keys.key) (editor : editor) : unit =
     if editor.running then
@@ -2298,12 +2331,11 @@ module Fuzzer = struct
           Random.State.int r l |> Array.get fuzz_keys
     in loop
 
-  let run_editor_loop editor () =
-    let n = 1000 in
+  let run_editor_loop n editor () =
     let r = Random.State.make [| 0 ; 1 ; 2 |] in
     Ciseau.loop (next_key_fuzzer r n) editor
 
-  let main () =
+  let main n =
     try
       Printexc.record_backtrace true ;
       let file =
@@ -2311,7 +2343,7 @@ module Fuzzer = struct
           then Sys.argv.(1)
           else __FILE__
       in file |> Ciseau.init_editor
-              |> run_editor_loop
+              |> run_editor_loop n
               |> Term.do_with_raw_mode
     with
       e ->
@@ -2344,7 +2376,7 @@ let sigwinch = 28 (* That's for OSX *)
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
   (* Ciseau.main () ; *)
-  Fuzzer.main ();
+  Fuzzer.main 1000 ;
   close_out logs
 
 
