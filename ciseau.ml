@@ -303,6 +303,53 @@ end
 open Rect
 
 
+module Token = struct
+  type 'a token = {
+    kind  : 'a ;
+    start : int ;
+    stop  : int ;
+  }
+end
+
+
+module SpaceTokenizer = struct
+  open Token
+
+  type kind = Space | Tab | Printable | Control | Other
+
+  type t = kind token
+
+  let mk_tok k i j = {
+    kind  = k ;
+    start = i ;
+    stop  = j ;
+  }
+
+  let kind_of =
+    function
+      | '\032'              -> Space
+      | '\t'                -> Tab
+      | c when c < '\032'   -> Control
+      | c when c < '\127'   -> Printable
+      | '\127'              -> Control
+      | _                   -> Other
+
+  let tokenize text =
+    let s = slen text in
+    let kind_at i = String.get text i |> kind_of in
+    let rec loop tokens token =
+      if token.stop = s
+        then token :: tokens
+        else
+          match (token.kind, kind_at token.stop) with
+            | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 token.stop (token.stop + 1))
+            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.stop (token.stop + 1))
+            | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 token.stop (token.stop + 1))
+    in
+      mk_tok (kind_at 0) 0 1 |> loop []
+end
+
+
 module Color = struct
 
   type base = Black
