@@ -1405,6 +1405,17 @@ module Filebuffer = struct
 
   let init_filebuffer file =
     file |> read_file |> from_lines file
+
+  type token_kind = SpaceTokens
+
+  type token_search_op = Next | Previous
+
+  let get_line_at { buffer } =
+    Slice.get buffer
+
+  let get_tokens_at t =
+    function
+      | SpaceTokens -> get_line_at t >> SpaceTokenizer.tokenize
 end
 
 
