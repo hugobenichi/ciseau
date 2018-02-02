@@ -46,7 +46,7 @@ let write fd buffer len =
   if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
 
 
-module Backtrace = struct
+module Error = struct
   open Printexc
 
   let default_depth = 20
@@ -57,7 +57,7 @@ module Backtrace = struct
       | Some { filename ; line_number ; start_char ; end_char } ->
           Printf.sprintf "at %s:\t%5d\t%d - %d" filename line_number start_char end_char
 
-  let get () =
+  let get_backtrace () =
     get_callstack default_depth
       |> backtrace_slots
       |> function
@@ -67,6 +67,17 @@ module Backtrace = struct
                 |> Array.map (Slot.location >> format_loc)
                 |> Array.to_list
                 |> String.concat "\n"
+
+  exception E of string * string
+
+  let e msg =
+    E (msg, get_backtrace ())
+
+  let _ =
+    Printexc.register_printer
+      (function
+        | E (msg, stacktrace)   ->  Some (msg ^ "\n" ^ stacktrace)
+        | _                     ->  None)
 end
 
 
@@ -85,12 +96,12 @@ module Slice = struct
   let bound_checking = true
 
   let check_range (s, e) l =
-    if bound_checking && (s < 0 || l < e)
-      then raise (Bad_range (Printf.sprintf "cannot slice (%d,%d) from array of len %d" s e l))
+    if bound_checking && (s < 0 || l < e) then
+      raise (Error.e (Printf.sprintf "Bad slice range: cannot slice (%d,%d) from array of len %d" s e l))
 
   let shift (s, e) i =
-    if bound_checking && (i < 0 || (e - s) < i)
-      then raise (Out_of_bounds (Printf.sprintf "index %d is out of bounds (%d,%d)" i s e, Backtrace.get ())) ;
+    if bound_checking && (i < 0 || (e - s) < i) then
+      raise (Error.e (Printf.sprintf "Slice index %d access is out of bounds (%d,%d)" i s e)) ;
     s + i
 
   let shift_range (s, e) (s', e') =
@@ -337,14 +348,16 @@ module SpaceTokenizer = struct
   let tokenize text =
     let s = slen text in
     let kind_at i = String.get text i |> kind_of in
+
     let rec loop tokens token =
-      if token.stop = s
+      let i = token.stop in
+      if i = s
         then token :: tokens
         else
-          match (token.kind, kind_at token.stop) with
-            | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 token.stop (token.stop + 1))
-            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.stop (token.stop + 1))
-            | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 token.stop (token.stop + 1))
+          match (token.kind, kind_at i) with
+            | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
+            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 i (i + 1))
+            | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 i (i + 1))
     in
       mk_tok (kind_at 0) 0 1 |> loop []
 end
@@ -2397,18 +2410,6 @@ module Fuzzer = struct
           e |> Printexc.to_string |> Printf.printf "\nerror: %s\n" ;
           Printexc.print_backtrace stdout
 
-end
-
-
-module Debug = struct
-    let exception_printer =
-      function
-        | Slice.Out_of_bounds (msg, stacktrace)   ->  Some (msg ^ "\n" ^ stacktrace)
-        (* Other custom exceptions go there *)
-
-        | _ -> None
-
-    let _ = Printexc.register_printer exception_printer
 end
 
 
