@@ -114,6 +114,12 @@ module Slice = struct
   let get { data ; range } i =
     i |> shift range |> Array.get data
 
+  let first slice =
+    get slice 0
+
+  let last slice =
+    get slice ((len slice) - 1)
+
   let set { data ; range } i =
     i |> shift range |> Array.set data
 
@@ -314,12 +320,30 @@ end
 open Rect
 
 
+module Movement = struct
+  type dir = Left | Right | Up | Down | First | Last
+  type edge = TokenStart | TokenEnd
+  type move = dir * edge
+end
+
+
 module Token = struct
   type 'a token = {
     kind  : 'a ;
     start : int ;
     stop  : int ;
   }
+
+  let find_in_slice x tokens =
+    assert (x < (Slice.last tokens).stop) ;
+    let rec loop i =
+      let { start ; stop } = Slice.get tokens i in
+      if i < stop
+        then i
+        else loop (i + 1)
+    in
+      loop 0
+
 end
 
 
@@ -352,7 +376,7 @@ module SpaceTokenizer = struct
     let rec loop tokens token =
       let i = token.stop in
       if i = s
-        then token :: tokens
+        then token :: tokens |> List.rev |> Array.of_list |> Slice.wrap_array
         else
           match (token.kind, kind_at i) with
             | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
@@ -1408,14 +1432,30 @@ module Filebuffer = struct
 
   type token_kind = SpaceTokens
 
-  type token_search_op = Next | Previous
-
   let get_line_at { buffer } =
     Slice.get buffer
 
-  let get_tokens_at t =
+  let tokenize =
     function
-      | SpaceTokens -> get_line_at t >> SpaceTokenizer.tokenize
+      | SpaceTokens -> SpaceTokenizer.tokenize
+
+  let movement t cursor tok_kind (dir, edge) =
+    let line = get_line_at t cursor.y in
+    let tokens = tokenize tok_kind line in
+    let t =
+      let open Movement in
+      match dir with
+        | Up          (* TODO: implement *)
+        | Down        (* TODO: implement *)
+        | First       -> Slice.first tokens
+        | Last        -> Slice.last tokens
+        | Left        -> Token.find_in_slice cursor.x tokens |> dec |> Slice.get tokens
+        | Right       -> Token.find_in_slice cursor.x tokens |> inc |> Slice.get tokens
+    in
+    let open Movement in
+    match edge with
+      | TokenStart    ->  mk_v2 (t.stop - 1)  cursor.y
+      | TokenEnd      ->  mk_v2 t.start cursor.y
 end
 
 
