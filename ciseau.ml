@@ -709,6 +709,7 @@ module Block = struct
 
 end
 
+
 module Segment = struct
   type t = { pos : v2 ; len : int }
 
@@ -716,50 +717,6 @@ module Segment = struct
     pos = mk_v2 x y ;
     len = l ;
   }
-end
-
-module Byteslice = struct
-  type t = {
-    bytes   : Bytes.t ;
-    offset  : int;
-    len     : int ;
-  }
-
-  let mk_byteslice bytes offset len =
-    assert (len >= 0) ;
-    {
-      bytes = bytes ;
-      offset = offset ;
-      len  = len ;
-    }
-
-  let zero_byteslice =
-    mk_byteslice Bytes.empty 0 0
-
-  let drop n { bytes ; offset ; len } =
-    assert (n >= 0) ;
-    assert (n <= len) ;
-    let n' = min len n in
-    mk_byteslice bytes (offset + n') (len - n')
-
-  open Block
-
-  (* TODO: in the future, Block should be moved to Bytes.t instead of string, which will allow to
-   * harmonize evertyhing to Byteslice bliting *)
-  let blit_block
-      { bytes ; offset = bytes_offset ; len = bytes_len }
-      { text ; offset = block_offset ; len = block_len } =
-    assert (bytes_offset >= 0);
-    assert (block_offset >= 0);
-    assert (bytes_len >= 0);
-    assert (block_len >= 0);
-    assert (block_len = 0 || block_len <= (slen text) - block_offset) ;
-    let blit_len = min block_len bytes_len in
-    Bytes.blit_string text block_offset bytes bytes_offset blit_len ;
-    blit_len
-
-  let blit_string { bytes ; offset ; len } text =
-    Bytes.blit_string text 0 bytes offset (min (slen text) len)
 end
 
 
@@ -775,17 +732,6 @@ module Line = struct
   let of_string s   = String s
   let of_block b    = Block b
   let of_blocks bs  = Blocks bs
-
-  (* Blit chars of from line into 'bytes' starting at 'offset'. *)
-  let rec blit_line byteslice =
-    function
-    | String s        -> Byteslice.blit_string byteslice s
-    | Block b         -> Byteslice.blit_block byteslice b |> ignore
-    | Blocks []       -> ()
-    | Blocks (b :: t) ->
-        let n = Byteslice.blit_block byteslice b in
-        if n = b.Block.len then
-          blit_line (Byteslice.drop n byteslice) (Blocks t)
 end
 
 
@@ -898,10 +844,7 @@ module type FramebufferType = sig
   val render            : t -> bytevector -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
-  val get_byteslice     : t -> int -> int -> int -> Byteslice.t (* memory opt: do not use a v2 *)
-
-  val put_string        : t -> int -> int -> int -> string -> unit
-  val put_block         : t -> int -> int -> int -> Block.t -> unit
+  val put_line          : t -> int -> int -> int -> Line.t -> unit
 end
 
 
@@ -1230,7 +1173,8 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       in loop t start (start + 1)
 
     let get_color_string t color_idx =
-      (* MEMORY OPT: remove colors_at *)
+      (* MEMORY OPT: remove colors_at, for instance by cutting the color
+       * control string in two parts and apprending both separately. *)
       Term.Control.color_control_string (colors_at t color_idx)
 
     let next_line_len t start stop =
@@ -1305,13 +1249,6 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.bg_colors offset len bg
     done
 
-  let get_byteslice t x y len =
-    assert (x <= t.window.x) ;
-    assert (y <= t.window.y) ;
-    let offset = y * t.window.x + x in
-    let len' = min len (t.len - offset) in
-    Byteslice.mk_byteslice t.text offset len'
-
   let put_cursor t cursor =
     t.cursor <- cursor
 
@@ -1333,22 +1270,23 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     let blitlen = min maxblitlen block_len in
     assert (blitlen <= (t.len - bytes_offset)) ;
     Bytes.blit_string text block_offset t.text bytes_offset blitlen
-end
 
-  let rec blit_line2 framebuffer maxblitlen x y =
+  let rec put_line framebuffer maxblitlen x y =
     let open Line in
     function
     | String s        ->
-        Framebuffer.put_string framebuffer maxblitlen x y s
+        put_string framebuffer maxblitlen x y s
     | Block b         ->
-        Framebuffer.put_block framebuffer maxblitlen x y b
+        put_block framebuffer maxblitlen x y b
     | Blocks []       -> ()
     | Blocks (b :: t) ->
-        Framebuffer.put_block framebuffer maxblitlen x y b ;
+        put_block framebuffer maxblitlen x y b ;
         let blitlen = min maxblitlen b.Block.len in
         let x' = x + blitlen in
+        let maxblitlen' = maxblitlen - blitlen in
         if blitlen = b.Block.len then
-          blit_line2 framebuffer (maxblitlen - blitlen) (x + blitlen) y (Blocks t)
+          put_line framebuffer maxblitlen' x' y (Blocks t)
+end
 
 
 module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block = Block.t and type segment = Segment.t) = struct
@@ -1396,14 +1334,12 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
   let put_line screen line_y_offset line =
     if line_y_offset < screen.size.y then
-      let x = screen.screen_offset.x in
-      let y = screen.screen_offset.y + line_y_offset in
-      (* MEMORY OPT: do not create a byteslice *)
-      (*
-      let byteslice = Framebuffer.get_byteslice screen.frame_buffer x y screen.size.x in
-      Line.blit_line byteslice line
-      *)
-      blit_line2 screen.frame_buffer screen.size.x x y line
+      Framebuffer.put_line
+        screen.frame_buffer
+        screen.size.x
+        screen.screen_offset.x
+        (screen.screen_offset.y + line_y_offset)
+        line
 
   let put_colorblock screen { Colorblock.area ; Colorblock.colors } =
     area
