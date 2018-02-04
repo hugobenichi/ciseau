@@ -112,7 +112,7 @@ module Slice = struct
     e - s
 
   let get { data ; range } i =
-    i |> shift range |> Array.get data
+    shift range i |> Array.get data
 
   let first slice =
     get slice 0
@@ -120,8 +120,8 @@ module Slice = struct
   let last slice =
     get slice ((len slice) - 1)
 
-  let set { data ; range } i =
-    i |> shift range |> Array.set data
+  let set { data ; range } i x =
+    Array.set data (shift range i) x (* memory opt: do not use partial application + |> or >> *)
 
   let mk_slice s e data =
     check_range (s, e) (alen data) ;
@@ -278,9 +278,6 @@ module Vec2 = struct
 
   let v2_to_string t =
     Printf.sprintf "%d,%d" t.y t.x
-
-  let v2_to_offset stride vec2 =
-    vec2.y * stride + vec2.x
 
   let offset_to_v2 stride offset =
     mk_v2 (offset mod stride) (offset / stride)
@@ -901,7 +898,7 @@ module type FramebufferType = sig
   val render            : t -> bytevector -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
-  val get_byteslice     : t -> v2 -> int -> Byteslice.t
+  val get_byteslice     : t -> int -> int -> int -> Byteslice.t (* memory opt: do not use a v2 *)
 end
 
 
@@ -1305,12 +1302,12 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
       Array.fill t.bg_colors offset len bg
     done
 
-  let get_byteslice t pos len =
-    assert (pos.x <= t.window.x) ;
-    assert (pos.y <= t.window.y) ;
-    let vec_offset = v2_to_offset t.window.x pos in
-    let len' = min len (t.len - vec_offset) in
-    Byteslice.mk_byteslice t.text vec_offset len'
+  let get_byteslice t x y len =
+    assert (x <= t.window.x) ;
+    assert (y <= t.window.y) ;
+    let offset = y * t.window.x + x in
+    let len' = min len (t.len - offset) in
+    Byteslice.mk_byteslice t.text offset len'
 
   let put_cursor t cursor =
     t.cursor <- cursor
@@ -1363,8 +1360,10 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
   (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
   let put_line screen line_y_offset line =
     if line_y_offset < screen.size.y then
-      let start = mk_v2 screen.screen_offset.x (screen.screen_offset.y + line_y_offset) in
-      let byteslice = Framebuffer.get_byteslice screen.frame_buffer start screen.size.x in
+      let x = screen.screen_offset.x in
+      let y = screen.screen_offset.y + line_y_offset in
+      (* MEMORY OPT: do not create a byteslice *)
+      let byteslice = Framebuffer.get_byteslice screen.frame_buffer x y screen.size.x in
       Line.blit_line byteslice line
 
   let put_colorblock screen { Colorblock.area ; Colorblock.colors } =
