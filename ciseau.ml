@@ -899,6 +899,9 @@ module type FramebufferType = sig
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
   val get_byteslice     : t -> int -> int -> int -> Byteslice.t (* memory opt: do not use a v2 *)
+
+  val put_string        : t -> int -> int -> int -> string -> unit
+  val put_block         : t -> int -> int -> int -> Block.t -> unit
 end
 
 
@@ -1312,7 +1315,40 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
   let put_cursor t cursor =
     t.cursor <- cursor
 
+  let get_offset t x y =
+    assert (x <= t.window.x) ;
+    assert (y <= t.window.y) ;
+    y * t.window.x + x
+
+  let put_string t maxblitlen x y text =
+    let offset = get_offset t x y in
+    let blitlen = min maxblitlen (slen text) in
+    assert (blitlen <= (t.len - offset)) ;
+    Bytes.blit_string text 0 t.text offset blitlen
+
+  let put_block
+      t maxblitlen x y
+      { Block.text ; Block.offset = block_offset ; Block.len = block_len } =
+    let bytes_offset = get_offset t x y in
+    let blitlen = min maxblitlen block_len in
+    assert (blitlen <= (t.len - bytes_offset)) ;
+    Bytes.blit_string text block_offset t.text bytes_offset blitlen
 end
+
+  let rec blit_line2 framebuffer maxblitlen x y =
+    let open Line in
+    function
+    | String s        ->
+        Framebuffer.put_string framebuffer maxblitlen x y s
+    | Block b         ->
+        Framebuffer.put_block framebuffer maxblitlen x y b
+    | Blocks []       -> ()
+    | Blocks (b :: t) ->
+        Framebuffer.put_block framebuffer maxblitlen x y b ;
+        let blitlen = min maxblitlen b.Block.len in
+        let x' = x + blitlen in
+        if blitlen = b.Block.len then
+          blit_line2 framebuffer (maxblitlen - blitlen) (x + blitlen) y (Blocks t)
 
 
 module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block = Block.t and type segment = Segment.t) = struct
@@ -1363,8 +1399,11 @@ module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block
       let x = screen.screen_offset.x in
       let y = screen.screen_offset.y + line_y_offset in
       (* MEMORY OPT: do not create a byteslice *)
+      (*
       let byteslice = Framebuffer.get_byteslice screen.frame_buffer x y screen.size.x in
       Line.blit_line byteslice line
+      *)
+      blit_line2 screen.frame_buffer screen.size.x x y line
 
   let put_colorblock screen { Colorblock.area ; Colorblock.colors } =
     area
