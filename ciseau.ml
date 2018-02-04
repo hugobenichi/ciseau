@@ -884,9 +884,9 @@ module type BytevectorType = sig
   type t
 
   val init_bytevector : int -> t
-  val reset : t -> t
-  val append : string -> t -> t
-  val append_bytes : Bytes.t -> int -> int -> t -> t
+  val reset : t -> unit
+  val append : t -> string -> unit
+  val append_bytes : t -> Bytes.t -> int -> int -> unit
   val write : Unix.file_descr -> t -> unit
 end
 
@@ -1063,57 +1063,43 @@ end
 module Bytevector : BytevectorType = struct
 
   type t = {
-    bytes : bytes ;
-    len : int ;
+    mutable bytes   : bytes ;
+    mutable cursor  : int ;
   }
 
-  module Priv = struct
+  let scale size =
+    size |> float |> ( *. ) 1.45 |> ceil |> truncate
 
-    let scale size =
-      size |> float |> ( *. ) 1.45 |> ceil |> truncate
+  let rec next_size needed_size size =
+    if needed_size <= size then size else next_size needed_size (scale size)
 
-    let rec next_size needed_size size =
-      if needed_size <= size then size else next_size needed_size (scale size)
-
-    let ensure_size needed_size bytes =
-      let current_size = (blen bytes) in
-      if (needed_size <= current_size)
-        then bytes
-        else Bytes.extend bytes 0 ((next_size needed_size current_size) - (blen bytes))
-
-    let grow added_length t =
-      let new_length = added_length + t.len in
-      assert (new_length <= blen t.bytes) ;
-      {    (* MEMORY OPT: remove this object and directly return the length ! *)
-        bytes = t.bytes ;
-        len   = new_length ;
-      }
-
-  end
+  let ensure_size needed_size bvec =
+    let current_size = blen bvec.bytes in
+    if needed_size > current_size
+      then
+        let new_size = next_size needed_size current_size in
+        let added_len = new_size - (blen bvec.bytes) in
+        bvec.bytes <- Bytes.extend bvec.bytes 0 added_len
 
   let init_bytevector len = {
-    bytes = Bytes.make len (Char.chr 0) ;
-    len   = 0 ;
+    bytes   = Bytes.make len '\000' ;
+    cursor  = 0 ;
   }
 
-  let reset bytevec = {
-    bytes = bytevec.bytes ;
-    len   = 0 ;
-  }
+  let reset bvec =
+    bvec.cursor <- 0
 
-  let append s t =
-    let s_len = slen s in
-    let t' = Priv.grow s_len t in
-      Bytes.blit_string s 0 t'.bytes t.len s_len ;
-      t'
+  let append bvec s =
+    let len = slen s in
+    Bytes.blit_string s 0 bvec.bytes bvec.cursor len ;
+    bvec.cursor <- bvec.cursor + len
 
-  let append_bytes srcbytes srcoffset len t =
-    let t' = Priv.grow len t in
-      Bytes.blit srcbytes srcoffset t'.bytes t.len len ;
-      t'
+  let append_bytes bvec src offset len =
+    Bytes.blit src offset bvec.bytes bvec.cursor len ;
+    bvec.cursor <- bvec.cursor + len
 
-  let write fd t =
-    write fd t.bytes t.len
+  let write fd bvec =
+    write fd bvec.bytes bvec.cursor
 end
 
 
@@ -1252,40 +1238,34 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
 
     let render_section start stop t bvec =
       (* append lines one at a time starting from start offset, ending at stop offset *)
-      let append_newline_if_needed t position bvec =
+      let append_newline_if_needed bvec t position =
         let is_end_of_line        = (position mod t.window.x) = 0 in
         let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
         if is_end_of_line && is_not_end_of_buffer
-        then Bytevector.append Term.Control.newline bvec
-        else bvec
+          then Bytevector.append bvec Term.Control.newline
       in
       let rec loop t start stop color_control_string bvec =
         (* memory opt: all arguments passed explicitly *)
         if start < stop
           then
             let len = next_line_len t start stop in
-            bvec
-                 |> Bytevector.append Term.Control.start
-                 |> Bytevector.append color_control_string
-                 |> Bytevector.append_bytes t.text start len
-                 |> Bytevector.append Term.Control.finish
-                 (* Last newline need to be appened *after* the terminating control command for colors *)
-                 |> append_newline_if_needed t (start + len)
-                 |> loop t (start + len) stop color_control_string
-          else
-            bvec
+            Bytevector.append bvec Term.Control.start ;
+            Bytevector.append bvec color_control_string ;
+            Bytevector.append_bytes bvec t.text start len ;
+            Bytevector.append bvec Term.Control.finish ;
+            (* Last newline need to be appened *after* the terminating control command for colors *)
+            append_newline_if_needed bvec t (start + len) ;
+            loop t (start + len) stop color_control_string bvec
       in
         loop t start stop (get_color_string t start) bvec
 
     let render_all_sections t bvec =
       let rec loop start bvec =
         if start < t.len
-        then
-          let stop = next_contiguous_color_section t start in
-          bvec |> render_section start stop t
-               |> loop stop
-        else
-          bvec
+          then
+            let stop = next_contiguous_color_section t start in
+            render_section start stop t bvec ;
+            loop stop bvec
       in
         loop 0 bvec
   end
@@ -1309,13 +1289,13 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     Array.fill t.z_index 0 t.len Default.z
 
   let render frame_buffer render_buffer =
-    render_buffer |> Bytevector.reset
-                  |> Bytevector.append Term.Control.cursor_hide
-                  |> Bytevector.append Term.Control.gohome
-                  |> Priv.render_all_sections frame_buffer
-                  |> Bytevector.append (Term.Control.cursor_control_string frame_buffer.cursor)
-                  |> Bytevector.append Term.Control.cursor_show
-                  |> Bytevector.write Unix.stdout
+    Bytevector.reset render_buffer ;
+    Bytevector.append render_buffer Term.Control.cursor_hide ;
+    Bytevector.append render_buffer Term.Control.gohome ;
+    Priv.render_all_sections frame_buffer render_buffer ;
+    Bytevector.append render_buffer (Term.Control.cursor_control_string frame_buffer.cursor) ;
+    Bytevector.append render_buffer Term.Control.cursor_show ;
+    Bytevector.write Unix.stdout render_buffer
 
   let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
     for y = topleft.y to bottomright.y do
