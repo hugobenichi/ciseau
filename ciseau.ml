@@ -1075,20 +1075,17 @@ module Bytevector : BytevectorType = struct
     let rec next_size needed_size size =
       if needed_size <= size then size else next_size needed_size (scale size)
 
-    let grow new_size bytes =
-      Bytes.extend bytes 0 (new_size - (blen bytes))
-
     let ensure_size needed_size bytes =
       let current_size = (blen bytes) in
       if (needed_size <= current_size)
         then bytes
-        else grow (next_size needed_size current_size) bytes
+        else Bytes.extend bytes 0 ((next_size needed_size current_size) - (blen bytes))
 
     let grow added_length t =
       let new_length = added_length + t.len in
-      let new_bytes = ensure_size new_length t.bytes
-      in {
-        bytes = new_bytes ;
+      assert (new_length <= blen t.bytes) ;
+      {    (* MEMORY OPT: remove this object and directly return the length ! *)
+        bytes = t.bytes ;
         len   = new_length ;
       }
 
@@ -1234,19 +1231,27 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
         bg = t.bg_colors.(offset) ;
       }
 
-    let next_contiguous_color_section t start =
-      let colors_to_match = colors_at t start in
-      let rec loop stop =
-        if stop < t.len && (colors_at t stop) = colors_to_match
-        then loop (stop + 1)
-        else stop
-      in loop (start + 1)
+    let colors_equal t i j =
+      let open Color in
+      (t.fg_colors.(i) = t.fg_colors.(j)) && (t.bg_colors.(i) = t.bg_colors.(j))
 
-    let render_section color_cell start stop t bvec =
+    let next_contiguous_color_section t start =
+      let rec loop t start stop =
+        (* memory opt: all arguments passed explicitly *)
+        if stop < t.len && colors_equal t start stop
+        then loop t start (stop + 1)
+        else stop
+      in loop t start (start + 1)
+
+    let get_color_string t color_idx =
+      (* MEMORY OPT: remove colors_at *)
+      Term.Control.color_control_string (colors_at t color_idx)
+
+    let next_line_len t start stop =
+      min (t.window.x - (start mod t.window.x)) (stop - start)
+
+    let render_section start stop t bvec =
       (* append lines one at a time starting from start offset, ending at stop offset *)
-      let next_line_len t start stop =
-        min (t.window.x - (start mod t.window.x)) (stop - start)
-      in
       let append_newline_if_needed t position bvec =
         let is_end_of_line        = (position mod t.window.x) = 0 in
         let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
@@ -1254,30 +1259,30 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
         then Bytevector.append Term.Control.newline bvec
         else bvec
       in
-      let rec loop start stop bvec =
+      let rec loop t start stop color_control_string bvec =
+        (* memory opt: all arguments passed explicitly *)
         if start < stop
-        then
-          let len = next_line_len t start stop in
-          bvec
-               |> Bytevector.append Term.Control.start
-               |> Bytevector.append (Term.Control.color_control_string color_cell)
-               |> Bytevector.append_bytes t.text start len
-               |> Bytevector.append Term.Control.finish
-               (* Last newline need to be appened *after* the terminating control command for colors *)
-               |> append_newline_if_needed t (start + len)
-               |> loop (start + len) stop
-        else
-          bvec
+          then
+            let len = next_line_len t start stop in
+            bvec
+                 |> Bytevector.append Term.Control.start
+                 |> Bytevector.append color_control_string
+                 |> Bytevector.append_bytes t.text start len
+                 |> Bytevector.append Term.Control.finish
+                 (* Last newline need to be appened *after* the terminating control command for colors *)
+                 |> append_newline_if_needed t (start + len)
+                 |> loop t (start + len) stop color_control_string
+          else
+            bvec
       in
-       bvec
-            |> loop start stop
+        loop t start stop (get_color_string t start) bvec
 
     let render_all_sections t bvec =
       let rec loop start bvec =
         if start < t.len
         then
           let stop = next_contiguous_color_section t start in
-          bvec |> render_section (colors_at t start) start stop t
+          bvec |> render_section start stop t
                |> loop stop
         else
           bvec
@@ -1430,7 +1435,7 @@ module Filebuffer = struct
   let init_filebuffer file =
     file |> read_file |> from_lines file
 
-  type token_kind = SpaceTokens
+  type token_kind = SpaceTokens (* | plus other kinds *)
 
   let get_line_at { buffer } =
     Slice.get buffer
@@ -2210,7 +2215,7 @@ module Ciseau = struct
     in {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
-      render_buffer   = Bytevector.init_bytevector 0x1000 ;
+      render_buffer   = Bytevector.init_bytevector 0x100000 ;
       frame_buffer    = frame_buffer ;
       running         = true ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
@@ -2475,7 +2480,7 @@ let sigwinch = 28 (* That's for OSX *)
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
   (* Ciseau.main () ; *)
-  Fuzzer.main 1000 ;
+  Fuzzer.main 500 ;
   close_out logs
 
 
