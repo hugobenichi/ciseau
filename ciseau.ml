@@ -355,6 +355,16 @@ module SpaceTokenizer = struct
     stop  = j ;
   }
 
+  let to_string { kind ; start ; stop } =
+    let kind_name = match kind with
+      | Space     ->  "Space"
+      | Tab       ->  "Tab"
+      | Printable ->  "Printable"
+      | Control   ->  "Control"
+      | Other     ->  "Other"
+    in
+    Printf.sprintf "{ %s ; %d ; %d }" kind_name start stop
+
   let kind_of =
     function
       | '\032'              -> Space
@@ -366,19 +376,39 @@ module SpaceTokenizer = struct
 
   let tokenize text =
     let s = slen text in
-    let kind_at i = String.get text i |> kind_of in
+    let kind_at i = assert (i < slen text) ; String.get text i |> kind_of in
 
     let rec loop tokens token =
       let i = token.stop in
-      if i = s
-        then token :: tokens |> List.rev |> Array.of_list |> Slice.wrap_array
+      if i >= s
+        then token :: tokens |> List.rev
         else
           match (token.kind, kind_at i) with
             | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
-            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 i (i + 1))
+            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.start (i + 1))
             | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 i (i + 1))
     in
-      mk_tok (kind_at 0) 0 1 |> loop []
+      if s = 0
+        then []
+        else mk_tok (kind_at 0) 0 1 |> loop []
+
+    let is_printable { kind } =
+      ( kind = Printable )
+
+  let head ls =
+    List.nth_opt ls 0
+
+  let first =
+    List.filter is_printable >> head
+
+  let last =
+    List.rev >> first
+
+  let next x =
+    List.filter is_printable >> List.filter (fun { stop } -> stop <= x) >> head
+
+  let prev x =
+    List.rev >> next x
 end
 
 
@@ -1409,24 +1439,46 @@ module Filebuffer = struct
     function
       | SpaceTokens -> SpaceTokenizer.tokenize
 
-  let movement t cursor tok_kind m =
+  let rec movement t cursor tok_kind m =
     (* This is buggy:
      *  - do not apply dec or inc on first or last token index
      *  - skip non Printable tokens
      *)
     let line = get_line_at t cursor.y in
     let tokens = tokenize tok_kind line in
-    let t =
+
+    Printf.fprintf logs "tokens %d: [ %s ]\n"
+      cursor.y
+      (List.map SpaceTokenizer.to_string tokens |> String.concat ", ") ;
+    flush logs ;
+
+    if tokens = []
+    then cursor
+    else
+
+    let tok =
       let open Movement in
       match m with
         | Up          (* TODO: implement *)
         | Down        (* TODO: implement *)
-        | First       -> Slice.first tokens
-        | Last        -> Slice.last tokens
-        | Left        -> Token.find_in_slice cursor.x tokens |> dec |> Slice.get tokens
-        | Right       -> Token.find_in_slice cursor.x tokens |> inc |> Slice.get tokens
+        | First       -> SpaceTokenizer.first tokens
+        | Last        -> SpaceTokenizer.last tokens
+        | Left        -> SpaceTokenizer.prev cursor.x tokens
+                                        (* BUG: next does not work *)
+        | Right       -> SpaceTokenizer.next cursor.x tokens
     in
-      mk_v2 t.start cursor.y
+      match tok with
+      | Some ({ Token.start }) -> mk_v2 start cursor.y
+      | None ->
+          let open Movement in
+          match m with
+            | Up          (* TODO: implement *)
+            | Down        (* TODO: implement *)
+            | First       -> mk_v2 0 cursor.y
+            | Last        -> mk_v2 0 cursor.y
+                                                        (* BUG: detect first and last line *)
+            | Left        -> movement t (mk_v2 cursor.x (cursor.y - 1)) tok_kind m
+            | Right       -> movement t (mk_v2 cursor.x (cursor.y + 1)) tok_kind m
 end
 
 
