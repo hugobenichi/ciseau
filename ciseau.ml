@@ -318,9 +318,7 @@ open Rect
 
 
 module Movement = struct
-  type dir = Left | Right | Up | Down | First | Last
-  type edge = TokenStart | TokenEnd
-  type move = dir * edge
+  type t = Left | Right | Up | Down | First | Last
 end
 
 
@@ -550,6 +548,7 @@ module Keys = struct
                   | Alt_k
                   | Alt_l
                   | Space
+                  | Colon
                   | Equal
                   | ArrowUp
                   | ArrowDown
@@ -563,6 +562,11 @@ module Keys = struct
                   | Lower_w
                   | Upper_b
                   | Upper_w
+                  | Upper_g
+                  | Upper_h
+                  | Upper_j
+                  | Upper_k
+                  | Upper_l
                   | Digit_0
                   | Digit_1
                   | Digit_2
@@ -613,6 +617,7 @@ module Keys = struct
     mk_key Ctrl_u      "Ctrl_u"        21 ;
     mk_key Ctrl_z      "Ctrl_z"        26 ;
     mk_key Space       "Space"         32 ;
+    mk_key Colon       ":"             58 ;
     mk_key Equal       "Equal"         61 ;
     mk_key ArrowUp     "ArrowUp"       65 ;
     mk_key ArrowDown   "ArrowDown"     66 ;
@@ -620,6 +625,11 @@ module Keys = struct
     mk_key ArrowLeft   "ArrowLeft"     68 ;
     mk_key Upper_b     "W"             66 ;
     mk_key Upper_w     "B"             87 ;
+    mk_key Upper_g     "G"             71 ;
+    mk_key Upper_h     "H"             72 ;
+    mk_key Upper_j     "J"             74 ;
+    mk_key Upper_k     "K"             75 ;
+    mk_key Upper_l     "L"             76 ;
     mk_key Lower_b     "w"             98 ;
     mk_key Lower_h     "h"             104 ;
     mk_key Lower_j     "j"             106 ;
@@ -973,6 +983,7 @@ module type FileviewType = sig
 
   val init_fileview : filebuffer -> t
   val apply_movement : (t -> v2) -> int -> t -> t
+  val do_movement : Movement.t -> int -> t -> t
   val cursor : t -> v2
   val cursor_next_char : t -> v2
   val cursor_prev_char : t -> v2
@@ -1398,12 +1409,16 @@ module Filebuffer = struct
     function
       | SpaceTokens -> SpaceTokenizer.tokenize
 
-  let movement t cursor tok_kind (dir, edge) =
+  let movement t cursor tok_kind m =
+    (* This is buggy:
+     *  - do not apply dec or inc on first or last token index
+     *  - skip non Printable tokens
+     *)
     let line = get_line_at t cursor.y in
     let tokens = tokenize tok_kind line in
     let t =
       let open Movement in
-      match dir with
+      match m with
         | Up          (* TODO: implement *)
         | Down        (* TODO: implement *)
         | First       -> Slice.first tokens
@@ -1411,10 +1426,7 @@ module Filebuffer = struct
         | Left        -> Token.find_in_slice cursor.x tokens |> dec |> Slice.get tokens
         | Right       -> Token.find_in_slice cursor.x tokens |> inc |> Slice.get tokens
     in
-    let open Movement in
-    match edge with
-      | TokenStart    ->  mk_v2 (t.stop - 1)  cursor.y
-      | TokenEnd      ->  mk_v2 t.start cursor.y
+      mk_v2 t.start cursor.y
 end
 
 
@@ -1530,6 +1542,12 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
 
   let apply_movement fn view_height t =
     t |> adjust_cursor (fn t) |> adjust_view view_height
+
+  let do_movement m view_height t =
+    let cursor' =
+      Filebuffer.movement t.filebuffer t.cursor Filebuffer.SpaceTokens m
+    in
+      t |> adjust_cursor cursor' |> adjust_view view_height
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -2092,6 +2110,7 @@ module Ciseau = struct
                | Resize
                | TilesetOp of Tileset.op
                | Move of (Fileview.t -> v2)
+               | MoveVerb of Movement.t
                | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
 
@@ -2212,6 +2231,11 @@ module Ciseau = struct
           editor with
           tileset = Tileset.apply_op editor.tileset fileview_op ;
         }
+    | MoveVerb mov ->
+        let fileview_op = Tileset.FileviewOp (Fileview.do_movement mov) in {
+          editor with
+          tileset = Tileset.apply_op editor.tileset fileview_op ;
+        }
     | View fn ->
         let fileview_op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in {
           editor with
@@ -2299,6 +2323,12 @@ module Ciseau = struct
     | Keys.Lower_b      -> Move FilebufferMovements.move_prev_word
     | Keys.Upper_w      -> Move FilebufferMovements.move_next_space
     | Keys.Upper_b      -> Move FilebufferMovements.move_prev_space
+    | Keys.Upper_g      -> MoveVerb Movement.First
+    | Keys.Upper_h      -> MoveVerb Movement.Left
+    | Keys.Upper_j      -> MoveVerb Movement.Down
+    | Keys.Upper_k      -> MoveVerb Movement.Up
+    | Keys.Upper_l      -> MoveVerb Movement.Right
+    | Keys.Colon        -> MoveVerb Movement.Last
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
     | Keys.Digit_2      -> Pending (Digit 2)
@@ -2433,8 +2463,8 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  (* Ciseau.main () ; *)
-  Fuzzer.main 500 ;
+  Ciseau.main () ;
+  (* Fuzzer.main 500 ; *)
   close_out logs
 
 
