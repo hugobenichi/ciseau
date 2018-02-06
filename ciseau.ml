@@ -374,6 +374,9 @@ module SpaceTokenizer = struct
       | '\127'              -> Control
       | _                   -> Other
 
+  let is_printable { kind } =
+    ( kind = Printable )
+
   let tokenize text =
     let s = slen text in
     let kind_at i = assert (i < slen text) ; String.get text i |> kind_of in
@@ -381,7 +384,7 @@ module SpaceTokenizer = struct
     let rec loop tokens token =
       let i = token.stop in
       if i >= s
-        then token :: tokens |> List.rev
+        then token :: tokens |> List.filter is_printable |> List.rev
         else
           match (token.kind, kind_at i) with
             | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
@@ -392,23 +395,24 @@ module SpaceTokenizer = struct
         then []
         else mk_tok (kind_at 0) 0 1 |> loop []
 
-    let is_printable { kind } =
-      ( kind = Printable )
-
-  let head ls =
+  let first ls =
     List.nth_opt ls 0
 
-  let first =
-    List.filter is_printable >> head
+  let last ls =
+    ls |> List.rev |> first
 
-  let last =
-    List.rev >> first
+  let rec next x =
+    function
+      | [] -> None
+      | tok :: tail when x < tok.start -> Some tok
+      | _ :: tail -> next x tail
 
-  let next x =
-    List.filter is_printable >> List.filter (fun { stop } -> stop <= x) >> head
-
-  let prev x =
-    List.rev >> next x
+  let rec prev x =
+    function
+      | []
+      | _ :: [] -> None
+      | t1 :: t2 :: tail when t1.stop <= x && x < t2.stop -> Some t1
+      | _ :: tail -> prev x tail
 end
 
 
@@ -1452,9 +1456,11 @@ module Filebuffer = struct
       (List.map SpaceTokenizer.to_string tokens |> String.concat ", ") ;
     flush logs ;
 
+    (*
     if tokens = []
     then cursor
     else
+      *)
 
     let tok =
       let open Movement in
@@ -1477,8 +1483,20 @@ module Filebuffer = struct
             | First       -> mk_v2 0 cursor.y
             | Last        -> mk_v2 0 cursor.y
                                                         (* BUG: detect first and last line *)
-            | Left        -> movement t (mk_v2 cursor.x (cursor.y - 1)) tok_kind m
-            | Right       -> movement t (mk_v2 cursor.x (cursor.y + 1)) tok_kind m
+            | Left        ->
+                if cursor.y > 0
+                  then
+                    let cursor' = mk_v2 ((cursor.y - 1 |> Slice.get t.buffer |> slen) - 1) (cursor.y - 1) in
+                    (
+                      Printf.fprintf logs "cursor' %d,%d\n" cursor'.x cursor'.y ;
+                      flush logs ;
+                    movement t cursor' tok_kind Last
+                    )
+                  else v2_zero
+            | Right       ->
+                if cursor.y < t.buflen
+                  then movement t (mk_v2 0 (cursor.y + 1)) tok_kind First
+                  else cursor
 end
 
 
