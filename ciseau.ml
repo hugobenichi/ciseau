@@ -318,7 +318,7 @@ open Rect
 
 
 module Movement = struct
-  type t = Left | Right | Up | Down | First | Last
+  type t = Left | Right | Up | Down | First | Last | TokenStart | TokenEnd
 end
 
 
@@ -400,6 +400,12 @@ module SpaceTokenizer = struct
 
   let last ls =
     ls |> List.rev |> first
+
+  let rec find x =
+    function
+      | [] -> None
+      | tok :: tail when tok.start <= x && x < tok.stop -> Some tok
+      | _ :: tail -> find x tail
 
   let rec next x =
     function
@@ -1463,6 +1469,9 @@ module Filebuffer = struct
       *)
 
     let tok =
+      (* That function is too messy, probably all case should be simply handled separately and have
+       * their own specialized recursion
+       *)
       let open Movement in
       match m with
         | Up          (* TODO: implement *)
@@ -1472,31 +1481,29 @@ module Filebuffer = struct
         | Left        -> SpaceTokenizer.prev cursor.x tokens
                                         (* BUG: next does not work *)
         | Right       -> SpaceTokenizer.next cursor.x tokens
+        | TokenStart  -> SpaceTokenizer.find cursor.x tokens
+        | TokenEnd    -> SpaceTokenizer.find cursor.x tokens
     in
-      match tok with
-      | Some ({ Token.start }) -> mk_v2 start cursor.y
-      | None ->
-          let open Movement in
-          match m with
-            | Up          (* TODO: implement *)
-            | Down        (* TODO: implement *)
-            | First       -> mk_v2 0 cursor.y
-            | Last        -> mk_v2 0 cursor.y
-                                                        (* BUG: detect first and last line *)
-            | Left        ->
-                if cursor.y > 0
-                  then
-                    let cursor' = mk_v2 ((cursor.y - 1 |> Slice.get t.buffer |> slen) - 1) (cursor.y - 1) in
-                    (
-                      Printf.fprintf logs "cursor' %d,%d\n" cursor'.x cursor'.y ;
-                      flush logs ;
-                    movement t cursor' tok_kind Last
-                    )
-                  else v2_zero
-            | Right       ->
-                if cursor.y < t.buflen
-                  then movement t (mk_v2 0 (cursor.y + 1)) tok_kind First
-                  else cursor
+      match (tok, m) with
+      | (Some ({ Token.stop }), TokenEnd)   -> mk_v2 (stop - 1) cursor.y
+      | (Some ({ Token.start }), _)         -> mk_v2 start cursor.y
+      | (None, Up)          (* TODO: implement *)
+      | (None, Down)        (* TODO: implement *)
+      | (None, Last)
+      | (None, Left)        ->
+          if cursor.y > 0
+            then
+              let cursor' = mk_v2 ((cursor.y - 1 |> Slice.get t.buffer |> slen) - 1) (cursor.y - 1) in
+              movement t cursor' tok_kind Last
+            else v2_zero
+      | (None, First)
+      | (None, Right)       ->
+          if cursor.y < t.buflen
+            then movement t (mk_v2 0 (cursor.y + 1)) tok_kind First
+            else cursor
+      (* Noop if not inside a token *)
+      | (None, TokenStart)  -> cursor
+      | (None, TokenEnd)    -> cursor
 end
 
 
@@ -2393,12 +2400,12 @@ module Ciseau = struct
     | Keys.Lower_b      -> Move FilebufferMovements.move_prev_word
     | Keys.Upper_w      -> Move FilebufferMovements.move_next_space
     | Keys.Upper_b      -> Move FilebufferMovements.move_prev_space
-    | Keys.Upper_g      -> MoveVerb Movement.First
+    | Keys.Upper_g      -> MoveVerb Movement.TokenStart
     | Keys.Upper_h      -> MoveVerb Movement.Left
     | Keys.Upper_j      -> MoveVerb Movement.Down
     | Keys.Upper_k      -> MoveVerb Movement.Up
     | Keys.Upper_l      -> MoveVerb Movement.Right
-    | Keys.Colon        -> MoveVerb Movement.Last
+    | Keys.Colon        -> MoveVerb Movement.TokenEnd
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
     | Keys.Digit_2      -> Pending (Digit 2)
