@@ -317,11 +317,6 @@ end
 open Rect
 
 
-module Movement = struct
-  type t = Left | Right | Up | Down | First | Last | TokenStart | TokenEnd
-end
-
-
 module Token = struct
   type 'a token = {
     kind  : 'a ;
@@ -342,83 +337,8 @@ module Token = struct
 end
 
 
-module SpaceTokenizer = struct
-  open Token
-
-  type kind = Space | Tab | Printable | Control | Other
-
-  type t = kind token
-
-  let mk_tok k i j = {
-    kind  = k ;
-    start = i ;
-    stop  = j ;
-  }
-
-  let to_string { kind ; start ; stop } =
-    let kind_name = match kind with
-      | Space     ->  "Space"
-      | Tab       ->  "Tab"
-      | Printable ->  "Printable"
-      | Control   ->  "Control"
-      | Other     ->  "Other"
-    in
-    Printf.sprintf "{ %s ; %d ; %d }" kind_name start stop
-
-  let kind_of =
-    function
-      | '\032'              -> Space
-      | '\t'                -> Tab
-      | c when c < '\032'   -> Control
-      | c when c < '\127'   -> Printable
-      | '\127'              -> Control
-      | _                   -> Other
-
-  let is_printable { kind } =
-    ( kind = Printable )
-
-  let tokenize text =
-    let s = slen text in
-    let kind_at i = assert (i < slen text) ; String.get text i |> kind_of in
-
-    let rec loop tokens token =
-      let i = token.stop in
-      if i >= s
-        then token :: tokens |> List.filter is_printable |> List.rev
-        else
-          match (token.kind, kind_at i) with
-            | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
-            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.start (i + 1))
-            | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 i (i + 1))
-    in
-      if s = 0
-        then []
-        else mk_tok (kind_at 0) 0 1 |> loop []
-
-  let first ls =
-    List.nth_opt ls 0
-
-  let last ls =
-    ls |> List.rev |> first
-
-  let rec find x =
-    function
-      | [] -> None
-      | tok :: tail when tok.start <= x && x < tok.stop -> Some tok
-      | _ :: tail -> find x tail
-
-  let rec next x =
-    function
-      | [] -> None
-      | tok :: tail when x < tok.start -> Some tok
-      | _ :: tail -> next x tail
-
-  let rec prev x =
-    function
-      | []
-      | _ :: [] -> None
-      | t1 :: t2 :: tail when t1.stop <= x && x < t2.stop -> Some t1
-      | _ :: tail -> prev x tail
+module Movement = struct
+  type t = Left | Right | Up | Down | First | Last | TokenStart | TokenEnd
 end
 
 
@@ -1440,34 +1360,92 @@ module Filebuffer = struct
   let init_filebuffer file =
     file |> read_file |> from_lines file
 
-  type token_kind = SpaceTokens (* | plus other kinds *)
-
-  let get_line_at { buffer } =
+  let line_at { buffer } =
     Slice.get buffer
+end
 
-  let tokenize =
+
+module SpaceTokenizer = struct
+  open Token
+
+  type kind = Space | Tab | Printable | Control | Other
+
+  type t = kind token
+
+  let mk_tok k i j = {
+    kind  = k ;
+    start = i ;
+    stop  = j ;
+  }
+
+  let to_string { kind ; start ; stop } =
+    let kind_name = match kind with
+      | Space     ->  "Space"
+      | Tab       ->  "Tab"
+      | Printable ->  "Printable"
+      | Control   ->  "Control"
+      | Other     ->  "Other"
+    in
+    Printf.sprintf "{ %s ; %d ; %d }" kind_name start stop
+
+  let kind_of =
     function
-      | SpaceTokens -> SpaceTokenizer.tokenize
+      | '\032'              -> Space
+      | '\t'                -> Tab
+      | c when c < '\032'   -> Control
+      | c when c < '\127'   -> Printable
+      | '\127'              -> Control
+      | _                   -> Other
 
-  let rec movement t cursor tok_kind m =
-    (* This is buggy:
-     *  - do not apply dec or inc on first or last token index
-     *  - skip non Printable tokens
-     *)
-    let line = get_line_at t cursor.y in
-    let tokens = tokenize tok_kind line in
+  let is_printable { kind } =
+    ( kind = Printable )
 
-    Printf.fprintf logs "tokens %d: [ %s ]\n"
-      cursor.y
-      (List.map SpaceTokenizer.to_string tokens |> String.concat ", ") ;
-    flush logs ;
+  let tokenize text =
+    let s = slen text in
+    let kind_at i = assert (i < slen text) ; String.get text i |> kind_of in
 
-    (*
-    if tokens = []
-    then cursor
-    else
-      *)
+    let rec loop tokens token =
+      let i = token.stop in
+      if i >= s
+        then token :: tokens |> List.filter is_printable |> List.rev
+        else
+          match (token.kind, kind_at i) with
+            | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
+            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.start (i + 1))
+            | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 i (i + 1))
+    in
+      if s = 0
+        then []
+        else mk_tok (kind_at 0) 0 1 |> loop []
 
+  let first ls =
+    List.nth_opt ls 0
+
+  let last ls =
+    ls |> List.rev |> first
+
+  let rec find x =
+    function
+      | [] -> None
+      | tok :: tail when tok.start <= x && x < tok.stop -> Some tok
+      | _ :: tail -> find x tail
+
+  let rec next x =
+    function
+      | [] -> None
+      | tok :: tail when x < tok.start -> Some tok
+      | _ :: tail -> next x tail
+
+  let rec prev x =
+    function
+      | []
+      | _ :: [] -> None
+      | t1 :: t2 :: tail when t1.stop <= x && x < t2.stop -> Some t1
+      | _ :: tail -> prev x tail
+
+  let rec movement m filebuffer cursor =
+    let line = Filebuffer.line_at filebuffer cursor.y in
+    let tokens = tokenize line in
     let tok =
       (* That function is too messy, probably all case should be simply handled separately and have
        * their own specialized recursion
@@ -1476,13 +1454,13 @@ module Filebuffer = struct
       match m with
         | Up          (* TODO: implement *)
         | Down        (* TODO: implement *)
-        | First       -> SpaceTokenizer.first tokens
-        | Last        -> SpaceTokenizer.last tokens
-        | Left        -> SpaceTokenizer.prev cursor.x tokens
+        | First       -> first tokens
+        | Last        -> last tokens
+        | Left        -> prev cursor.x tokens
                                         (* BUG: next does not work *)
-        | Right       -> SpaceTokenizer.next cursor.x tokens
-        | TokenStart  -> SpaceTokenizer.find cursor.x tokens
-        | TokenEnd    -> SpaceTokenizer.find cursor.x tokens
+        | Right       -> next cursor.x tokens
+        | TokenStart  -> find cursor.x tokens
+        | TokenEnd    -> find cursor.x tokens
     in
       match (tok, m) with
       | (Some ({ Token.stop }), TokenEnd)   -> mk_v2 (stop - 1) cursor.y
@@ -1493,17 +1471,23 @@ module Filebuffer = struct
       | (None, Left)        ->
           if cursor.y > 0
             then
-              let cursor' = mk_v2 ((cursor.y - 1 |> Slice.get t.buffer |> slen) - 1) (cursor.y - 1) in
-              movement t cursor' tok_kind Last
+              let prev_line_len = cursor.y - 1 |> Filebuffer.line_at filebuffer |> slen in
+              let cursor' = mk_v2 (prev_line_len - 1) (cursor.y - 1) in
+              movement Last filebuffer cursor'
             else v2_zero
       | (None, First)
       | (None, Right)       ->
-          if cursor.y < t.buflen
-            then movement t (mk_v2 0 (cursor.y + 1)) tok_kind First
+          if cursor.y < filebuffer.buflen
+            then movement First filebuffer (mk_v2 0 (cursor.y + 1))
             else cursor
       (* Noop if not inside a token *)
       | (None, TokenStart)  -> cursor
       | (None, TokenEnd)    -> cursor
+end
+
+
+module TokenKind = struct
+  type k = SpaceTokens (* | plus other kinds *)
 end
 
 
@@ -1622,7 +1606,9 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
 
   let do_movement m view_height t =
     let cursor' =
-      Filebuffer.movement t.filebuffer t.cursor Filebuffer.SpaceTokens m
+      let tok_kind = TokenKind.SpaceTokens in
+      match tok_kind with
+      | SpaceTokens -> SpaceTokenizer.movement m t.filebuffer t.cursor
     in
       t |> adjust_cursor cursor' |> adjust_view view_height
 
