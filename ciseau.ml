@@ -1362,6 +1362,9 @@ module Filebuffer = struct
 
   let line_at { buffer } =
     Slice.get buffer
+
+  let line_length { buffer } =
+    Slice.get buffer >> slen (* TODO: take into account '\t' *)
 end
 
 
@@ -1486,8 +1489,68 @@ module SpaceTokenizer = struct
 end
 
 
+module LineMovement = struct
+  open Movement
+
+  let last_cursor_x filebuffer y =
+    (Filebuffer.line_length filebuffer y) - 1 |> max 0
+
+  let go_line_start filebuffer cursor =
+    mk_v2 0 cursor.y
+
+  let go_line_end filebuffer cursor =
+    mk_v2 (last_cursor_x filebuffer cursor.y) cursor.y
+
+  let go_line_up filebuffer cursor =
+    if cursor.y > 0
+      then
+        let y' = cursor.y - 1 in
+        let x' = min cursor.x (last_cursor_x filebuffer y') in
+        mk_v2 x' y'
+      else cursor
+
+  let go_line_down filebuffer cursor =
+    if cursor.y < filebuffer.Filebuffer.buflen
+      then
+        let y' = cursor.y + 1 in
+        let x' = min cursor.x (last_cursor_x filebuffer y') in
+        mk_v2 x' y'
+      else cursor
+
+  let go_line_left filebuffer cursor =
+    let cursor' = SpaceTokenizer.movement First filebuffer cursor in
+    Printf.fprintf logs "go_line_left cursor:%d,%d first_w:%d,%d\n" cursor.x cursor.y cursor'.x cursor'.y ;
+    flush logs ;
+    if cursor.x <= cursor'.x
+      then
+        let cursor2 = go_line_up filebuffer cursor in
+        let cursor3 = SpaceTokenizer.movement First filebuffer cursor2 in
+        (if cursor3 = cursor
+          then cursor2
+          else cursor3)
+      else cursor'
+
+  let go_line_right filebuffer cursor =
+    let x' = last_cursor_x filebuffer cursor.y in
+    if cursor.x >= x'
+      then go_line_down filebuffer cursor |> go_line_end filebuffer
+      else go_line_end filebuffer cursor
+
+  let movement =
+    function
+      | First
+      | Last
+      | Left        -> go_line_left
+      | Right       -> go_line_right
+      | Up          -> go_line_up
+      | Down        -> go_line_down
+      | TokenStart  -> go_line_start
+      | TokenEnd    -> go_line_end
+end
+
+
 module TokenKind = struct
-  type k = SpaceTokens (* | plus other kinds *)
+  type k = SpaceTokens | Lines (* | plus other kinds *)
 end
 
 
@@ -1606,9 +1669,11 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
 
   let do_movement m view_height t =
     let cursor' =
-      let tok_kind = TokenKind.SpaceTokens in
+      let tok_kind = TokenKind.Lines in
+      (* let tok_kind = TokenKind.SpaceTokens in *)
       match tok_kind with
       | SpaceTokens -> SpaceTokenizer.movement m t.filebuffer t.cursor
+      | Lines       -> LineMovement.movement m t.filebuffer t.cursor
     in
       t |> adjust_cursor cursor' |> adjust_view view_height
 
