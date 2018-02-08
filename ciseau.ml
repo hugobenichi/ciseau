@@ -514,10 +514,6 @@ module Keys = struct
                   | Ctrl_k
                   | Ctrl_u
                   | Ctrl_z
-                  | Alt_h
-                  | Alt_j
-                  | Alt_k
-                  | Alt_l
                   | Space
                   | Colon
                   | Equal
@@ -613,10 +609,6 @@ module Keys = struct
     mk_key Lower_k     "k"             107 ;
     mk_key Lower_l     "l"             108 ;
     mk_key Lower_w     "w"             119 ;
-    mk_key Alt_h       "Alt_h"         153 ;
-    mk_key Alt_j       "Alt_j"         134 ;
-    mk_key Alt_k       "Alt_k"         154 ;
-    mk_key Alt_l       "Alt_l"         172 ;
     mk_key Digit_0     "0"             48 ;
     mk_key Digit_1     "1"             49 ;
     mk_key Digit_2     "2"             50 ;
@@ -963,11 +955,6 @@ module type FileviewType = sig
   val apply_movement : (t -> v2) -> int -> t -> t
   val do_movement : Movement.t -> int -> t -> t
   val cursor : t -> v2
-  val cursor_next_char : t -> v2
-  val cursor_prev_char : t -> v2
-  val cursor_next_line : t -> v2
-  val cursor_prev_line : t -> v2
-  val is_current_char_valid : t -> bool
   val adjust_view : int -> t -> t
   val adjust_cursor : v2 -> t -> t
   val current_line : t -> string
@@ -1600,6 +1587,10 @@ module CharMovement = struct
 end
 
 
+(*
+ *)
+
+
 module FileNavigator = struct
 
   let dir_ls path =
@@ -1693,9 +1684,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   let line_len t i =
     line_at t i |> slen
 
-  let is_current_char_valid t =
-    t.cursor.x < current_line_len t
-
   let cursor t = t.cursor
 
   let buflen t =
@@ -1742,51 +1730,6 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
   let recenter_view view_height t =
     let new_start = t.cursor.y - view_height / 2 in
     { t with view_start = max new_start 0 }
-
-  let move_cursor_left2 t = {
-    x = t.cursor.x |> dec |> max 0 ;
-    y = t.cursor.y ;
-  }
-
-  let cursor_next_char_proto t vec2 =
-    (* BUG: infinite loop on file where the matcher never return true *)
-    let rec first_non_empty y =
-      match y with
-      | _ when y = (buflen t)   -> first_non_empty 0
-      | _ when 0 = line_len t y -> first_non_empty (y + 1)
-      | _                       -> y
-    in
-      if vec2.x + 1 < slen (current_line t)
-      then { x = vec2.x + 1; y = vec2.y}
-      else { x = 0; y = first_non_empty (vec2.y + 1) } (* skip empty lines *)
-
-  let cursor_next_char t =
-    cursor_next_char_proto t t.cursor
-
-  let cursor_prev_char t =
-    (* BUG: infinite loop on file where the matcher never return true *)
-    let rec last_non_empty y =
-      match y with
-      | _ when y = -1           -> last_non_empty ((buflen t) - 1)
-      | _ when 0 = line_len t y -> last_non_empty (y - 1)
-      | _                       -> y
-    in
-      if t.cursor.x - 1 > 0
-      then { x = t.cursor.x - 1 ; y = t.cursor.y }
-      else
-        let y' = last_non_empty (t.cursor.y - 1) in
-        { x = (line_len t y') - 1 ; y = y'}
-
-  let cursor_next_line t = {
-      x = t.cursor.x ;
-      y = (t.cursor.y + 1) mod (buflen t) ;
-    }
-
-  let cursor_prev_line t =
-    let y' = if t.cursor.y - 1 >= 0 then t.cursor.y - 1 else (buflen t) - 1 in {
-      x = t.cursor.x ;
-      y = y' ;
-    }
 
   (* TODO: move drawing in separate module ? *)
 
@@ -1969,12 +1912,6 @@ module FilebufferMovements = struct
 
   let saturate_up length x = min (max (length - 1) 0) x
 
-  (* TODO: refactor to remove the use of adjust cursor *)
-  let rec cursor_move_while u f t =
-    if f t
-    then t |> adjust_cursor (u t) |> cursor_move_while u f
-    else t
-
   let move_n_up n t = {
     x = (cursor t).x ;
     y = (cursor t).y |> fun x -> x - n |> max 0 ;
@@ -1985,67 +1922,10 @@ module FilebufferMovements = struct
     y = (cursor t).y |> (+) n |> saturate_up (buflen t) ;
   }
 
-  (* move_* commands saturates at 0 and end of line *)
-  let move_cursor_left t = {
-    x = (cursor t).x |> dec |> max 0 ;
-    y = (cursor t).y ;
-  }
-
-  let move_cursor_right t = {
-    x = (cursor t).x |> inc |> saturate_up (t |> current_line |> slen) ;
-    y = (cursor t).y ;
-  }
-
-  let move_cursor_up   = move_n_up 1 ;;
-  let move_cursor_down = move_n_down 1 ;;
-  let move_page_up   t = move_n_up Config.default.page_size t ;;
-  let move_page_down t = move_n_down Config.default.page_size t ;;
-
-  (* BUG ? '_' is considered to be a word separation *)
-  let move_next_word t =
-    t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
-      |> cursor_move_while cursor_next_char (current_char >> is_alphanum)
-      |> cursor_move_while cursor_next_char (current_char >> is_alphanum >> not)
-      |> cursor
-
-  (* BUG: when starting from an empty line, the first previous word is skipped and the cursor goes to the second previous word *)
-  let move_prev_word t =
-    t |> cursor_move_while cursor_prev_char (is_current_char_valid >> not)
-      |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
-      |> cursor_move_while cursor_prev_char (current_char >> is_alphanum >> not)
-      |> cursor_move_while cursor_prev_char (current_char >> is_alphanum)
-      |> cursor_next_char
-
-  let move_next_space t =
-    t |> cursor_move_while cursor_next_char (is_current_char_valid >> not)
-      |> cursor_move_while cursor_next_char (current_char >> is_space)
-      |> cursor_move_while cursor_next_char (current_char >> is_space >> not)
-      |> cursor
-
-  (* BUG: this always skips a single leading space at beginning of a line, but does not skip more than one leading space *)
-  let move_prev_space t =
-    t |> cursor_move_while cursor_prev_char (is_current_char_valid >> not)
-      |> cursor_move_while cursor_prev_char (current_char >> is_space)
-      |> cursor_move_while cursor_prev_char (current_char >> is_space >> not)
-      |> cursor
-
-  (* BUG when wrapping over the end of a file, last paragraph and first paragraph are see as one paragraph only *)
-  let move_next_paragraph t =
-    t |> cursor_move_while cursor_next_line (current_line >> is_empty)
-      |> cursor_move_while cursor_next_line (current_line >> is_empty >> not)
-      |> cursor_move_while cursor_next_line (current_line >> is_empty)
-      |> cursor
-
-  let move_prev_paragraph t =
-    t |> cursor_move_while cursor_prev_line (current_line >> is_empty)
-      |> cursor_move_while cursor_prev_line (current_line >> is_empty >> not)
-      |> cursor_move_while cursor_prev_line (current_line >> is_empty)
-      |> cursor
-
-  let move_line_start t = { x = 0 ; y = (cursor t).y } ;;
-  let move_line_end t   = { x = max 0 ((t |> current_line |> slen) - 1) ; y = (cursor t).y } ;;
+  let move_page_up    t = move_n_up Config.default.page_size t ;;
+  let move_page_down  t = move_n_down Config.default.page_size t ;;
   let move_file_start t = { x = (cursor t).x ; y = 0 } ;;
-  let move_file_end t   = { x = (cursor t).x ; y = (buflen t) - 1 } ;;
+  let move_file_end   t = { x = (cursor t).x ; y = (buflen t) - 1 } ;;
 end
 
 
@@ -2489,35 +2369,39 @@ module Ciseau = struct
     | Keys.Plus         -> Resize
     | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
-    | Keys.Lower_z      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_tokens)
-    | Keys.Lower_x      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_lines)
+
+    (* TODO: Introduce shortcut Variant to replace TilesetOp (Tileset.FileviewOp _) *)
+    | Keys.Lower_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_tokens) (* chenge to word when available *)
+    | Keys.Upper_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_tokens)
+    | Keys.Lower_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_lines)
+    | Keys.Upper_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_lines)
     | Keys.Lower_c      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_chars)
+
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
-    | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
-    | Keys.Ctrl_k       -> Move FilebufferMovements.move_prev_paragraph
     | Keys.Ctrl_u       -> Move FilebufferMovements.move_page_up
+                          (* TODO: reimplement paragraph *)
+    | Keys.Ctrl_j       -> Noop (* Move FilebufferMovements.move_next_paragraph *)
+    | Keys.Ctrl_k       -> Noop (* Move FilebufferMovements.move_prev_paragraph *)
+
+    (* TODO: rebind these
     | Keys.Alt_k        -> Move FilebufferMovements.move_file_start
     | Keys.Alt_j        -> Move FilebufferMovements.move_file_end
-    | Keys.Alt_l        -> Move FilebufferMovements.move_line_end
-    | Keys.Alt_h        -> Move FilebufferMovements.move_line_start
-    | Keys.ArrowUp      -> Move FilebufferMovements.move_cursor_up
-    | Keys.ArrowDown    -> Move FilebufferMovements.move_cursor_down
-    | Keys.ArrowRight   -> Move FilebufferMovements.move_cursor_right
-    | Keys.ArrowLeft    -> Move FilebufferMovements.move_cursor_left
-    | Keys.Lower_k      -> Move FilebufferMovements.move_cursor_up
-    | Keys.Lower_j      -> Move FilebufferMovements.move_cursor_down
-    | Keys.Lower_l      -> Move FilebufferMovements.move_cursor_right
-    | Keys.Lower_h      -> Move FilebufferMovements.move_cursor_left
-    | Keys.Lower_w      -> Move FilebufferMovements.move_next_word
-    | Keys.Lower_b      -> Move FilebufferMovements.move_prev_word
-    | Keys.Upper_w      -> Move FilebufferMovements.move_next_space
-    | Keys.Upper_b      -> Move FilebufferMovements.move_prev_space
-    | Keys.Upper_g      -> MoveVerb Movement.TokenStart
-    | Keys.Upper_h      -> MoveVerb Movement.Left
+     *)
+
+    | Keys.ArrowUp      -> MoveVerb Movement.Up
+    | Keys.ArrowDown    -> MoveVerb Movement.Down
+    | Keys.ArrowRight   -> MoveVerb Movement.Left
+    | Keys.ArrowLeft    -> MoveVerb Movement.Right
+    | Keys.Lower_k      -> MoveVerb Movement.Up
+    | Keys.Lower_j      -> MoveVerb Movement.Down
+    | Keys.Lower_l      -> MoveVerb Movement.Right
+    | Keys.Lower_h      -> MoveVerb Movement.Left
+
+    | Keys.Upper_h      -> MoveVerb Movement.TokenStart
     | Keys.Upper_j      -> MoveVerb Movement.Down
     | Keys.Upper_k      -> MoveVerb Movement.Up
-    | Keys.Upper_l      -> MoveVerb Movement.Right
-    | Keys.Colon        -> MoveVerb Movement.TokenEnd
+    | Keys.Upper_l      -> MoveVerb Movement.TokenEnd
+
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
     | Keys.Digit_2      -> Pending (Digit 2)
@@ -2528,6 +2412,11 @@ module Ciseau = struct
     | Keys.Digit_7      -> Pending (Digit 7)
     | Keys.Digit_8      -> Pending (Digit 8)
     | Keys.Digit_9      -> Pending (Digit 9)
+
+    | Keys.Lower_z      -> Noop
+    | Keys.Lower_x      -> Noop
+    | Keys.Upper_g      -> Noop
+    | Keys.Colon        -> Noop
     | Keys.Unknown      -> Noop (* ignore for now *)
 
     | Keys.EINTR        -> Resize
@@ -2659,7 +2548,27 @@ let () =
 
 (* next TODOs:
  *
- *  - fix bugs after all this rewrite and refactoring of Fileview.draw
+ * new movements
+ *  - replug repetition
+ *  - fuse Move and MoveVerb
+ *  - cleanup SpaceTokenizers, remove First Last, implement Up/Down
+ *  - implement other movement modes
+ *      - words
+ *      - digits
+ *      - paragraph
+ *      - curly braces, parentheses, brackets
+ *  - preserve desired cursor.x when spanning lines where length is less than cursors.x
+ *  - implement easymotion
+ *
+ *  highlightning
+ *    - mode for show all tokens in current token movement mode
+ *    - mode for showing next / prev / up / down landing locations
+ *
+ *
+ *  minimal edition features
+ *    - starts to add token deletion bound to 'x'
+ *
+ * bugs:
  *    - in Overflow mode, the cursor dragging in adjust_view is off
  *      - since in Clip mode the view is correct, it seems that the issue is an incorrect cursor position (again !)
  *      - the adjust_view error seems to be equal to the number of overflow lines in the screenview.
@@ -2672,5 +2581,6 @@ let () =
  *  - finish file navigation
  *  - word selections ?
  *  - find
- *  - tokenizer + static keyword hightlightning
+ *    - add vim's incsearch feature
+ *  - static keyword hightlightning
  *)
