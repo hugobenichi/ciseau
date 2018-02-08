@@ -342,6 +342,17 @@ module Movement = struct
 end
 
 
+module MovementMode = struct
+  type m = SpaceTokens | Lines | Chars (* | plus other kinds *)
+
+  let mode_to_string =
+    function
+      | SpaceTokens   -> "Tokens"
+      | Lines         -> "Lines"
+      | Chars         -> "Chars"
+end
+
+
 module Color = struct
 
   type base = Black
@@ -519,7 +530,10 @@ module Keys = struct
                   | Lower_k
                   | Lower_l
                   | Lower_b
+                  | Lower_c
                   | Lower_w
+                  | Lower_x
+                  | Lower_z
                   | Upper_b
                   | Upper_w
                   | Upper_g
@@ -591,6 +605,9 @@ module Keys = struct
     mk_key Upper_k     "K"             75 ;
     mk_key Upper_l     "L"             76 ;
     mk_key Lower_b     "w"             98 ;
+    mk_key Lower_c     "c"             99 ;
+    mk_key Lower_z     "z"             122 ;
+    mk_key Lower_x     "x"             120 ;
     mk_key Lower_h     "h"             104 ;
     mk_key Lower_j     "j"             106 ;
     mk_key Lower_k     "k"             107 ;
@@ -942,6 +959,7 @@ module type FileviewType = sig
   type screen
 
   val init_fileview : filebuffer -> t
+  val set_mov_mode : MovementMode.m -> t -> t
   val apply_movement : (t -> v2) -> int -> t -> t
   val do_movement : Movement.t -> int -> t -> t
   val cursor : t -> v2
@@ -1480,7 +1498,7 @@ module SpaceTokenizer = struct
             else v2_zero
       | (None, First)
       | (None, Right)       ->
-          if cursor.y < filebuffer.buflen
+          if cursor.y + 1 < filebuffer.buflen
             then movement First filebuffer (mk_v2 0 (cursor.y + 1))
             else cursor
       (* Noop if not inside a token *)
@@ -1510,7 +1528,7 @@ module LineMovement = struct
       else cursor
 
   let go_line_down filebuffer cursor =
-    if cursor.y < filebuffer.Filebuffer.buflen
+    if cursor.y + 1 < filebuffer.Filebuffer.buflen
       then
         let y' = cursor.y + 1 in
         let x' = min cursor.x (last_cursor_x filebuffer y') in
@@ -1519,8 +1537,6 @@ module LineMovement = struct
 
   let go_line_left filebuffer cursor =
     let cursor' = SpaceTokenizer.movement First filebuffer cursor in
-    Printf.fprintf logs "go_line_left cursor:%d,%d first_w:%d,%d\n" cursor.x cursor.y cursor'.x cursor'.y ;
-    flush logs ;
     if cursor.x <= cursor'.x
       then
         let cursor2 = go_line_up filebuffer cursor in
@@ -1549,8 +1565,38 @@ module LineMovement = struct
 end
 
 
-module TokenKind = struct
-  type k = SpaceTokens | Lines (* | plus other kinds *)
+module CharMovement = struct
+  open Movement
+
+  let go_char_left filebuffer cursor =
+    if cursor.x = 0
+      then
+        let cursor' = LineMovement.go_line_up filebuffer cursor in
+        (if cursor' = cursor
+          then cursor
+          else LineMovement.go_line_end filebuffer cursor')
+      else mk_v2 (cursor.x - 1) cursor.y
+
+  let go_char_right filebuffer cursor =
+    let x' = LineMovement.last_cursor_x filebuffer cursor.y in
+    if cursor.x >= x'
+      then
+        let cursor' = LineMovement.go_line_down filebuffer cursor in
+        (if cursor = cursor'
+          then cursor
+          else LineMovement.go_line_start filebuffer cursor')
+      else mk_v2 (cursor.x + 1) cursor.y
+
+  let movement =
+    function
+      | First
+      | Last
+      | TokenStart  (* What to do here ? *)
+      | TokenEnd    (* what to do here ? *)
+      | Left        -> go_char_left
+      | Right       -> go_char_right
+      | Up          -> LineMovement.go_line_up
+      | Down        -> LineMovement.go_line_down
 end
 
 
@@ -1617,6 +1663,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     view_start    : int ;      (* index of first row in view *)
     numbering     : numbering_mode ;
     linebreaking  : linebreak ;
+    mov_mode      : MovementMode.m ;
   }
 
   let init_fileview filebuffer = {
@@ -1625,7 +1672,11 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     view_start    = 0 ;
     numbering     = CursorRelative ;
     linebreaking  = Clip ;
+    mov_mode      = MovementMode.SpaceTokens ;
   }
+
+  let set_mov_mode m t =
+    { t with mov_mode = m }
 
   let line_at t =
     Slice.get t.filebuffer.buffer
@@ -1669,11 +1720,10 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
 
   let do_movement m view_height t =
     let cursor' =
-      let tok_kind = TokenKind.Lines in
-      (* let tok_kind = TokenKind.SpaceTokens in *)
-      match tok_kind with
+      match t.mov_mode with
       | SpaceTokens -> SpaceTokenizer.movement m t.filebuffer t.cursor
       | Lines       -> LineMovement.movement m t.filebuffer t.cursor
+      | Chars       -> CharMovement.movement m t.filebuffer t.cursor
     in
       t |> adjust_cursor cursor' |> adjust_view view_height
 
@@ -1894,6 +1944,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     Slice.set linesinfo.frame_buffer 0 (Line.of_blocks [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
       Block.mk_block (v2_to_string t.cursor) ;
+      Block.mk_block ("  mode=" ^ MovementMode.mode_to_string t.mov_mode) ;
     ]) ;
     put_text_lines
       (mk_text_subscreen screen)
@@ -1908,6 +1959,13 @@ end
 
 module FilebufferMovements = struct
   open Fileview
+
+  let op_set_mov_mode m ignored t =
+    Fileview.set_mov_mode m t
+
+  let op_set_mov_tokens = op_set_mov_mode MovementMode.SpaceTokens
+  let op_set_mov_lines  = op_set_mov_mode MovementMode.Lines
+  let op_set_mov_chars  = op_set_mov_mode MovementMode.Chars
 
   let saturate_up length x = min (max (length - 1) 0) x
 
@@ -2431,6 +2489,9 @@ module Ciseau = struct
     | Keys.Plus         -> Resize
     | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
+    | Keys.Lower_z      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_tokens)
+    | Keys.Lower_x      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_lines)
+    | Keys.Lower_c      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_chars)
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
     | Keys.Ctrl_j       -> Move FilebufferMovements.move_next_paragraph
     | Keys.Ctrl_k       -> Move FilebufferMovements.move_prev_paragraph
