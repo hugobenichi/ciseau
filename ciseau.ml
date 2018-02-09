@@ -5,12 +5,9 @@ let kLOG_STATS = true
 
 let tab_to_spaces = "  "
 
-let alen = Array.length ;;
-let blen = Bytes.length ;;
-let slen = String.length ;;
-
-let inc x = x + 1 ;;
-let dec x = x - 1 ;;
+let alen = Array.length
+let blen = Bytes.length
+let slen = String.length
 
 let try_finally action cleanup =
   let rez =
@@ -23,24 +20,16 @@ let try_finally action cleanup =
 
 let (>>) f g x = g (f x)
 
-let output_int f =
-  string_of_int >> output_string f
-
-let output_float f =
-  string_of_float >> output_string f
+let output_int f    = string_of_int >> output_string f
+let output_float f  = string_of_float >> output_string f
 
 let string_of_char c = String.make 1 c
 
-let truncate_string l s =
-  if slen s > l then String.sub s 0 l else s
-
-let is_empty s = (slen s = 0)
-
-let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n') ;;
-let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z')) ;;
-let is_digit      chr = ('0' <= chr) && (chr <= '9') ;;
-let is_alphanum   chr = (is_digit chr) || (is_letter chr) ;;
-let is_printable  chr = (' ' <= chr) && (chr <= '~') ;;
+let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n')
+let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z'))
+let is_digit      chr = ('0' <= chr) && (chr <= '9')
+let is_alphanum   chr = (is_digit chr) || (is_letter chr)
+let is_printable  chr = (' ' <= chr) && (chr <= '~')
 
 let write fd buffer len =
   if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
@@ -89,9 +78,6 @@ module Slice = struct
     data : 'a array ;
     range : range ;
   }
-
-  exception Bad_range of string
-  exception Out_of_bounds of string * string
 
   let bound_checking = true
 
@@ -250,25 +236,12 @@ module Vec2 = struct
     y : int ;
   }
 
-  let v2_zero = {
-    x = 0 ;
-    y = 0 ;
-  }
-
-  let v2_x1y0 = {
-    x = 1 ;
-    y = 0 ;
-  }
-
-  let v2_x0y1 = {
-    x = 0 ;
-    y = 1 ;
-  }
-
   let mk_v2 x y = {
     x = x ;
     y = y ;
   }
+
+  let v2_zero = mk_v2 0 0
 
   let (<+>) t1 t2 =
     mk_v2 (t1.x + t2.x) (t1.y + t2.y)
@@ -276,25 +249,11 @@ module Vec2 = struct
   let (<->) t1 t2 =
     mk_v2 (t1.x - t2.x) (t1.y - t2.y)
 
-  let v2_to_string t =
-    Printf.sprintf "%d,%d" t.y t.x
-
-  let offset_to_v2 stride offset =
-    mk_v2 (offset mod stride) (offset / stride)
-
-  exception V2_out_of_bound
-
   (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
   let assert_v2_inside { x = xlim ; y = ylim } { x ; y } =
-    if x < 0 then
-      raise V2_out_of_bound ;
-    if y < 0 then
-      raise V2_out_of_bound ;
-    if x > xlim then
-      raise V2_out_of_bound ;
-    if y > ylim then
-      raise V2_out_of_bound
+    if (x < 0) && (y < 0) && (x > xlim) && (y > ylim)
+      then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d" x y xlim ylim))
 end
 
 
@@ -673,24 +632,14 @@ module Block = struct
 
   let zero_block =
     mk_block ""
-
-  let split_block l b =
-    assert (l >= 0) ;
-    assert (l <= b.len) ;
-    let blen = b.len in
-    if blen <= l
-      then
-        (b, zero_block)
-      else
-        let t1 = String.sub b.text 0 l in
-        let t2 = String.sub b.text l (blen - l) in
-        (mk_block t1, mk_block t2)
-
 end
 
 
 module Segment = struct
-  type t = { pos : v2 ; len : int }
+  type t = {
+    pos : v2 ;
+    len : int ;
+  }
 
   let mk_segment x y l = {
     pos = mk_v2 x y ;
@@ -703,7 +652,6 @@ type linebreak = Clip | Overflow
 
 
 module Line = struct
-
   type t = String of string | Block of Block.t | Blocks of Block.t list
 
   let zero_line = String ""
@@ -985,20 +933,6 @@ module Bytevector : BytevectorType = struct
     mutable bytes   : bytes ;
     mutable cursor  : int ;
   }
-
-  let scale size =
-    size |> float |> ( *. ) 1.45 |> ceil |> truncate
-
-  let rec next_size needed_size size =
-    if needed_size <= size then size else next_size needed_size (scale size)
-
-  let ensure_size needed_size bvec =
-    let current_size = blen bvec.bytes in
-    if needed_size > current_size
-      then
-        let new_size = next_size needed_size current_size in
-        let added_len = new_size - (blen bvec.bytes) in
-        bvec.bytes <- Bytes.extend bvec.bytes 0 added_len
 
   let init_bytevector len = {
     bytes   = Bytes.make len '\000' ;
@@ -1587,10 +1521,6 @@ module CharMovement = struct
 end
 
 
-(*
- *)
-
-
 module FileNavigator = struct
 
   let dir_ls path =
@@ -1886,7 +1816,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     fill_linesinfo t.linebreaking t linesinfo ;
     Slice.set linesinfo.frame_buffer 0 (Line.of_blocks [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
-      Block.mk_block (v2_to_string t.cursor) ;
+      Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
       Block.mk_block ("  mode=" ^ MovementMode.mode_to_string t.mov_mode) ;
     ]) ;
     put_text_lines
@@ -2226,7 +2156,7 @@ module Ciseau = struct
 
   let test_mk_filebuffers file = [|
       Filebuffer.init_filebuffer file ;
-      Filebuffer.init_filebuffer "./iter.ml" ;
+      Filebuffer.init_filebuffer "./ciseau.ml" ;
       Filebuffer.init_filebuffer "./ioctl.c" ;
       (* Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *) *)
       (* FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
@@ -2431,13 +2361,18 @@ module Ciseau = struct
 
   (* TODO: replace by a proper history of previous inputs *)
   let make_user_input key editor =
-    let new_user_input = (pending_command_to_string editor.pending_input)
-                       ^  key.Keys.repr
-                       ^ " " ^ editor.user_input
+    let user_input = (pending_command_to_string editor.pending_input)
+                   ^  key.Keys.repr
+                   ^ " "
+                   ^ editor.user_input
+    in
+    let user_input' =
+      if slen user_input > editor.term_dim.x
+        then String.sub user_input 0 editor.term_dim.x
+        else user_input
     in {
       editor with
-      (* TODO: truncate_string should not be needed anymore *)
-      user_input = truncate_string editor.term_dim.x new_user_input ;
+      user_input = user_input' ;
     }
 
   let update_stats key input_duration editor =
