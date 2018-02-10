@@ -834,7 +834,7 @@ module ScreenConfiguration = struct
 end
 
 
-module type BytevectorType = sig
+module Bytevector : sig
   type t
 
   val init_bytevector : int -> t
@@ -842,10 +842,8 @@ module type BytevectorType = sig
   val append : t -> string -> unit
   val append_bytes : t -> Bytes.t -> int -> int -> unit
   val write : Unix.file_descr -> t -> unit
-end
 
-
-module Bytevector : BytevectorType = struct
+end = struct
 
   type t = {
     mutable bytes   : bytes ;
@@ -958,21 +956,17 @@ module Term = struct
 end
 
 
-module type FramebufferType = sig
+module Framebuffer : sig
   type t
-  type bytevector
-  type segment
 
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
-  val render            : t -> bytevector -> unit
+  val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
   val put_line          : t -> int -> int -> int -> Line.t -> unit
-end
 
-
-module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and type segment = Segment.t) = struct
+end = struct
 
   module Default = struct
     let fg    = Color.white ;;
@@ -980,9 +974,6 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
     let z     = 0 ;;
     let text  = ' ' ;;
   end
-
-  type bytevector = Bytevector.t
-  type segment    = Segment.t
 
   type t = {
     text        : Bytes.t ;
@@ -1131,27 +1122,18 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
 end
 
 
-module type ScreenType = sig
+module Screen : sig
   type t
-  type framebuffer
-  type block
-  type segment
 
   val get_size      : t -> v2
   val get_offset    : t -> v2
   val get_width     : t -> int
   val get_height    : t -> int
-  val mk_screen     : framebuffer -> rect -> t
+  val mk_screen     : Framebuffer.t -> rect -> t
   val mk_subscreen  : t -> rect -> t
   val put_text      : t -> Textview.t -> unit
-end
 
-
-module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block = Block.t and type segment = Segment.t) = struct
-
-  type framebuffer  = Framebuffer.t
-  type block        = Block.t
-  type segment      = Segment.t
+end = struct
 
   type t = {
     size            : v2 ;
@@ -1531,30 +1513,26 @@ module FileNavigator = struct
 end
 
 
-module type FileviewType = sig
+module Fileview : sig
   type t
-  type view
-  type filebuffer
-  type screen
 
-  val init_fileview : filebuffer -> t
-  val set_mov_mode : MovementMode.m -> t -> t
-  val apply_movement : (t -> v2) -> int -> t -> t
-  val do_movement : Movement.t -> int -> t -> t
-  val cursor : t -> v2
-  val adjust_view : int -> t -> t
-  val adjust_cursor : v2 -> t -> t
-  val current_line : t -> string
-  val current_char : t -> char
-  val buflen : t -> int
-  val swap_line_number_mode : t -> t
-  val swap_linebreaking_mode : t -> t
-  val recenter_view : int -> t -> t
-  val draw : t -> screen -> bool -> unit
-end
+  val init_fileview           : Filebuffer.t -> t
+  val set_mov_mode            : MovementMode.m -> t -> t
+  val apply_movement          : (t -> v2) -> int -> t -> t
+  val do_movement             : Movement.t -> int -> t -> t
+  val cursor                  : t -> v2
+  val adjust_view             : int -> t -> t
+  val adjust_cursor           : v2 -> t -> t
+  val current_line            : t -> string
+  val current_char            : t -> char
+  val buflen                  : t -> int
+  val swap_line_number_mode   : t -> t
+  val swap_linebreaking_mode  : t -> t
+  val recenter_view           : int -> t -> t
+  val draw                    : t -> Screen.t -> bool -> unit
 
+end = struct
 
-module Fileview : (FileviewType with type view = Textview.t and type filebuffer = Filebuffer.t and type screen = Screen.t) = struct
   open Filebuffer
 
   type view       = Textview.t
@@ -1860,24 +1838,19 @@ module FilebufferMovements = struct
 end
 
 
-module type FilebufferSetType = sig
+module FilebufferSet : sig
   type t
-  type filebuffer
 
-  val buffers_menu : t -> filebuffer (* TODO: this should return a Menu object that wraps a filebuffer *)
-  val list_buffers : t -> filebuffer Slice.t
-  val open_buffers : string -> t -> (t * filebuffer)
-  val get_buffer : string -> t -> filebuffer option
+  val buffers_menu  : t -> Filebuffer.t (* TODO: this should return a Menu object that wraps a filebuffer *)
+  val list_buffers  : t -> Filebuffer.t Slice.t
+  val open_buffers  : string -> t -> (t * Filebuffer.t)
+  val get_buffer    : string -> t -> Filebuffer.t option
   val close_buffers : string -> t -> t
-end
 
-
-module FilebufferSet : (FilebufferSetType with type filebuffer = Filebuffer.t) = struct
-
-  type filebuffer = Filebuffer.t
+end = struct
 
   type t = {
-    buffers : filebuffer Slice.t
+    buffers : Filebuffer.t Slice.t
   }
 
   let buffers_menu t =
