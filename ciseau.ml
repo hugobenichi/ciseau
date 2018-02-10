@@ -297,7 +297,7 @@ end
 
 
 module Movement = struct
-  type t = Left | Right | Up | Down | First | Last | TokenStart | TokenEnd
+  type t = Left | Right | Up | Down | Start | End
 end
 
 
@@ -1304,13 +1304,22 @@ module Filebuffer = struct
 
   let line_length { buffer } =
     Slice.get buffer >> slen (* TODO: take into account '\t' *)
+
+  let last_cursor_x filebuffer y =
+    (line_length filebuffer y) - 1 |> max 0
 end
 
 
+(* TODO:  - simplify go_first / go_right and go_last / go_right
+ *        - use arrays or slices instead of List
+ *        - clean up the tokenizers
+ *        - implements Up/Down
+ *        - break tokenizer from movement functions for reusability with other tokenizers
+ *)
 module SpaceTokenizer = struct
   open Token
 
-  type kind = Space | Tab | Printable | Control | Other
+  type kind = NonSpacePrintable | Other
 
   type t = kind token
 
@@ -1320,27 +1329,13 @@ module SpaceTokenizer = struct
     stop  = j ;
   }
 
-  let to_string { kind ; start ; stop } =
-    let kind_name = match kind with
-      | Space     ->  "Space"
-      | Tab       ->  "Tab"
-      | Printable ->  "Printable"
-      | Control   ->  "Control"
-      | Other     ->  "Other"
-    in
-    Printf.sprintf "{ %s ; %d ; %d }" kind_name start stop
-
-  let kind_of =
-    function
-      | '\032'              -> Space
-      | '\t'                -> Tab
-      | c when c < '\032'   -> Control
-      | c when c < '\127'   -> Printable
-      | '\127'              -> Control
-      | _                   -> Other
+  let kind_of c =
+    if c <> ' ' && is_printable c
+      then NonSpacePrintable
+      else Other
 
   let is_printable { kind } =
-    ( kind = Printable )
+    ( kind = NonSpacePrintable )
 
   let tokenize text =
     let s = slen text in
@@ -1352,7 +1347,6 @@ module SpaceTokenizer = struct
         then token :: tokens |> List.filter is_printable |> List.rev
         else
           match (token.kind, kind_at i) with
-            | (Tab, k2)               -> loop (token :: tokens) (mk_tok k2 i (i + 1))
             | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.start (i + 1))
             | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 i (i + 1))
     in
@@ -1385,66 +1379,106 @@ module SpaceTokenizer = struct
       | t1 :: t2 :: tail when t1.stop <= x && x < t2.stop -> Some t1
       | _ :: tail -> prev x tail
 
-  let rec movement m filebuffer cursor =
-    let line = Filebuffer.line_at filebuffer cursor.y in
-    let tokens = tokenize line in
-    let tok =
-      (* That function is too messy, probably all case should be simply handled separately and have
-       * their own specialized recursion
-       *)
-      let open Movement in
-      match m with
-        | Up          (* TODO: implement *)
-        | Down        (* TODO: implement *)
-        | First       -> first tokens
-        | Last        -> last tokens
-        | Left        -> prev cursor.x tokens
-                                        (* BUG: next does not work *)
-        | Right       -> next cursor.x tokens
-        | TokenStart  -> find cursor.x tokens
-        | TokenEnd    -> find cursor.x tokens
-    in
-      match (tok, m) with
-      | (Some ({ Token.stop }), TokenEnd)   -> mk_v2 (stop - 1) cursor.y
-      | (Some ({ Token.start }), _)         -> mk_v2 start cursor.y
-      | (None, Up)          (* TODO: implement *)
-      | (None, Down)        (* TODO: implement *)
-      | (None, Last)
-      | (None, Left)        ->
-          if cursor.y > 0
-            then
-              let prev_line_len = cursor.y - 1 |> Filebuffer.line_at filebuffer |> slen in
-              let cursor' = mk_v2 (prev_line_len - 1) (cursor.y - 1) in
-              movement Last filebuffer cursor'
-            else v2_zero
-      | (None, First)
-      | (None, Right)       ->
-          if cursor.y + 1 < filebuffer.buflen
-            then movement First filebuffer (mk_v2 0 (cursor.y + 1))
-            else cursor
-      (* Noop if not inside a token *)
-      | (None, TokenStart)  -> cursor
-      | (None, TokenEnd)    -> cursor
+  let rec go_token_first filebuffer cursor =
+    Filebuffer.line_at filebuffer cursor.y
+      |> tokenize
+      |> first
+      |> function
+          | Some ({ Token.start}) -> mk_v2 start cursor.y
+          | None ->
+              if cursor.y + 1 < filebuffer.buflen
+                then go_token_first filebuffer (mk_v2 0 (cursor.y + 1))
+                else cursor
+
+  let rec go_token_last filebuffer cursor =
+    Filebuffer.line_at filebuffer cursor.y
+      |> tokenize
+      |> last
+      |> function
+          | Some ({ Token.start }) -> mk_v2 start cursor.y
+          | None ->
+              if cursor.y > 0
+                then
+                  let cursor_y' = cursor.y - 1 in
+                  let cursor' = mk_v2 (Filebuffer.last_cursor_x filebuffer cursor_y') cursor_y' in
+                  go_token_last filebuffer cursor'
+                else v2_zero
+
+  let go_token_right filebuffer cursor =
+    Filebuffer.line_at filebuffer cursor.y
+      |> tokenize
+      |> next cursor.x
+      |> function
+          | Some ({ Token.start }) -> mk_v2 start cursor.y
+          | None ->
+              if cursor.y + 1 < filebuffer.buflen
+                then go_token_first filebuffer (mk_v2 0 (cursor.y + 1))
+                else cursor
+
+  let go_token_left filebuffer cursor =
+    Filebuffer.line_at filebuffer cursor.y
+      |> tokenize
+      |> prev cursor.x
+      |> function
+          | Some ({ Token.start }) -> mk_v2 start cursor.y
+          | None ->
+              if cursor.y > 0
+                then
+                  let cursor_y' = cursor.y - 1 in
+                  let cursor' = mk_v2 (Filebuffer.last_cursor_x filebuffer cursor_y') cursor_y' in
+                  go_token_last filebuffer cursor'
+                else v2_zero
+
+  let go_token_up filebuffer cursor =
+    (* TODO *)
+    cursor
+
+  let go_token_down filebuffer cursor =
+    (* TODO *)
+    cursor
+
+  let go_token_start filebuffer cursor =
+    Filebuffer.line_at filebuffer cursor.y
+      |> tokenize
+      |> find cursor.x
+      |> function
+          | Some ({ Token.start })  -> mk_v2 start cursor.y
+          | None                    -> cursor
+
+  let go_token_end filebuffer cursor =
+    Filebuffer.line_at filebuffer cursor.y
+      |> tokenize
+      |> find cursor.x
+      |> function
+          | Some ({ Token.stop }) -> mk_v2 (stop - 1) cursor.y
+          | None                  -> cursor
+
+  let movement =
+    let open Movement in
+    function
+      | Left    -> go_token_left
+      | Right   -> go_token_right
+      | Up      -> go_token_up
+      | Down    -> go_token_down
+      | Start   -> go_token_start
+      | End     -> go_token_end
 end
 
 
 module LineMovement = struct
   open Movement
 
-  let last_cursor_x filebuffer y =
-    (Filebuffer.line_length filebuffer y) - 1 |> max 0
-
   let go_line_start filebuffer cursor =
     mk_v2 0 cursor.y
 
   let go_line_end filebuffer cursor =
-    mk_v2 (last_cursor_x filebuffer cursor.y) cursor.y
+    mk_v2 (Filebuffer.last_cursor_x filebuffer cursor.y) cursor.y
 
   let go_line_up filebuffer cursor =
     if cursor.y > 0
       then
         let y' = cursor.y - 1 in
-        let x' = min cursor.x (last_cursor_x filebuffer y') in
+        let x' = min cursor.x (Filebuffer.last_cursor_x filebuffer y') in
         mk_v2 x' y'
       else cursor
 
@@ -1452,37 +1486,35 @@ module LineMovement = struct
     if cursor.y + 1 < filebuffer.Filebuffer.buflen
       then
         let y' = cursor.y + 1 in
-        let x' = min cursor.x (last_cursor_x filebuffer y') in
+        let x' = min cursor.x (Filebuffer.last_cursor_x filebuffer y') in
         mk_v2 x' y'
       else cursor
 
   let go_line_left filebuffer cursor =
-    let cursor' = SpaceTokenizer.movement First filebuffer cursor in
+    let cursor' = SpaceTokenizer.go_token_first filebuffer cursor in
     if cursor.x <= cursor'.x
       then
         let cursor2 = go_line_up filebuffer cursor in
-        let cursor3 = SpaceTokenizer.movement First filebuffer cursor2 in
+        let cursor3 = SpaceTokenizer.go_token_first filebuffer cursor2 in
         (if cursor3 = cursor
           then cursor2
           else cursor3)
       else cursor'
 
   let go_line_right filebuffer cursor =
-    let x' = last_cursor_x filebuffer cursor.y in
+    let x' = Filebuffer.last_cursor_x filebuffer cursor.y in
     if cursor.x >= x'
       then go_line_down filebuffer cursor |> go_line_end filebuffer
       else go_line_end filebuffer cursor
 
   let movement =
     function
-      | First
-      | Last
-      | Left        -> go_line_left
-      | Right       -> go_line_right
-      | Up          -> go_line_up
-      | Down        -> go_line_down
-      | TokenStart  -> go_line_start
-      | TokenEnd    -> go_line_end
+      | Left    -> go_line_left
+      | Right   -> go_line_right
+      | Up      -> go_line_up
+      | Down    -> go_line_down
+      | Start   -> go_line_start
+      | End     -> go_line_end
 end
 
 
@@ -1499,7 +1531,7 @@ module CharMovement = struct
       else mk_v2 (cursor.x - 1) cursor.y
 
   let go_char_right filebuffer cursor =
-    let x' = LineMovement.last_cursor_x filebuffer cursor.y in
+    let x' = Filebuffer.last_cursor_x filebuffer cursor.y in
     if cursor.x >= x'
       then
         let cursor' = LineMovement.go_line_down filebuffer cursor in
@@ -1510,14 +1542,12 @@ module CharMovement = struct
 
   let movement =
     function
-      | First
-      | Last
-      | TokenStart  (* What to do here ? *)
-      | TokenEnd    (* what to do here ? *)
-      | Left        -> go_char_left
-      | Right       -> go_char_right
-      | Up          -> LineMovement.go_line_up
-      | Down        -> LineMovement.go_line_down
+      | Start  (* What to do here ? *)
+      | End    (* what to do here ? *)
+      | Left    -> go_char_left
+      | Right   -> go_char_right
+      | Up      -> LineMovement.go_line_up
+      | Down    -> LineMovement.go_line_down
 end
 
 
@@ -1593,7 +1623,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     view_start    = 0 ;
     numbering     = CursorRelative ;
     linebreaking  = Clip ;
-    mov_mode      = MovementMode.SpaceTokens ;
+    mov_mode      = MovementMode.Chars ;
   }
 
   let set_mov_mode m t =
@@ -2327,10 +2357,10 @@ module Ciseau = struct
     | Keys.Lower_l      -> MoveVerb Movement.Right
     | Keys.Lower_h      -> MoveVerb Movement.Left
 
-    | Keys.Upper_h      -> MoveVerb Movement.TokenStart
+    | Keys.Upper_h      -> MoveVerb Movement.Start
     | Keys.Upper_j      -> MoveVerb Movement.Down
     | Keys.Upper_k      -> MoveVerb Movement.Up
-    | Keys.Upper_l      -> MoveVerb Movement.TokenEnd
+    | Keys.Upper_l      -> MoveVerb Movement.End
 
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
@@ -2486,7 +2516,6 @@ let () =
  * new movements
  *  - replug repetition
  *  - fuse Move and MoveVerb
- *  - cleanup SpaceTokenizers, remove First Last, implement Up/Down
  *  - implement other movement modes
  *      - words
  *      - digits
