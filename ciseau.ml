@@ -282,6 +282,11 @@ module Token = struct
     stop  : int ;
   }
 
+  let mk_tok i j = {
+    start = i ;
+    stop  = j ;
+  }
+
   let find_in_slice x tokens =
     assert (x < (Slice.last tokens).stop) ;
     let rec loop i =
@@ -291,7 +296,6 @@ module Token = struct
         else loop (i + 1)
     in
       loop 0
-
 end
 
 
@@ -1245,31 +1249,39 @@ module Movement = struct
 end
 
 
+type kind = Include | Exclude
+
+
+module type TokenKind = sig
+  val kind_of : char -> kind
+end
+
+
 (* TODO:  - simplify go_first / go_right and go_last / go_right
  *        - use arrays or slices instead of List
  *        - implements Up/Down
  *)
-module SpaceTokenizer = struct
+module Tokenizer (T : TokenKind) : sig
+  val go_token_first  : Filebuffer.t -> v2 -> v2
+  val go_token_last   : Filebuffer.t -> v2 -> v2
+  val go_token_left   : Filebuffer.t -> v2 -> v2
+  val go_token_right  : Filebuffer.t -> v2 -> v2
+  val go_token_up     : Filebuffer.t -> v2 -> v2
+  val go_token_down   : Filebuffer.t -> v2 -> v2
+  val go_token_start  : Filebuffer.t -> v2 -> v2
+  val go_token_end    : Filebuffer.t -> v2 -> v2
+  val movement        : Movement.t -> Filebuffer.t -> v2 -> v2
+end = struct
+
   open Token
 
-  type kind = Include | Exclude
-
-  let mk_tok i j = {
-    start = i ;
-    stop  = j ;
-  }
-
-  let kind_of c =
-    if c <> ' ' && is_printable c
-      then Include
-      else Exclude
-
   let rec end_of_section text kind i =
-    if ( i < slen text ) && ( String.get text i |> kind_of = kind )
+    if ( i < slen text ) && ( String.get text i |> T.kind_of = kind )
       then end_of_section text kind (i + 1)
       else i
 
   let tokenize text =
+    (* not tail recursive -on purpose- so that List.rev is not necessary *)
     let rec loop text toks i =
       if i < slen text
         then
@@ -1391,6 +1403,14 @@ module SpaceTokenizer = struct
 end
 
 
+module SpaceTokens = Tokenizer(struct
+  let kind_of c =
+    if c <> ' ' && is_printable c
+      then Include
+      else Exclude
+end)
+
+
 module LineMovement = struct
 
   let go_line_start filebuffer cursor =
@@ -1416,11 +1436,11 @@ module LineMovement = struct
       else cursor
 
   let go_line_left filebuffer cursor =
-    let cursor' = SpaceTokenizer.go_token_first filebuffer cursor in
+    let cursor' = SpaceTokens.go_token_first filebuffer cursor in
     if cursor.x <= cursor'.x
       then
         let cursor2 = go_line_up filebuffer cursor in
-        let cursor3 = SpaceTokenizer.go_token_first filebuffer cursor2 in
+        let cursor3 = SpaceTokens.go_token_first filebuffer cursor2 in
         (if cursor3 = cursor
           then cursor2
           else cursor3)
@@ -1488,7 +1508,7 @@ module MovementMode = struct
 
   let do_movement =
     function
-      | SpaceTokens -> SpaceTokenizer.movement
+      | SpaceTokens -> SpaceTokens.movement
       | Lines       -> LineMovement.movement
       | Chars       -> CharMovement.movement
 end
