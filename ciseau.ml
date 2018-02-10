@@ -277,8 +277,7 @@ open Rect
 
 
 module Token = struct
-  type 'a token = {
-    kind  : 'a ;
+  type token = {
     start : int ;
     stop  : int ;
   }
@@ -293,22 +292,6 @@ module Token = struct
     in
       loop 0
 
-end
-
-
-module Movement = struct
-  type t = Left | Right | Up | Down | Start | End
-end
-
-
-module MovementMode = struct
-  type m = SpaceTokens | Lines | Chars (* | plus other kinds *)
-
-  let mode_to_string =
-    function
-      | SpaceTokens   -> "Tokens"
-      | Lines         -> "Lines"
-      | Chars         -> "Chars"
 end
 
 
@@ -750,47 +733,6 @@ module Textview = struct
 end
 
 
-module type BytevectorType = sig
-  type t
-
-  val init_bytevector : int -> t
-  val reset : t -> unit
-  val append : t -> string -> unit
-  val append_bytes : t -> Bytes.t -> int -> int -> unit
-  val write : Unix.file_descr -> t -> unit
-end
-
-
-module type FramebufferType = sig
-  type t
-  type bytevector
-  type segment
-
-  val init_framebuffer  : v2 -> t
-  val clear             : t -> unit
-  val render            : t -> bytevector -> unit
-  val put_color_rect    : t -> Color.color_cell -> rect -> unit
-  val put_cursor        : t -> v2 -> unit
-  val put_line          : t -> int -> int -> int -> Line.t -> unit
-end
-
-
-module type ScreenType = sig
-  type t
-  type framebuffer
-  type block
-  type segment
-
-  val get_size      : t -> v2
-  val get_offset    : t -> v2
-  val get_width     : t -> int
-  val get_height    : t -> int
-  val mk_screen     : framebuffer -> rect -> t
-  val mk_subscreen  : t -> rect -> t
-  val put_text      : t -> Textview.t -> unit
-end
-
-
 module ScreenConfiguration = struct
 
   type orientation = Normal | Mirror
@@ -892,38 +834,14 @@ module ScreenConfiguration = struct
 end
 
 
-module type FileviewType = sig
+module type BytevectorType = sig
   type t
-  type view
-  type filebuffer
-  type screen
 
-  val init_fileview : filebuffer -> t
-  val set_mov_mode : MovementMode.m -> t -> t
-  val apply_movement : (t -> v2) -> int -> t -> t
-  val do_movement : Movement.t -> int -> t -> t
-  val cursor : t -> v2
-  val adjust_view : int -> t -> t
-  val adjust_cursor : v2 -> t -> t
-  val current_line : t -> string
-  val current_char : t -> char
-  val buflen : t -> int
-  val swap_line_number_mode : t -> t
-  val swap_linebreaking_mode : t -> t
-  val recenter_view : int -> t -> t
-  val draw : t -> screen -> bool -> unit
-end
-
-
-module type FilebufferSetType = sig
-  type t
-  type filebuffer
-
-  val buffers_menu : t -> filebuffer (* TODO: this should return a Menu object that wraps a filebuffer *)
-  val list_buffers : t -> filebuffer Slice.t
-  val open_buffers : string -> t -> (t * filebuffer)
-  val get_buffer : string -> t -> filebuffer option
-  val close_buffers : string -> t -> t
+  val init_bytevector : int -> t
+  val reset : t -> unit
+  val append : t -> string -> unit
+  val append_bytes : t -> Bytes.t -> int -> int -> unit
+  val write : Unix.file_descr -> t -> unit
 end
 
 
@@ -1037,6 +955,20 @@ module Term = struct
       )
     )
 
+end
+
+
+module type FramebufferType = sig
+  type t
+  type bytevector
+  type segment
+
+  val init_framebuffer  : v2 -> t
+  val clear             : t -> unit
+  val render            : t -> bytevector -> unit
+  val put_color_rect    : t -> Color.color_cell -> rect -> unit
+  val put_cursor        : t -> v2 -> unit
+  val put_line          : t -> int -> int -> int -> Line.t -> unit
 end
 
 
@@ -1199,6 +1131,22 @@ module Framebuffer : (FramebufferType with type bytevector = Bytevector.t and ty
 end
 
 
+module type ScreenType = sig
+  type t
+  type framebuffer
+  type block
+  type segment
+
+  val get_size      : t -> v2
+  val get_offset    : t -> v2
+  val get_width     : t -> int
+  val get_height    : t -> int
+  val mk_screen     : framebuffer -> rect -> t
+  val mk_subscreen  : t -> rect -> t
+  val put_text      : t -> Textview.t -> unit
+end
+
+
 module Screen : (ScreenType with type framebuffer = Framebuffer.t and type block = Block.t and type segment = Segment.t) = struct
 
   type framebuffer  = Framebuffer.t
@@ -1310,49 +1258,45 @@ module Filebuffer = struct
 end
 
 
+module Movement = struct
+  type t = Left | Right | Up | Down | Start | End
+end
+
+
 (* TODO:  - simplify go_first / go_right and go_last / go_right
  *        - use arrays or slices instead of List
- *        - clean up the tokenizers
  *        - implements Up/Down
- *        - break tokenizer from movement functions for reusability with other tokenizers
  *)
 module SpaceTokenizer = struct
   open Token
 
-  type kind = NonSpacePrintable | Other
+  type kind = Include | Exclude
 
-  type t = kind token
-
-  let mk_tok k i j = {
-    kind  = k ;
+  let mk_tok i j = {
     start = i ;
     stop  = j ;
   }
 
   let kind_of c =
     if c <> ' ' && is_printable c
-      then NonSpacePrintable
-      else Other
+      then Include
+      else Exclude
 
-  let is_printable { kind } =
-    ( kind = NonSpacePrintable )
+  let rec end_of_section text kind i =
+    if ( i < slen text ) && ( String.get text i |> kind_of = kind )
+      then end_of_section text kind (i + 1)
+      else i
 
   let tokenize text =
-    let s = slen text in
-    let kind_at i = assert (i < slen text) ; String.get text i |> kind_of in
-
-    let rec loop tokens token =
-      let i = token.stop in
-      if i >= s
-        then token :: tokens |> List.filter is_printable |> List.rev
-        else
-          match (token.kind, kind_at i) with
-            | (k1, k2) when k1 = k2   -> loop tokens (mk_tok k1 token.start (i + 1))
-            | (_, k2)                 -> loop (token :: tokens) (mk_tok k2 i (i + 1))
+    let rec loop text toks i =
+      if i < slen text
+        then
+          let s = end_of_section text Exclude i in
+          let e = end_of_section text Include s in
+          ( mk_tok s e ) :: ( loop text toks e )
+        else []
     in
-      if s = 0
-        then []
-        else mk_tok (kind_at 0) 0 1 |> loop []
+      loop text [] 0
 
   let first ls =
     List.nth_opt ls 0
@@ -1466,7 +1410,6 @@ end
 
 
 module LineMovement = struct
-  open Movement
 
   let go_line_start filebuffer cursor =
     mk_v2 0 cursor.y
@@ -1508,6 +1451,7 @@ module LineMovement = struct
       else go_line_end filebuffer cursor
 
   let movement =
+    let open Movement in
     function
       | Left    -> go_line_left
       | Right   -> go_line_right
@@ -1519,7 +1463,6 @@ end
 
 
 module CharMovement = struct
-  open Movement
 
   let go_char_left filebuffer cursor =
     if cursor.x = 0
@@ -1541,6 +1484,7 @@ module CharMovement = struct
       else mk_v2 (cursor.x + 1) cursor.y
 
   let movement =
+    let open Movement in
     function
       | Start  (* What to do here ? *)
       | End    (* what to do here ? *)
@@ -1548,6 +1492,23 @@ module CharMovement = struct
       | Right   -> go_char_right
       | Up      -> LineMovement.go_line_up
       | Down    -> LineMovement.go_line_down
+end
+
+
+module MovementMode = struct
+  type m = SpaceTokens | Lines | Chars (* | plus other kinds *)
+
+  let mode_to_string =
+    function
+      | SpaceTokens   -> "Tokens"
+      | Lines         -> "Lines"
+      | Chars         -> "Chars"
+
+  let do_movement =
+    function
+      | SpaceTokens -> SpaceTokenizer.movement
+      | Lines       -> LineMovement.movement
+      | Chars       -> CharMovement.movement
 end
 
 
@@ -1570,15 +1531,29 @@ module FileNavigator = struct
 end
 
 
-(* TODO: Some of the first cracks in this reprensentation are already showing up.
-         For instance, empty lines are empty strings, but in the file they take characters
-         this requires special handling in the editor, because we still need to restore these empty lines at save
-         and need to display them.
-         The naive version of move_next_word therefore fails on empty lines without special handling.
-         Similarly move_next_paragraph requires special cursor advance function, because it must not ignore
-         empty line, while move_next_word must absolutely do.
-         Furthermore, next word, next line, end-of-line, and so on should be first class concept in this
-         representation. *)
+module type FileviewType = sig
+  type t
+  type view
+  type filebuffer
+  type screen
+
+  val init_fileview : filebuffer -> t
+  val set_mov_mode : MovementMode.m -> t -> t
+  val apply_movement : (t -> v2) -> int -> t -> t
+  val do_movement : Movement.t -> int -> t -> t
+  val cursor : t -> v2
+  val adjust_view : int -> t -> t
+  val adjust_cursor : v2 -> t -> t
+  val current_line : t -> string
+  val current_char : t -> char
+  val buflen : t -> int
+  val swap_line_number_mode : t -> t
+  val swap_linebreaking_mode : t -> t
+  val recenter_view : int -> t -> t
+  val draw : t -> screen -> bool -> unit
+end
+
+
 module Fileview : (FileviewType with type view = Textview.t and type filebuffer = Filebuffer.t and type screen = Screen.t) = struct
   open Filebuffer
 
@@ -1667,11 +1642,7 @@ module Fileview : (FileviewType with type view = Textview.t and type filebuffer 
     t |> adjust_cursor (fn t) |> adjust_view view_height
 
   let do_movement m view_height t =
-    let cursor' =
-      match t.mov_mode with
-      | SpaceTokens -> SpaceTokenizer.movement m t.filebuffer t.cursor
-      | Lines       -> LineMovement.movement m t.filebuffer t.cursor
-      | Chars       -> CharMovement.movement m t.filebuffer t.cursor
+    let cursor' = MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
     in
       t |> adjust_cursor cursor' |> adjust_view view_height
 
@@ -1886,6 +1857,18 @@ module FilebufferMovements = struct
   let move_page_down  t = move_n_down Config.default.page_size t ;;
   let move_file_start t = { x = (cursor t).x ; y = 0 } ;;
   let move_file_end   t = { x = (cursor t).x ; y = (buflen t) - 1 } ;;
+end
+
+
+module type FilebufferSetType = sig
+  type t
+  type filebuffer
+
+  val buffers_menu : t -> filebuffer (* TODO: this should return a Menu object that wraps a filebuffer *)
+  val list_buffers : t -> filebuffer Slice.t
+  val open_buffers : string -> t -> (t * filebuffer)
+  val get_buffer : string -> t -> filebuffer option
+  val close_buffers : string -> t -> t
 end
 
 
