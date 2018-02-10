@@ -473,6 +473,7 @@ module Keys = struct
                   | Lower_l
                   | Lower_b
                   | Lower_c
+                  | Lower_d
                   | Lower_w
                   | Lower_x
                   | Lower_z
@@ -548,6 +549,7 @@ module Keys = struct
     mk_key Upper_l     "L"             76 ;
     mk_key Lower_b     "w"             98 ;
     mk_key Lower_c     "c"             99 ;
+    mk_key Lower_d     "d"             100 ;
     mk_key Lower_z     "z"             122 ;
     mk_key Lower_x     "x"             120 ;
     mk_key Lower_h     "h"             104 ;
@@ -1411,6 +1413,22 @@ module SpaceTokens = Tokenizer(struct
 end)
 
 
+module WordTokens = Tokenizer(struct
+  let kind_of c =
+    if is_alphanum c || c == '_'
+      then Include
+      else Exclude
+end)
+
+
+module DigitTokens = Tokenizer(struct
+  let kind_of c =
+    if is_digit c
+      then Include
+      else Exclude
+end)
+
+
 module LineMovement = struct
 
   let go_line_start filebuffer cursor =
@@ -1498,19 +1516,23 @@ end
 
 
 module MovementMode = struct
-  type m = SpaceTokens | Lines | Chars (* | plus other kinds *)
+  type m = Spaces | Words | Digits | Lines | Chars (* | plus other kinds *)
 
   let mode_to_string =
     function
-      | SpaceTokens   -> "Tokens"
-      | Lines         -> "Lines"
-      | Chars         -> "Chars"
+      | Spaces    -> "Space separated blocks"
+      | Words     -> "Words"
+      | Digits    -> "Digits"
+      | Lines     -> "Lines"
+      | Chars     -> "Chars"
 
   let do_movement =
     function
-      | SpaceTokens -> SpaceTokens.movement
-      | Lines       -> LineMovement.movement
-      | Chars       -> CharMovement.movement
+      | Spaces    -> SpaceTokens.movement
+      | Words     -> WordTokens.movement
+      | Digits    -> DigitTokens.movement
+      | Lines     -> LineMovement.movement
+      | Chars     -> CharMovement.movement
 end
 
 
@@ -1835,7 +1857,9 @@ module FilebufferMovements = struct
   let op_set_mov_mode m ignored t =
     Fileview.set_mov_mode m t
 
-  let op_set_mov_tokens = op_set_mov_mode MovementMode.SpaceTokens
+  let op_set_mov_tokens = op_set_mov_mode MovementMode.Spaces
+  let op_set_mov_words  = op_set_mov_mode MovementMode.Words
+  let op_set_mov_digits = op_set_mov_mode MovementMode.Digits
   let op_set_mov_lines  = op_set_mov_mode MovementMode.Lines
   let op_set_mov_chars  = op_set_mov_mode MovementMode.Chars
 
@@ -2307,11 +2331,12 @@ module Ciseau = struct
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
 
     (* TODO: Introduce shortcut Variant to replace TilesetOp (Tileset.FileviewOp _) *)
-    | Keys.Lower_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_tokens) (* chenge to word when available *)
+    | Keys.Lower_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_words)
     | Keys.Upper_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_tokens)
     | Keys.Lower_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_lines)
     | Keys.Upper_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_lines)
     | Keys.Lower_c      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_chars)
+    | Keys.Lower_d      -> TilesetOp (Tileset.FileviewOp FilebufferMovements.op_set_mov_digits)
 
     | Keys.Ctrl_d       -> Move FilebufferMovements.move_page_down
     | Keys.Ctrl_u       -> Move FilebufferMovements.move_page_up
