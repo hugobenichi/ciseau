@@ -1247,7 +1247,12 @@ end
 
 
 module Movement = struct
-  type t = Left | Right | Up | Down | Start | End
+  type t  = Left
+          | Right
+          | Up
+          | Down
+          | Start
+          | End
 end
 
 
@@ -1561,7 +1566,7 @@ module Fileview : sig
   val init_fileview           : Filebuffer.t -> t
   val set_mov_mode            : MovementMode.m -> t -> t
   val apply_movement          : (t -> v2) -> int -> t -> t
-  val do_movement             : Movement.t -> int -> t -> t
+  val apply_mov               : Movement.t -> t -> v2
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
   val current_line            : t -> string
@@ -1655,16 +1660,11 @@ end = struct
       }
     else t
 
-  let adjust_cursor vec2 view_height t =
-    { t with cursor = vec2 } |> adjust_view view_height
-
   let apply_movement fn view_height t =
-    adjust_cursor (fn t) view_height t
+    { t with cursor = fn t } |> adjust_view view_height
 
-  let do_movement m view_height t =
-    let cursor' = MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
-    in
-    adjust_cursor cursor' view_height t
+  let apply_mov m t =
+    MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -1848,6 +1848,7 @@ end = struct
       screen
       linesinfo
       is_focused
+
 end
 
 
@@ -1855,7 +1856,7 @@ module FilebufferMovements = struct
   open Fileview
 
   let op_set_mov_mode m ignored t =
-    Fileview.set_mov_mode m t
+    set_mov_mode m t
 
   let op_set_mov_tokens = op_set_mov_mode MovementMode.Spaces
   let op_set_mov_words  = op_set_mov_mode MovementMode.Words
@@ -2136,7 +2137,6 @@ module Ciseau = struct
                | Resize
                | TilesetOp of Tileset.op
                | Move of (Fileview.t -> v2)
-               | MoveVerb of Movement.t
                | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
 
@@ -2257,11 +2257,6 @@ module Ciseau = struct
           editor with
           tileset = Tileset.apply_op editor.tileset fileview_op ;
         }
-    | MoveVerb mov ->
-        let fileview_op = Tileset.FileviewOp (Fileview.do_movement mov) in {
-          editor with
-          tileset = Tileset.apply_op editor.tileset fileview_op ;
-        }
     | View fn ->
         let fileview_op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in {
           editor with
@@ -2284,17 +2279,6 @@ module Ciseau = struct
         tileset = Tileset.apply_op editor.tileset fileview_op ;
         pending_input = None ;
       }
-    | MoveVerb mov ->
-        let rec loop mov n view_height fv =
-          if (n > 0)
-            then loop mov (n - 1) view_height (Fileview.do_movement mov view_height fv)
-            else fv
-        in
-        let fileview_op = Tileset.FileviewOp (loop mov n) in {
-          editor with
-          tileset = Tileset.apply_op editor.tileset fileview_op ;
-          pending_input = None ;
-        }
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
       (* for other command, flush any pending digits *)
     | _ -> apply_command command { editor with pending_input = None }
@@ -2360,19 +2344,20 @@ module Ciseau = struct
     | Keys.Alt_j        -> Move FilebufferMovements.move_file_end
      *)
 
-    | Keys.ArrowUp      -> MoveVerb Movement.Up
-    | Keys.ArrowDown    -> MoveVerb Movement.Down
-    | Keys.ArrowRight   -> MoveVerb Movement.Left
-    | Keys.ArrowLeft    -> MoveVerb Movement.Right
-    | Keys.Lower_k      -> MoveVerb Movement.Up
-    | Keys.Lower_j      -> MoveVerb Movement.Down
-    | Keys.Lower_l      -> MoveVerb Movement.Right
-    | Keys.Lower_h      -> MoveVerb Movement.Left
+    (* TODO: cleanup this boilerplate in local variables somwhere *)
+    | Keys.ArrowUp      -> Move (Fileview.apply_mov Movement.Up)
+    | Keys.ArrowDown    -> Move (Fileview.apply_mov Movement.Down)
+    | Keys.ArrowRight   -> Move (Fileview.apply_mov Movement.Left)
+    | Keys.ArrowLeft    -> Move (Fileview.apply_mov Movement.Right)
+    | Keys.Lower_k      -> Move (Fileview.apply_mov Movement.Up)
+    | Keys.Lower_j      -> Move (Fileview.apply_mov Movement.Down)
+    | Keys.Lower_l      -> Move (Fileview.apply_mov Movement.Right)
+    | Keys.Lower_h      -> Move (Fileview.apply_mov Movement.Left)
 
-    | Keys.Upper_h      -> MoveVerb Movement.Start
-    | Keys.Upper_j      -> MoveVerb Movement.Down
-    | Keys.Upper_k      -> MoveVerb Movement.Up
-    | Keys.Upper_l      -> MoveVerb Movement.End
+    | Keys.Upper_h      -> Move (Fileview.apply_mov Movement.Start)
+    | Keys.Upper_j      -> Move (Fileview.apply_mov Movement.Down)
+    | Keys.Upper_k      -> Move (Fileview.apply_mov Movement.Up)
+    | Keys.Upper_l      -> Move (Fileview.apply_mov Movement.End)
 
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
@@ -2526,11 +2511,8 @@ let () =
 (* next TODOs:
  *
  * new movements
- *  - replug repetition
- *  - fuse Move and MoveVerb
+ *  - fix bugs when going to last token of current line
  *  - implement other movement modes
- *      - words
- *      - digits
  *      - paragraph
  *      - curly braces, parentheses, brackets
  *  - preserve desired cursor.x when spanning lines where length is less than cursors.x
