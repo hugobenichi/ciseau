@@ -1564,7 +1564,6 @@ module Fileview : sig
   val do_movement             : Movement.t -> int -> t -> t
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
-  val adjust_cursor           : v2 -> t -> t
   val current_line            : t -> string
   val current_char            : t -> char
   val buflen                  : t -> int
@@ -1656,15 +1655,16 @@ end = struct
       }
     else t
 
-  let adjust_cursor vec2 t = { t with cursor = vec2 }
+  let adjust_cursor vec2 view_height t =
+    { t with cursor = vec2 } |> adjust_view view_height
 
   let apply_movement fn view_height t =
-    t |> adjust_cursor (fn t) |> adjust_view view_height
+    adjust_cursor (fn t) view_height t
 
   let do_movement m view_height t =
     let cursor' = MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
     in
-      t |> adjust_cursor cursor' |> adjust_view view_height
+    adjust_cursor cursor' view_height t
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -2284,6 +2284,17 @@ module Ciseau = struct
         tileset = Tileset.apply_op editor.tileset fileview_op ;
         pending_input = None ;
       }
+    | MoveVerb mov ->
+        let rec loop mov n view_height fv =
+          if (n > 0)
+            then loop mov (n - 1) view_height (Fileview.do_movement mov view_height fv)
+            else fv
+        in
+        let fileview_op = Tileset.FileviewOp (loop mov n) in {
+          editor with
+          tileset = Tileset.apply_op editor.tileset fileview_op ;
+          pending_input = None ;
+        }
     | Pending ((Digit n) as d)  -> queue_pending_command editor d
       (* for other command, flush any pending digits *)
     | _ -> apply_command command { editor with pending_input = None }
