@@ -1520,24 +1520,118 @@ module CharMovement = struct
 end
 
 
+module ParagraphMovement = struct
+
+  (* TODO use this below *)
+  let is_line_empty     filebuffer y = Filebuffer.line_length filebuffer y = 0
+  let is_line_not_empty filebuffer y = Filebuffer.line_length filebuffer y > 0
+
+  (* Go up until first line reached, or empty line above *)
+  let rec find_para_start filebuffer y =
+    if y = 0 || Filebuffer.line_length filebuffer (y - 1) = 0
+      then y
+      else find_para_start filebuffer (y - 1)
+
+  (* Go down until last line reached, or empty line below *)
+  let rec find_para_end filebuffer y =
+    let y' = y + 1 in
+    if y' = filebuffer.Filebuffer.buflen || Filebuffer.line_length filebuffer y' = 0
+      then y
+      else find_para_end filebuffer y'
+
+  (* Go up until first line reached, or non-empty line above *)
+  let rec find_non_empty_above filebuffer y =
+    if y = 0 || Filebuffer.line_length filebuffer (y - 1) > 0
+      then y
+      else find_non_empty_above filebuffer (y - 1)
+
+  (* Go down until last line reached, or empty line below *)
+  let rec find_non_empty_below filebuffer y =
+    let y' = y + 1 in
+    if y' = filebuffer.Filebuffer.buflen || Filebuffer.line_length filebuffer y' > 0
+      then y
+      else find_non_empty_below filebuffer y'
+
+  (* Go to first word of the current paragraph, or nowhere if cursor not inside paragraph *)
+  let go_para_start filebuffer cursor =
+    if Filebuffer.line_length filebuffer cursor.y = 0
+      then cursor
+      else
+        let y' = find_para_start filebuffer cursor.y in
+        WordTokens.go_token_first filebuffer (mk_v2 0 y')
+
+  (* Go to last char of last line of paragraph, or nowhere if cursor not inside paragraph *)
+  let go_para_end filebuffer cursor =
+    if Filebuffer.line_length filebuffer cursor.y = 0
+      then cursor
+      else
+        let y' = find_para_end filebuffer cursor.y in
+        mk_v2 (Filebuffer.last_cursor_x filebuffer y') y'
+
+  let go_para_up filebuffer cursor =
+    let y' = find_para_start filebuffer cursor.y in
+    if y' = 0
+      then cursor
+      else
+        let y'' = find_non_empty_above filebuffer y' in
+        if y'' = 0
+          then cursor
+          else go_para_start filebuffer (mk_v2 0 (y'' - 1))
+
+  let go_para_down filebuffer cursor =
+    let y' = find_para_end filebuffer cursor.y in
+    if y' = 0
+      then cursor
+      else
+        let y'' = find_non_empty_below filebuffer y' in
+        if y'' + 1 = filebuffer.Filebuffer.buflen
+          then cursor
+          else go_para_start filebuffer (mk_v2 0 (y'' + 1))
+
+  let go_para_left filebuffer cursor =
+    let cursor' = go_para_up filebuffer cursor in
+    if cursor = cursor'
+      then cursor'
+      else go_para_end filebuffer cursor'
+
+  let go_para_right filebuffer cursor =
+    let cursor' = go_para_down filebuffer cursor in
+    if cursor = cursor'
+      then cursor'
+      else go_para_end filebuffer cursor'
+
+  let movement : Movement.t -> Filebuffer.t -> v2 -> v2 =
+    let open Movement in
+    function
+      | Start   -> go_para_start
+      | End     -> go_para_end
+      | Left    -> go_para_left
+      | Right   -> go_para_right
+      | Up      -> go_para_up
+      | Down    -> go_para_down
+end
+
+
 module MovementMode = struct
-  type m = Spaces | Words | Digits | Lines | Chars (* | plus other kinds *)
+  type m = Spaces | Words | Digits | Lines | Chars | Paragraphs (* | plus other kinds *)
 
   let mode_to_string =
     function
-      | Spaces    -> "Space separated blocks"
-      | Words     -> "Words"
-      | Digits    -> "Digits"
-      | Lines     -> "Lines"
-      | Chars     -> "Chars"
+      | Spaces        -> "Space separated blocks"
+      | Words         -> "Words"
+      | Digits        -> "Digits"
+      | Lines         -> "Lines"
+      | Chars         -> "Chars"
+      | Paragraphs    -> "Paragraphs"
 
   let do_movement =
     function
-      | Spaces    -> SpaceTokens.movement
-      | Words     -> WordTokens.movement
-      | Digits    -> DigitTokens.movement
-      | Lines     -> LineMovement.movement
-      | Chars     -> CharMovement.movement
+      | Spaces        -> SpaceTokens.movement
+      | Words         -> WordTokens.movement
+      | Digits        -> DigitTokens.movement
+      | Lines         -> LineMovement.movement
+      | Chars         -> CharMovement.movement
+      | Paragraphs    -> ParagraphMovement.movement
 end
 
 
@@ -1865,6 +1959,8 @@ module FilebufferMovement = struct
   let op_set_mov_digits = op_set_mov_mode MovementMode.Digits
   let op_set_mov_lines  = op_set_mov_mode MovementMode.Lines
   let op_set_mov_chars  = op_set_mov_mode MovementMode.Chars
+  (* let op_set_mov_paras  = op_set_mov_mode MovementMode.Paragraphs *)
+  let op_set_mov_paras ignored t = set_mov_mode MovementMode.Paragraphs t
 
   let page_offset = Config.default.page_size
 
@@ -2362,6 +2458,7 @@ module Ciseau = struct
     | Keys.Upper_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_lines)
     | Keys.Lower_c      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_chars)
     | Keys.Lower_d      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_digits)
+    | Keys.Lower_z      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_paras)
 
     | Keys.Ctrl_u       -> Move FilebufferMovement.PageUp
     | Keys.Ctrl_d       -> Move FilebufferMovement.PageDown
@@ -2392,7 +2489,6 @@ module Ciseau = struct
     | Keys.Digit_8      -> Pending (Digit 8)
     | Keys.Digit_9      -> Pending (Digit 9)
 
-    | Keys.Lower_z      -> Noop
     | Keys.Lower_x      -> Noop
     | Keys.Upper_g      -> Noop
     | Keys.Colon        -> Noop
