@@ -1729,7 +1729,7 @@ end = struct
 
   let adjust_view screen_height t =
     assert (t.cursor.y >= 0) ;
-    assert (t.cursor.y < Filebuffer.file_length t) ;
+    assert (t.cursor.y < Filebuffer.file_length t.filebuffer) ;
     let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     if t.cursor.y < t.view_start then
       { t with
