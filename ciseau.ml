@@ -1244,7 +1244,16 @@ module Filebuffer = struct
 
   let is_line_empty filebuffer y = (line_length filebuffer y = 0)
 
+  (* This function should generate bugs: callers cannot distinguish strings with length 1 and the empty string *)
   let last_cursor_x filebuffer y = max 0 ((line_length filebuffer y) - 1)
+
+  let last_cursor_x2 filebuffer y = (line_length filebuffer y) - 1
+
+  let char_x_index_first c filebuffer y =
+    String.index_opt (line_at filebuffer y) c
+
+  let char_x_index_last c filebuffer y =
+    String.rindex_opt (line_at filebuffer y) c
 end
 
 
@@ -1610,8 +1619,105 @@ module ParagraphMovement = struct
 end
 
 
+module DelimiterMovement = struct
+
+  let left  = '('
+  let right = ')'
+
+  let get_kind =
+    function
+    | '('   ->  1
+    | ')'   -> -1
+    | _     ->  0
+
+  let get_kind_at filebuffer x y =
+    String.get (Filebuffer.line_at filebuffer y) x |> get_kind
+
+  let rec go_left filebuffer x y b =
+    if x < 0
+      then
+        (if y = 0
+          then mk_v2 0 0
+          else go_left filebuffer (Filebuffer.last_cursor_x2 filebuffer (y - 1)) (y - 1) b)
+      else
+        let b' = b + (get_kind_at filebuffer x y) in
+        if b' = 0
+          then mk_v2 x y
+          else go_left filebuffer (x - 1) y b'
+
+  let rec go_right filebuffer x_stop y_stop x y b =
+    if x > x_stop
+      then
+        (if y = y_stop
+          then mk_v2 x_stop y_stop
+          else go_right filebuffer (Filebuffer.last_cursor_x2 filebuffer (y + 1)) y_stop 0 (y + 1) b)
+      else
+        let b' = b + (get_kind_at filebuffer x y) in
+        if b' = 0
+          then mk_v2 x y
+          else go_right filebuffer x_stop y_stop (x + 1) y b'
+
+  let go_delim_start filebuffer cursor =
+    let k = get_kind_at filebuffer cursor.x cursor.y in
+    if k = get_kind '('
+      then cursor
+      else
+        go_left
+          filebuffer
+          cursor.x
+          cursor.y
+          (0 - k - 1)
+
+  let go_delim_end filebuffer cursor =
+    let k = get_kind_at filebuffer cursor.x cursor.y in
+    if k = get_kind ')'
+      then cursor
+      else
+        go_right
+          filebuffer
+          (Filebuffer.last_cursor_x2 filebuffer cursor.y)
+          (Filebuffer.last_line_index filebuffer)
+          cursor.x
+          cursor.y
+          (1 - k)
+
+  let go_delim_left filebuffer cursor =
+    let { x ; y } = go_delim_start filebuffer cursor in
+    go_left filebuffer x y 0
+      |> go_delim_start filebuffer
+
+  let go_delim_right filebuffer cursor =
+    let { x ; y } = go_delim_end filebuffer cursor in
+    go_right
+      filebuffer
+      (Filebuffer.last_cursor_x2 filebuffer y)
+      (Filebuffer.last_line_index filebuffer)
+      x
+      y
+      0
+
+  let go_delim_up filebuffer cursor =
+    (* TODO *)
+    cursor
+
+  let go_delim_down filebuffer cursor =
+    (* TODO *)
+    cursor
+
+  let movement : Movement.t -> Filebuffer.t -> v2 -> v2 =
+    let open Movement in
+    function
+      | Left    -> go_delim_left
+      | Right   -> go_delim_right
+      | Up      -> go_delim_up
+      | Down    -> go_delim_down
+      | Start   -> go_delim_start
+      | End     -> go_delim_end
+end
+
+
 module MovementMode = struct
-  type m = Spaces | Words | Digits | Lines | Chars | Paragraphs (* | plus other kinds *)
+  type m = Spaces | Words | Digits | Lines | Chars | Paragraphs | Parens (* | plus other kinds *)
 
   let mode_to_string =
     function
@@ -1621,6 +1727,7 @@ module MovementMode = struct
       | Lines         -> "Lines"
       | Chars         -> "Chars"
       | Paragraphs    -> "Paragraphs"
+      | Parens        -> "Parens"
 
   let do_movement =
     function
@@ -1630,6 +1737,7 @@ module MovementMode = struct
       | Lines         -> LineMovement.movement
       | Chars         -> CharMovement.movement
       | Paragraphs    -> ParagraphMovement.movement
+      | Parens        -> DelimiterMovement.movement
 end
 
 
@@ -1946,6 +2054,7 @@ module FilebufferMovement = struct
   let op_set_mov_chars  = op_set_mov_mode MovementMode.Chars
   (* let op_set_mov_paras  = op_set_mov_mode MovementMode.Paragraphs *)
   let op_set_mov_paras ignored t = set_mov_mode MovementMode.Paragraphs t
+  let op_set_mov_parens ignored t = set_mov_mode MovementMode.Parens t
 
   let page_offset = Config.default.page_size
 
@@ -2444,6 +2553,7 @@ module Ciseau = struct
     | Keys.Lower_c      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_chars)
     | Keys.Lower_d      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_digits)
     | Keys.Lower_z      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_paras)
+    | Keys.Lower_x      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_parens)
 
     | Keys.Ctrl_u       -> Move FilebufferMovement.PageUp
     | Keys.Ctrl_d       -> Move FilebufferMovement.PageDown
@@ -2474,7 +2584,6 @@ module Ciseau = struct
     | Keys.Digit_8      -> Pending (Digit 8)
     | Keys.Digit_9      -> Pending (Digit 9)
 
-    | Keys.Lower_x      -> Noop
     | Keys.Upper_g      -> Noop
     | Keys.Colon        -> Noop
     | Keys.Unknown      -> Noop (* ignore for now *)
@@ -2615,7 +2724,11 @@ let () =
  *
  * new movements
  *  - fix bugs when going to last token of current line
- *  - implement other movement modes: curly braces, parentheses, brackets
+ *  - fix bugs linked to last_cursor_x
+ *  - fix bugs in DelimiterMovement
+ *  - finish implementing up/down in DelimiterMovement
+ *  - finish implementing up/down in Tokenizer
+ *  - add delimiter movements for '{', '[', '<'
  *  - preserve desired cursor.x when spanning lines where length is less than cursors.x
  *  - implement easymotion
  *
@@ -2644,3 +2757,49 @@ let () =
  *    - add vim's incsearch feature
  *  - static keyword hightlightning
  *)
+
+(*
+ * Just for debugging the paren delimiter movement
+
+(define Y
+  (lambda (h)
+    ((lambda (x) (x x))
+     (lambda (g)
+       (h (lambda args (apply (g g) args)))))))
+
+;; head-recursive factorial
+(define fac
+  (Y
+    (lambda (f)
+      (lambda (x)
+        (if (< x 2)
+            1
+            ( * x (f (- x 1))))))))
+
+;; tail-recursive factorial
+(define (fac2 n)
+  (letrec ((tail-fac
+             (Y (lambda (f)
+                  (lambda (n acc)
+                    (if (zero? n)
+                        acc
+                        (f (- n 1) ( * n acc))))))))
+    (tail-fac n 1)))
+
+(define fib
+  (Y
+    (lambda (f)
+      (lambda (x)
+        (if (< x 2)
+            x
+            (+ (f (- x 1)) (f (- x 2))))))))
+
+(display (fac 6))
+(newline)
+
+(display (fib 6))
+(newline)
+
+ *)
+
+
