@@ -1235,14 +1235,16 @@ module Filebuffer = struct
   let init_filebuffer file =
     file |> read_file |> from_lines file
 
-  let line_at { buffer } =
-    Slice.get buffer
+  let line_at { buffer } = Slice.get buffer
 
-  let line_length { buffer } =
-    Slice.get buffer >> slen (* TODO: take into account '\t' *)
+  let line_length { buffer } = Slice.get buffer >> slen (* TODO: take into account '\t' *)
 
-  let last_cursor_x filebuffer y =
-    (line_length filebuffer y) - 1 |> max 0
+  let file_length { buflen } = buflen
+  let last_line_index { buflen } = buflen - 1
+
+  let is_line_empty filebuffer y = (line_length filebuffer y = 0)
+
+  let last_cursor_x filebuffer y = max 0 ((line_length filebuffer y) - 1)
 end
 
 
@@ -1451,7 +1453,7 @@ module LineMovement = struct
       else cursor
 
   let go_line_down filebuffer cursor =
-    if cursor.y + 1 < filebuffer.Filebuffer.buflen
+    if cursor.y + 1 < Filebuffer.file_length filebuffer
       then
         let y' = cursor.y + 1 in
         let x' = min cursor.x (Filebuffer.last_cursor_x filebuffer y') in
@@ -1522,39 +1524,35 @@ end
 
 module ParagraphMovement = struct
 
-  (* TODO use this below *)
-  let is_line_empty     filebuffer y = Filebuffer.line_length filebuffer y = 0
-  let is_line_not_empty filebuffer y = Filebuffer.line_length filebuffer y > 0
-
   (* Go up until first line reached, or empty line above *)
   let rec find_para_start filebuffer y =
-    if y = 0 || Filebuffer.line_length filebuffer (y - 1) = 0
+    if y = 0 || Filebuffer.is_line_empty filebuffer (y - 1)
       then y
       else find_para_start filebuffer (y - 1)
 
   (* Go down until last line reached, or empty line below *)
   let rec find_para_end filebuffer y =
     let y' = y + 1 in
-    if y' = filebuffer.Filebuffer.buflen || Filebuffer.line_length filebuffer y' = 0
+    if y' = Filebuffer.file_length filebuffer || Filebuffer.is_line_empty filebuffer y'
       then y
       else find_para_end filebuffer y'
 
   (* Go up until first line reached, or non-empty line above *)
   let rec find_non_empty_above filebuffer y =
-    if y = 0 || Filebuffer.line_length filebuffer (y - 1) > 0
+    if y = 0 || Filebuffer.is_line_empty filebuffer (y - 1) |> not
       then y
       else find_non_empty_above filebuffer (y - 1)
 
   (* Go down until last line reached, or empty line below *)
   let rec find_non_empty_below filebuffer y =
     let y' = y + 1 in
-    if y' = filebuffer.Filebuffer.buflen || Filebuffer.line_length filebuffer y' > 0
+    if y' = Filebuffer.file_length filebuffer || Filebuffer.is_line_empty filebuffer y' |> not
       then y
       else find_non_empty_below filebuffer y'
 
   (* Go to first word of the current paragraph, or nowhere if cursor not inside paragraph *)
   let go_para_start filebuffer cursor =
-    if Filebuffer.line_length filebuffer cursor.y = 0
+    if Filebuffer.is_line_empty filebuffer cursor.y
       then cursor
       else
         let y' = find_para_start filebuffer cursor.y in
@@ -1562,7 +1560,7 @@ module ParagraphMovement = struct
 
   (* Go to last char of last line of paragraph, or nowhere if cursor not inside paragraph *)
   let go_para_end filebuffer cursor =
-    if Filebuffer.line_length filebuffer cursor.y = 0
+    if Filebuffer.is_line_empty filebuffer cursor.y
       then cursor
       else
         let y' = find_para_end filebuffer cursor.y in
@@ -1583,10 +1581,10 @@ module ParagraphMovement = struct
     if y' = 0
       then cursor
       else
-        let y'' = find_non_empty_below filebuffer y' in
-        if y'' + 1 = filebuffer.Filebuffer.buflen
+        let y'' = 1 + find_non_empty_below filebuffer y' in
+        if y'' = Filebuffer.file_length filebuffer
           then cursor
-          else go_para_start filebuffer (mk_v2 0 (y'' + 1))
+          else go_para_start filebuffer (mk_v2 0 y'')
 
   let go_para_left filebuffer cursor =
     let cursor' = go_para_up filebuffer cursor in
@@ -1663,9 +1661,7 @@ module Fileview : sig
   val apply_mov               : Movement.t -> t -> v2
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
-  val current_line            : t -> string
-  val current_char            : t -> char
-  val buflen                  : t -> int
+  val last_line_index         : t -> int
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
   val recenter_view           : int -> t -> t
@@ -1722,29 +1718,18 @@ end = struct
   let set_mov_mode m t =
     { t with mov_mode = m }
 
-  let line_at t =
-    Slice.get t.filebuffer.buffer
+  let cursor { cursor } =
+    cursor
 
-  let current_line t =
-    line_at t t.cursor.y
+  let view_height { view_start ; filebuffer } =
+    (Filebuffer.file_length filebuffer) - view_start
 
-  let current_char t =
-    String.get (current_line t) t.cursor.x
-
-  let current_line_len =
-    current_line >> slen
-
-  let line_len t i =
-    line_at t i |> slen
-
-  let cursor t = t.cursor
-
-  let buflen t =
-    Slice.len t.filebuffer.buffer
+  let last_line_index { filebuffer } =
+    Filebuffer.last_line_index filebuffer
 
   let adjust_view screen_height t =
     assert (t.cursor.y >= 0) ;
-    assert (t.cursor.y < buflen t) ;
+    assert (t.cursor.y < Filebuffer.file_length t) ;
     let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     if t.cursor.y < t.view_start then
       { t with
@@ -1813,7 +1798,7 @@ end = struct
     in
     {
       text_size     = mk_v2 text_width text_height ;
-      text_stop_y   = min text_height ((buflen t) - t.view_start) ;
+      text_stop_y   = min text_height (view_height t) ;
       line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
       frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
       line_number   = LineNumberCache.get line_number_offset ;
@@ -1965,7 +1950,7 @@ module FilebufferMovement = struct
   let page_offset = Config.default.page_size
 
   let move_file_start t = mk_v2 (cursor t).x 0
-  let move_file_end   t = mk_v2 (cursor t).x ((buflen t) - 1)
+  let move_file_end   t = mk_v2 (cursor t).x (last_line_index t)
 
   let move_page_up t =
     cursor t |> fun { x ; y } -> {
@@ -1976,7 +1961,7 @@ module FilebufferMovement = struct
   let move_page_down t =
     cursor t |> fun { x ; y } -> {
       x = x ;
-      y = max (y + page_offset) ((buflen t) - 1) ;
+      y = max (y + page_offset) (last_line_index t) ;
     }
 
   type move = Left
@@ -2630,9 +2615,7 @@ let () =
  *
  * new movements
  *  - fix bugs when going to last token of current line
- *  - implement other movement modes
- *      - paragraph
- *      - curly braces, parentheses, brackets
+ *  - implement other movement modes: curly braces, parentheses, brackets
  *  - preserve desired cursor.x when spanning lines where length is less than cursors.x
  *  - implement easymotion
  *
@@ -2640,6 +2623,7 @@ let () =
  *    - mode for show all tokens in current token movement mode
  *    - mode for showing next / prev / up / down landing locations
  *
+ *  hud: put movement/command history per Fileview and show in user input bar
  *
  *  minimal edition features
  *    - starts to add token deletion bound to 'x'
