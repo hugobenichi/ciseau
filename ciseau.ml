@@ -1,7 +1,9 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
-let kLOG_STATS = true
+(* Debugging flags *)
+let kLOG_STATS    = true
+let kDRAW_SCREEN  = false
 
 let tab_to_spaces = "  "
 
@@ -68,6 +70,16 @@ module Error = struct
         | E (msg, stacktrace)   ->  Some (msg ^ "\n" ^ stacktrace)
         | _                     ->  None)
 end
+
+let _assert condition =
+  if not condition
+    then raise (Error.e "failed assert")
+
+
+let sget s i =
+  if i < 0 || slen s <= i
+    then raise (Error.e (Printf.sprintf "String.get \"%s\" %d out of bound" s i)) ;
+  String.get s i
 
 
 module Slice = struct
@@ -1078,7 +1090,8 @@ end = struct
     Priv.render_all_sections frame_buffer render_buffer ;
     Bytevector.append render_buffer (Term.Control.cursor_control_string frame_buffer.cursor) ;
     Bytevector.append render_buffer Term.Control.cursor_show ;
-    Bytevector.write Unix.stdout render_buffer
+    if kDRAW_SCREEN
+      then Bytevector.write Unix.stdout render_buffer
 
   let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
     for y = topleft.y to bottomright.y do
@@ -1247,13 +1260,16 @@ module Filebuffer = struct
   (* This function should generate bugs: callers cannot distinguish strings with length 1 and the empty string *)
   let last_cursor_x filebuffer y = max 0 ((line_length filebuffer y) - 1)
 
+  (* This function should return an option for empty lines *)
   let last_cursor_x2 filebuffer y = (line_length filebuffer y) - 1
 
-  let char_x_index_first c filebuffer y =
-    String.index_opt (line_at filebuffer y) c
+  let is_valid_cursor filebuffer x y = (0 <= y)
+                                    && (y <= last_line_index filebuffer)
+                                    && (0 <= x)
+                                    && (x <= last_cursor_x filebuffer y)
 
-  let char_x_index_last c filebuffer y =
-    String.rindex_opt (line_at filebuffer y) c
+  let char_at filebuffer x y =
+    sget (line_at filebuffer y) x
 end
 
 
@@ -1631,7 +1647,9 @@ module DelimiterMovement = struct
     | _     ->  0
 
   let get_kind_at filebuffer x y =
-    String.get (Filebuffer.line_at filebuffer y) x |> get_kind
+    if Filebuffer.is_valid_cursor filebuffer x y
+      then Filebuffer.char_at filebuffer x y |> get_kind
+      else 0
 
   let rec go_left filebuffer x y b =
     if x < 0
@@ -1658,6 +1676,8 @@ module DelimiterMovement = struct
           else go_right filebuffer x_stop y_stop (x + 1) y b'
 
   let go_delim_start filebuffer cursor =
+    Printf.fprintf logs "go_delim_start %d,%d\n" cursor.x cursor.y ;
+    flush logs ;
     let k = get_kind_at filebuffer cursor.x cursor.y in
     if k = get_kind '('
       then cursor
@@ -1729,6 +1749,9 @@ module MovementMode = struct
       | Paragraphs    -> "Paragraphs"
       | Parens        -> "Parens"
 
+  let noop_movement mov filebuffer cursor =
+    cursor
+
   let do_movement =
     function
       | Spaces        -> SpaceTokens.movement
@@ -1737,7 +1760,7 @@ module MovementMode = struct
       | Lines         -> LineMovement.movement
       | Chars         -> CharMovement.movement
       | Paragraphs    -> ParagraphMovement.movement
-      | Parens        -> DelimiterMovement.movement
+      | Parens        -> noop_movement (* DelimiterMovement.movement *)
 end
 
 
@@ -1836,8 +1859,6 @@ end = struct
     Filebuffer.last_line_index filebuffer
 
   let adjust_view screen_height t =
-    assert (t.cursor.y >= 0) ;
-    assert (t.cursor.y < Filebuffer.file_length t.filebuffer) ;
     let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     if t.cursor.y < t.view_start then
       { t with
@@ -1850,7 +1871,13 @@ end = struct
     else t
 
   let apply_movement fn view_height t =
-    { t with cursor = fn t } |> adjust_view view_height
+    (* TODO: for debugging fn should probably be a proper Variant *)
+    let cursor' = fn t in
+    Printf.fprintf logs "apply_movement %d,%d -> %d,%d\n" t.cursor.y t.cursor.x cursor'.y cursor'.x ;
+    flush logs ;
+    _assert (cursor'.y >= 0) ;
+    _assert (cursor'.y < Filebuffer.file_length t.filebuffer) ;
+    { t with cursor = cursor' } |> adjust_view view_height
 
   let apply_mov m t =
     MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
@@ -2715,8 +2742,8 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
-  (* Fuzzer.main 500 ; *)
+  (* Ciseau.main () ; *)
+  Fuzzer.main 500 ;
   close_out logs
 
 
