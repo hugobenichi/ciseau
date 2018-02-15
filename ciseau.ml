@@ -3,7 +3,7 @@ let logs = open_out "/tmp/ciseau.log"
 
 (* Debugging flags *)
 let kLOG_STATS    = true
-let kDRAW_SCREEN  = false
+let kDRAW_SCREEN  = true
 
 let tab_to_spaces = "  "
 
@@ -1766,7 +1766,7 @@ end
 
 module Movement = struct
 
-  type movement = Move of Move.t * MovementMode.m
+  type movement = Move of Move.t (* * MovementMode.m *)
                 | PageUp
                 | PageDown
                 | FileStart
@@ -1791,9 +1791,10 @@ module Movement = struct
       y = y' ;
     }
 
-  let do_movement =
+  let do_movement mode =
     function
-    | Move (mov, mode)  -> MovementMode.do_movement mode mov
+    | Move mov  -> MovementMode.do_movement mode mov
+    (* | Move (mov, mode)  -> MovementMode.do_movement mode mov *)
     | PageUp            -> move_page_up
     | PageDown          -> move_page_down
     | FileStart         -> move_file_start
@@ -1808,6 +1809,7 @@ module Fileview : sig
   val set_mov_mode            : MovementMode.m -> t -> t
   val apply_movement          : (t -> v2) -> int -> t -> t
   val apply_mov               : Move.t -> t -> v2
+  val apply_movement3         : Movement.movement -> int -> t -> t
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
   val last_line_index         : t -> int
@@ -1899,6 +1901,14 @@ end = struct
 
   let apply_mov m t =
     MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
+
+  let apply_movement3 mov view_height t =
+    let cursor' = Movement.do_movement t.mov_mode mov t.filebuffer t.cursor in
+    Printf.fprintf logs "apply_movement %d,%d -> %d,%d\n" t.cursor.y t.cursor.x cursor'.y cursor'.x ;
+    flush logs ;
+    _assert (cursor'.y >= 0) ;
+    _assert (cursor'.y < Filebuffer.file_length t.filebuffer) ;
+    { t with cursor = cursor' } |> adjust_view view_height
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -2402,6 +2412,7 @@ module Ciseau = struct
                | Resize   (* this is a TilesetOp *)
                | TilesetOp of Tileset.op
                | Move of FilebufferMovement.move
+               | MoveOp of Movement.movement
                | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
 
@@ -2522,6 +2533,13 @@ module Ciseau = struct
           editor with
           tileset = Tileset.apply_op editor.tileset fileview_op ;
         }
+    | MoveOp m ->
+        let fn = Fileview.apply_movement3 m in
+        let fileview_op = Tileset.FileviewOp fn
+        in {
+          editor with
+          tileset = Tileset.apply_op editor.tileset fileview_op ;
+        }
     | View fn ->
         let fileview_op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in {
           editor with
@@ -2600,11 +2618,9 @@ module Ciseau = struct
     | Keys.Lower_z      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_paras)
     | Keys.Lower_x      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_parens)
 
+    (*
     | Keys.Ctrl_u       -> Move FilebufferMovement.PageUp
     | Keys.Ctrl_d       -> Move FilebufferMovement.PageDown
-                          (* TODO: reimplement paragraph *)
-    | Keys.Ctrl_j       -> Noop (* Move FilebufferMovement.move_next_paragraph *)
-    | Keys.Ctrl_k       -> Noop (* Move FilebufferMovement.move_prev_paragraph *)
     | Keys.ArrowUp      -> Move FilebufferMovement.Up
     | Keys.ArrowDown    -> Move FilebufferMovement.Down
     | Keys.ArrowRight   -> Move FilebufferMovement.Left
@@ -2617,6 +2633,22 @@ module Ciseau = struct
     | Keys.Upper_j      -> Move FilebufferMovement.FileEnd
     | Keys.Upper_k      -> Move FilebufferMovement.FileStart
     | Keys.Upper_l      -> Move FilebufferMovement.End
+    *)
+
+    | Keys.ArrowUp      -> MoveOp (Movement.Move Move.Up)
+    | Keys.ArrowDown    -> MoveOp (Movement.Move Move.Down)
+    | Keys.ArrowRight   -> MoveOp (Movement.Move Move.Left)
+    | Keys.ArrowLeft    -> MoveOp (Movement.Move Move.Right)
+    | Keys.Lower_k      -> MoveOp (Movement.Move Move.Up)
+    | Keys.Lower_j      -> MoveOp (Movement.Move Move.Down)
+    | Keys.Lower_l      -> MoveOp (Movement.Move Move.Right)
+    | Keys.Lower_h      -> MoveOp (Movement.Move Move.Left)
+    | Keys.Upper_h      -> MoveOp (Movement.Move Move.Start)
+    | Keys.Upper_l      -> MoveOp (Movement.Move Move.End)
+    | Keys.Upper_j      -> MoveOp Movement.FileEnd
+    | Keys.Upper_k      -> MoveOp Movement.FileStart
+    | Keys.Ctrl_u       -> MoveOp Movement.PageUp
+    | Keys.Ctrl_d       -> MoveOp Movement.PageDown
 
     | Keys.Digit_0      -> Pending (Digit 0)
     | Keys.Digit_1      -> Pending (Digit 1)
@@ -2629,6 +2661,8 @@ module Ciseau = struct
     | Keys.Digit_8      -> Pending (Digit 8)
     | Keys.Digit_9      -> Pending (Digit 9)
 
+    | Keys.Ctrl_j       -> Noop
+    | Keys.Ctrl_k       -> Noop
     | Keys.Upper_g      -> Noop
     | Keys.Colon        -> Noop
     | Keys.Unknown      -> Noop (* ignore for now *)
@@ -2760,8 +2794,8 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  (* Ciseau.main () ; *)
-  Fuzzer.main 500 ;
+  Ciseau.main () ;
+  (* Fuzzer.main 500 ; *)
   close_out logs
 
 
