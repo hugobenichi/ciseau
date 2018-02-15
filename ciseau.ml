@@ -4,6 +4,7 @@ let logs = open_out "/tmp/ciseau.log"
 (* Debugging flags *)
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
+let kDEBUG        = true
 
 let tab_to_spaces = "  "
 
@@ -71,10 +72,9 @@ module Error = struct
         | _                     ->  None)
 end
 
-let _assert condition =
+let _assert ?msg:(m="failed assert") condition =
   if not condition
-    then raise (Error.e "failed assert")
-
+    then raise (Error.e m)
 
 let sget s i =
   if i < 0 || slen s <= i
@@ -1736,38 +1736,15 @@ module DelimiterMovement = struct
 end
 
 
-module MovementMode = struct
-  type m = Spaces | Words | Digits | Lines | Chars | Paragraphs | Parens (* | plus other kinds *)
-
-  let mode_to_string =
-    function
-      | Spaces        -> "Space separated blocks"
-      | Words         -> "Words"
-      | Digits        -> "Digits"
-      | Lines         -> "Lines"
-      | Chars         -> "Chars"
-      | Paragraphs    -> "Paragraphs"
-      | Parens        -> "Parens"
-
-  let noop_movement mov filebuffer cursor =
-    cursor
-
-  let do_movement =
-    function
-      | Spaces        -> SpaceTokens.movement
-      | Words         -> WordTokens.movement
-      | Digits        -> DigitTokens.movement
-      | Lines         -> LineMovement.movement
-      | Chars         -> CharMovement.movement
-      | Paragraphs    -> ParagraphMovement.movement
-      | Parens        -> noop_movement (* DelimiterMovement.movement *)
-end
-
-
-(* CLEANUP: try to fuse this with previous module *)
 module Movement = struct
 
-  type composite = Move.t * MovementMode.m
+  type mode = Spaces
+            | Words
+            | Digits
+            | Lines
+            | Chars
+            | Paragraphs
+            | Parens
 
   type movement = Left
                 | Right
@@ -1779,6 +1756,29 @@ module Movement = struct
                 | PageDown
                 | FileStart
                 | FileEnd
+
+  let mode_to_string =
+    function
+      | Spaces        -> "Space separated blocks"
+      | Words         -> "Words"
+      | Digits        -> "Digits"
+      | Lines         -> "Lines"
+      | Chars         -> "Chars"
+      | Paragraphs    -> "Paragraphs"
+      | Parens        -> "Parens"
+
+  let movement_to_string =
+    function
+      | Left          -> "Left"
+      | Right         -> "Right"
+      | Up            -> "Up"
+      | Down          -> "Down"
+      | Start         -> "Start"
+      | End           -> "End"
+      | PageUp        -> "PageUp"
+      | PageDown      -> "PageDown"
+      | FileStart     -> "FileStart"
+      | FileEnd       -> "FileEnd"
 
   let page_offset = Config.default.page_size
 
@@ -1799,14 +1799,27 @@ module Movement = struct
       y = y' ;
     }
 
-  let do_movement mode =
+  let noop_move mov filebuffer cursor =
+    cursor
+
+  let move =
     function
-      | Left          -> MovementMode.do_movement mode Move.Left
-      | Right         -> MovementMode.do_movement mode Move.Right
-      | Up            -> MovementMode.do_movement mode Move.Up
-      | Down          -> MovementMode.do_movement mode Move.Down
-      | Start         -> MovementMode.do_movement mode Move.Start
-      | End           -> MovementMode.do_movement mode Move.End
+      | Spaces        -> SpaceTokens.movement
+      | Words         -> WordTokens.movement
+      | Digits        -> DigitTokens.movement
+      | Lines         -> LineMovement.movement
+      | Chars         -> CharMovement.movement
+      | Paragraphs    -> ParagraphMovement.movement
+      | Parens        -> DelimiterMovement.movement
+
+  let compute_movement mode =
+    function
+      | Left          -> move mode Move.Left
+      | Right         -> move mode Move.Right
+      | Up            -> move mode Move.Up
+      | Down          -> move mode Move.Down
+      | Start         -> move mode Move.Start
+      | End           -> move mode Move.End
       | PageUp        -> move_page_up
       | PageDown      -> move_page_down
       | FileStart     -> move_file_start
@@ -1818,7 +1831,7 @@ module Fileview : sig
   type t
 
   val init_fileview           : Filebuffer.t -> t
-  val set_mov_mode            : MovementMode.m -> t -> t
+  val set_mov_mode            : Movement.mode -> t -> t
   val apply_movement          : Movement.movement -> int -> t -> t
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
@@ -1864,7 +1877,7 @@ end = struct
     view_start    : int ;      (* index of first row in view *)
     numbering     : numbering_mode ;
     linebreaking  : linebreak ;
-    mov_mode      : MovementMode.m ;
+    mov_mode      : Movement.mode ;
   }
 
   let init_fileview filebuffer = {
@@ -1873,7 +1886,7 @@ end = struct
     view_start    = 0 ;
     numbering     = CursorRelative ;
     linebreaking  = Clip ;
-    mov_mode      = MovementMode.Chars ;
+    mov_mode      = Movement.Chars ;
   }
 
   let set_mov_mode m t =
@@ -1901,12 +1914,24 @@ end = struct
     else t
 
   let apply_movement mov view_height t =
-    let cursor' = Movement.do_movement t.mov_mode mov t.filebuffer t.cursor in
-    Printf.fprintf logs "apply_movement %d,%d -> %d,%d\n" t.cursor.y t.cursor.x cursor'.y cursor'.x ;
-    flush logs ;
-    _assert (cursor'.y >= 0) ;
-    _assert (cursor'.y < Filebuffer.file_length t.filebuffer) ;
-    { t with cursor = cursor' } |> adjust_view view_height
+    let cursor' = Movement.compute_movement t.mov_mode mov t.filebuffer t.cursor in
+
+    if kDEBUG then (
+      let msg =
+        Printf.sprintf"apply_movement mode=%s mov=%s %d,%d -> %d,%d\n"
+          (Movement.mode_to_string t.mov_mode)
+          (Movement.movement_to_string mov)
+          t.cursor.y t.cursor.x
+          cursor'.y cursor'.x
+      in
+      output_string logs msg ;
+      flush logs ;
+      _assert (cursor'.y >= 0) ~msg:msg ;
+      _assert (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg ;
+      ()
+    ) ;
+
+    adjust_view view_height { t with cursor = cursor' }
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -2080,7 +2105,7 @@ end = struct
     Slice.set linesinfo.frame_buffer 0 (Line.of_blocks [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
       Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
-      Block.mk_block ("  mode=" ^ MovementMode.mode_to_string t.mov_mode) ;
+      Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
     ]) ;
     put_text_lines
       (mk_text_subscreen screen)
@@ -2348,7 +2373,7 @@ module Ciseau = struct
                | Resize   (* this is a TilesetOp *)
                | TilesetOp of Tileset.op
                | MoveOp of Movement.movement
-               | MoveModeOp of MovementMode.m
+               | MoveModeOp of Movement.mode
                | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
 
@@ -2557,14 +2582,14 @@ module Ciseau = struct
     | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
 
-    | Keys.Lower_w      -> MoveModeOp MovementMode.Words
-    | Keys.Upper_w      -> MoveModeOp MovementMode.Spaces
-    | Keys.Lower_b      -> MoveModeOp MovementMode.Lines
-    | Keys.Upper_b      -> MoveModeOp MovementMode.Lines
-    | Keys.Lower_c      -> MoveModeOp MovementMode.Chars
-    | Keys.Lower_d      -> MoveModeOp MovementMode.Digits
-    | Keys.Lower_z      -> MoveModeOp MovementMode.Paragraphs
-    | Keys.Lower_x      -> MoveModeOp MovementMode.Parens
+    | Keys.Lower_w      -> MoveModeOp Movement.Words
+    | Keys.Upper_w      -> MoveModeOp Movement.Spaces
+    | Keys.Lower_b      -> MoveModeOp Movement.Lines
+    | Keys.Upper_b      -> MoveModeOp Movement.Lines
+    | Keys.Lower_c      -> MoveModeOp Movement.Chars
+    | Keys.Lower_d      -> MoveModeOp Movement.Digits
+    | Keys.Lower_z      -> MoveModeOp Movement.Paragraphs
+    | Keys.Lower_x      -> MoveModeOp Movement.Parens
 
     | Keys.ArrowUp      -> MoveOp Movement.Up
     | Keys.ArrowDown    -> MoveOp Movement.Down
@@ -2725,8 +2750,8 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
-  (* Fuzzer.main 500 ; *)
+  (* Ciseau.main () ; *)
+  Fuzzer.main 5000 ;
   close_out logs
 
 
