@@ -1273,7 +1273,7 @@ module Filebuffer = struct
 end
 
 
-module Movement = struct
+module Move = struct
   type t  = Left
           | Right
           | Up
@@ -1304,7 +1304,7 @@ module Tokenizer (T : TokenKind) : sig
   val go_token_down   : Filebuffer.t -> v2 -> v2
   val go_token_start  : Filebuffer.t -> v2 -> v2
   val go_token_end    : Filebuffer.t -> v2 -> v2
-  val movement        : Movement.t -> Filebuffer.t -> v2 -> v2
+  val movement        : Move.t -> Filebuffer.t -> v2 -> v2
 end = struct
 
   open Token
@@ -1426,7 +1426,7 @@ end = struct
           | None                  -> cursor
 
   let movement =
-    let open Movement in
+    let open Move in
     function
       | Left    -> go_token_left
       | Right   -> go_token_right
@@ -1503,7 +1503,7 @@ module LineMovement = struct
       else go_line_end filebuffer cursor
 
   let movement =
-    let open Movement in
+    let open Move in
     function
       | Left    -> go_line_left
       | Right   -> go_line_right
@@ -1536,7 +1536,7 @@ module CharMovement = struct
       else mk_v2 (cursor.x + 1) cursor.y
 
   let movement =
-    let open Movement in
+    let open Move in
     function
       | Start  (* What to do here ? *)
       | End    (* what to do here ? *)
@@ -1623,8 +1623,8 @@ module ParagraphMovement = struct
       then cursor'
       else go_para_end filebuffer cursor'
 
-  let movement : Movement.t -> Filebuffer.t -> v2 -> v2 =
-    let open Movement in
+  let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
+    let open Move in
     function
       | Start   -> go_para_start
       | End     -> go_para_end
@@ -1724,8 +1724,8 @@ module DelimiterMovement = struct
     (* TODO *)
     cursor
 
-  let movement : Movement.t -> Filebuffer.t -> v2 -> v2 =
-    let open Movement in
+  let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
+    let open Move in
     function
       | Left    -> go_delim_left
       | Right   -> go_delim_right
@@ -1764,22 +1764,40 @@ module MovementMode = struct
 end
 
 
-module FileNavigator = struct
+module Movement = struct
 
-  let dir_ls path =
-    let rec loop entries handle =
-      match Unix.readdir handle with
-      | s                     -> loop (Slice.append s entries) handle
-      | exception End_of_file -> entries |> Slice.sort_slice String.compare
-    in
-    let handle = Unix.opendir path in
-    let entries = loop (Slice.init_slice_with_capacity 0 16 "") handle in
-      Unix.closedir handle ;
-      entries
+  type movement = Move of Move.t * MovementMode.m
+                | PageUp
+                | PageDown
+                | FileStart
+                | FileEnd
 
-  let dir_to_filebuffer path =
-    path |> dir_ls |> Filebuffer.from_lines path
+  let page_offset = Config.default.page_size
 
+  let move_file_start filebuffer any = mk_v2 0 0
+  let move_file_end   filebuffer any = mk_v2 0 (Filebuffer.last_line_index filebuffer)
+
+  let move_page_up filebuffer { x ; y } =
+    let y' = max (y - page_offset) 0
+    in {
+      x = min x (Filebuffer.last_cursor_x filebuffer y') ;
+      y = y' ;
+    }
+
+  let move_page_down filebuffer { x ; y } =
+    let y' = max (y + page_offset) (Filebuffer.last_line_index filebuffer)
+    in {
+      x = min x (Filebuffer.last_cursor_x filebuffer y') ;
+      y = y' ;
+    }
+
+  let do_movement =
+    function
+    | Move (mov, mode)  -> MovementMode.do_movement mode mov
+    | PageUp            -> move_page_up
+    | PageDown          -> move_page_down
+    | FileStart         -> move_file_start
+    | FileEnd           -> move_file_end
 end
 
 
@@ -1789,7 +1807,7 @@ module Fileview : sig
   val init_fileview           : Filebuffer.t -> t
   val set_mov_mode            : MovementMode.m -> t -> t
   val apply_movement          : (t -> v2) -> int -> t -> t
-  val apply_mov               : Movement.t -> t -> v2
+  val apply_mov               : Move.t -> t -> v2
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
   val last_line_index         : t -> int
@@ -2116,12 +2134,12 @@ module FilebufferMovement = struct
 
   let apply_move =
     function
-      | Left        -> apply_movement_noun Movement.Left
-      | Right       -> apply_movement_noun Movement.Right
-      | Up          -> apply_movement_noun Movement.Up
-      | Down        -> apply_movement_noun Movement.Down
-      | Start       -> apply_movement_noun Movement.Start
-      | End         -> apply_movement_noun Movement.End
+      | Left        -> apply_movement_noun Move.Left
+      | Right       -> apply_movement_noun Move.Right
+      | Up          -> apply_movement_noun Move.Up
+      | Down        -> apply_movement_noun Move.Down
+      | Start       -> apply_movement_noun Move.Start
+      | End         -> apply_movement_noun Move.End
       | PageUp      -> apply_movement move_page_up
       | PageDown    -> apply_movement move_page_down
       | FileStart   -> apply_movement move_file_start
@@ -2830,3 +2848,22 @@ let () =
  *)
 
 
+(* dead code or unused code below *)
+
+module FileNavigator = struct
+
+  let dir_ls path =
+    let rec loop entries handle =
+      match Unix.readdir handle with
+      | s                     -> loop (Slice.append s entries) handle
+      | exception End_of_file -> entries |> Slice.sort_slice String.compare
+    in
+    let handle = Unix.opendir path in
+    let entries = loop (Slice.init_slice_with_capacity 0 16 "") handle in
+      Unix.closedir handle ;
+      entries
+
+  let dir_to_filebuffer path =
+    path |> dir_ls |> Filebuffer.from_lines path
+
+end
