@@ -1764,9 +1764,17 @@ module MovementMode = struct
 end
 
 
+(* CLEANUP: try to fuse this with previous module *)
 module Movement = struct
 
-  type movement = Move of Move.t (* * MovementMode.m *)
+  type composite = Move.t * MovementMode.m
+
+  type movement = Left
+                | Right
+                | Up
+                | Down
+                | Start
+                | End
                 | PageUp
                 | PageDown
                 | FileStart
@@ -1785,7 +1793,7 @@ module Movement = struct
     }
 
   let move_page_down filebuffer { x ; y } =
-    let y' = max (y + page_offset) (Filebuffer.last_line_index filebuffer)
+    let y' = min (y + page_offset) (Filebuffer.last_line_index filebuffer)
     in {
       x = min x (Filebuffer.last_cursor_x filebuffer y') ;
       y = y' ;
@@ -1793,12 +1801,16 @@ module Movement = struct
 
   let do_movement mode =
     function
-    | Move mov  -> MovementMode.do_movement mode mov
-    (* | Move (mov, mode)  -> MovementMode.do_movement mode mov *)
-    | PageUp            -> move_page_up
-    | PageDown          -> move_page_down
-    | FileStart         -> move_file_start
-    | FileEnd           -> move_file_end
+      | Left          -> MovementMode.do_movement mode Move.Left
+      | Right         -> MovementMode.do_movement mode Move.Right
+      | Up            -> MovementMode.do_movement mode Move.Up
+      | Down          -> MovementMode.do_movement mode Move.Down
+      | Start         -> MovementMode.do_movement mode Move.Start
+      | End           -> MovementMode.do_movement mode Move.End
+      | PageUp        -> move_page_up
+      | PageDown      -> move_page_down
+      | FileStart     -> move_file_start
+      | FileEnd       -> move_file_end
 end
 
 
@@ -1807,9 +1819,7 @@ module Fileview : sig
 
   val init_fileview           : Filebuffer.t -> t
   val set_mov_mode            : MovementMode.m -> t -> t
-  val apply_movement          : (t -> v2) -> int -> t -> t
-  val apply_mov               : Move.t -> t -> v2
-  val apply_movement3         : Movement.movement -> int -> t -> t
+  val apply_movement          : Movement.movement -> int -> t -> t
   val cursor                  : t -> v2
   val adjust_view             : int -> t -> t
   val last_line_index         : t -> int
@@ -1890,19 +1900,7 @@ end = struct
       }
     else t
 
-  let apply_movement fn view_height t =
-    (* TODO: for debugging fn should probably be a proper Variant *)
-    let cursor' = fn t in
-    Printf.fprintf logs "apply_movement %d,%d -> %d,%d\n" t.cursor.y t.cursor.x cursor'.y cursor'.x ;
-    flush logs ;
-    _assert (cursor'.y >= 0) ;
-    _assert (cursor'.y < Filebuffer.file_length t.filebuffer) ;
-    { t with cursor = cursor' } |> adjust_view view_height
-
-  let apply_mov m t =
-    MovementMode.do_movement t.mov_mode m t.filebuffer t.cursor
-
-  let apply_movement3 mov view_height t =
+  let apply_movement mov view_height t =
     let cursor' = Movement.do_movement t.mov_mode mov t.filebuffer t.cursor in
     Printf.fprintf logs "apply_movement %d,%d -> %d,%d\n" t.cursor.y t.cursor.x cursor'.y cursor'.x ;
     flush logs ;
@@ -2092,68 +2090,6 @@ end = struct
       screen
       linesinfo
       is_focused
-
-end
-
-
-module FilebufferMovement = struct
-  open Fileview
-
-  let op_set_mov_mode m ignored t =
-    set_mov_mode m t
-
-  let op_set_mov_tokens = op_set_mov_mode MovementMode.Spaces
-  let op_set_mov_words  = op_set_mov_mode MovementMode.Words
-  let op_set_mov_digits = op_set_mov_mode MovementMode.Digits
-  let op_set_mov_lines  = op_set_mov_mode MovementMode.Lines
-  let op_set_mov_chars  = op_set_mov_mode MovementMode.Chars
-  (* let op_set_mov_paras  = op_set_mov_mode MovementMode.Paragraphs *)
-  let op_set_mov_paras ignored t = set_mov_mode MovementMode.Paragraphs t
-  let op_set_mov_parens ignored t = set_mov_mode MovementMode.Parens t
-
-  let page_offset = Config.default.page_size
-
-  let move_file_start t = mk_v2 (cursor t).x 0
-  let move_file_end   t = mk_v2 (cursor t).x (last_line_index t)
-
-  let move_page_up t =
-    cursor t |> fun { x ; y } -> {
-      x = x ;
-      y = max (y - page_offset) 0 ;
-    }
-
-  let move_page_down t =
-    cursor t |> fun { x ; y } -> {
-      x = x ;
-      y = max (y + page_offset) (last_line_index t) ;
-    }
-
-  type move = Left
-            | Right
-            | Up
-            | Down
-            | Start
-            | End
-            | PageUp
-            | PageDown
-            | FileStart
-            | FileEnd
-
-  let apply_movement_noun =
-    apply_mov >> apply_movement
-
-  let apply_move =
-    function
-      | Left        -> apply_movement_noun Move.Left
-      | Right       -> apply_movement_noun Move.Right
-      | Up          -> apply_movement_noun Move.Up
-      | Down        -> apply_movement_noun Move.Down
-      | Start       -> apply_movement_noun Move.Start
-      | End         -> apply_movement_noun Move.End
-      | PageUp      -> apply_movement move_page_up
-      | PageDown    -> apply_movement move_page_down
-      | FileStart   -> apply_movement move_file_start
-      | FileEnd     -> apply_movement move_file_end
 
 end
 
@@ -2411,8 +2347,8 @@ module Ciseau = struct
                | Stop     (* this is an Editor command *)
                | Resize   (* this is a TilesetOp *)
                | TilesetOp of Tileset.op
-               | Move of FilebufferMovement.move
                | MoveOp of Movement.movement
+               | MoveModeOp of MovementMode.m
                | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
 
@@ -2521,40 +2457,42 @@ module Ciseau = struct
   let queue_pending_command editor = function
     | Digit n -> { editor with pending_input = enqueue_digit n editor.pending_input }
 
-  let apply_command command editor =
+  let apply_operation op editor = {
+      editor
+        with
+        tileset = Tileset.apply_op editor.tileset op
+    }
+
+  (* CLEANUP: refactor a bit this to leave editor arg implicit in partial application and
+   *          turn the 'match with' into a 'function' *)
+  let rec apply_command command editor =
     match command with
     | Noop    -> editor
     | Stop    -> { editor with running = false }
     | Resize  -> resize_editor editor
     | TilesetOp op ->
-        { editor with tileset = Tileset.apply_op editor.tileset op }
-    | Move m ->
-        let fileview_op = Tileset.FileviewOp (FilebufferMovement.apply_move m) in {
-          editor with
-          tileset = Tileset.apply_op editor.tileset fileview_op ;
-        }
+        apply_operation op editor
     | MoveOp m ->
-        let fn = Fileview.apply_movement3 m in
-        let fileview_op = Tileset.FileviewOp fn
-        in {
-          editor with
-          tileset = Tileset.apply_op editor.tileset fileview_op ;
-        }
+        let fn = Fileview.apply_movement m in
+        let op = Tileset.FileviewOp fn in
+        apply_operation op editor
+    | MoveModeOp m ->
+        let fn any t = Fileview.set_mov_mode m t in
+        let op = Tileset.FileviewOp fn in
+        apply_operation op editor
     | View fn ->
-        let fileview_op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in {
-          editor with
-          tileset = Tileset.apply_op editor.tileset fileview_op ;
-        }
+        let op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in
+        apply_operation op editor
       (* cannot happen ?? *)
     | Pending ((Digit n) as d) ->
         queue_pending_command editor d
 
   let apply_command_with_repetition n command editor =
     match command with
-    | Move m ->
+    | MoveOp m ->
       let rec loop m n view_height fb =
         if (n > 0)
-          then loop m (n - 1) view_height (FilebufferMovement.apply_move m view_height fb)
+          then loop m (n - 1) view_height (Fileview.apply_movement m view_height fb)
           else fb
       in
       let fileview_op = Tileset.FileviewOp (loop m n) in {
@@ -2608,43 +2546,25 @@ module Ciseau = struct
     | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
 
-    (* TODO: Introduce shortcut Variant to replace TilesetOp (Tileset.FileviewOp _) *)
-    | Keys.Lower_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_words)
-    | Keys.Upper_w      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_tokens)
-    | Keys.Lower_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_lines)
-    | Keys.Upper_b      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_lines)
-    | Keys.Lower_c      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_chars)
-    | Keys.Lower_d      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_digits)
-    | Keys.Lower_z      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_paras)
-    | Keys.Lower_x      -> TilesetOp (Tileset.FileviewOp FilebufferMovement.op_set_mov_parens)
+    | Keys.Lower_w      -> MoveModeOp MovementMode.Words
+    | Keys.Upper_w      -> MoveModeOp MovementMode.Spaces
+    | Keys.Lower_b      -> MoveModeOp MovementMode.Lines
+    | Keys.Upper_b      -> MoveModeOp MovementMode.Lines
+    | Keys.Lower_c      -> MoveModeOp MovementMode.Chars
+    | Keys.Lower_d      -> MoveModeOp MovementMode.Digits
+    | Keys.Lower_z      -> MoveModeOp MovementMode.Paragraphs
+    | Keys.Lower_x      -> MoveModeOp MovementMode.Parens
 
-    (*
-    | Keys.Ctrl_u       -> Move FilebufferMovement.PageUp
-    | Keys.Ctrl_d       -> Move FilebufferMovement.PageDown
-    | Keys.ArrowUp      -> Move FilebufferMovement.Up
-    | Keys.ArrowDown    -> Move FilebufferMovement.Down
-    | Keys.ArrowRight   -> Move FilebufferMovement.Left
-    | Keys.ArrowLeft    -> Move FilebufferMovement.Right
-    | Keys.Lower_k      -> Move FilebufferMovement.Up
-    | Keys.Lower_j      -> Move FilebufferMovement.Down
-    | Keys.Lower_l      -> Move FilebufferMovement.Right
-    | Keys.Lower_h      -> Move FilebufferMovement.Left
-    | Keys.Upper_h      -> Move FilebufferMovement.Start
-    | Keys.Upper_j      -> Move FilebufferMovement.FileEnd
-    | Keys.Upper_k      -> Move FilebufferMovement.FileStart
-    | Keys.Upper_l      -> Move FilebufferMovement.End
-    *)
-
-    | Keys.ArrowUp      -> MoveOp (Movement.Move Move.Up)
-    | Keys.ArrowDown    -> MoveOp (Movement.Move Move.Down)
-    | Keys.ArrowRight   -> MoveOp (Movement.Move Move.Left)
-    | Keys.ArrowLeft    -> MoveOp (Movement.Move Move.Right)
-    | Keys.Lower_k      -> MoveOp (Movement.Move Move.Up)
-    | Keys.Lower_j      -> MoveOp (Movement.Move Move.Down)
-    | Keys.Lower_l      -> MoveOp (Movement.Move Move.Right)
-    | Keys.Lower_h      -> MoveOp (Movement.Move Move.Left)
-    | Keys.Upper_h      -> MoveOp (Movement.Move Move.Start)
-    | Keys.Upper_l      -> MoveOp (Movement.Move Move.End)
+    | Keys.ArrowUp      -> MoveOp Movement.Up
+    | Keys.ArrowDown    -> MoveOp Movement.Down
+    | Keys.ArrowRight   -> MoveOp Movement.Left
+    | Keys.ArrowLeft    -> MoveOp Movement.Right
+    | Keys.Lower_k      -> MoveOp Movement.Up
+    | Keys.Lower_j      -> MoveOp Movement.Down
+    | Keys.Lower_l      -> MoveOp Movement.Right
+    | Keys.Lower_h      -> MoveOp Movement.Left
+    | Keys.Upper_h      -> MoveOp Movement.Start
+    | Keys.Upper_l      -> MoveOp Movement.End
     | Keys.Upper_j      -> MoveOp Movement.FileEnd
     | Keys.Upper_k      -> MoveOp Movement.FileStart
     | Keys.Ctrl_u       -> MoveOp Movement.PageUp
