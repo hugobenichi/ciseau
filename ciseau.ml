@@ -2454,8 +2454,11 @@ module Ciseau = struct
       status_colorblocks = mk_status_colorblocks term_dim.x ;
     }
 
-  let queue_pending_command editor = function
-    | Digit n -> { editor with pending_input = enqueue_digit n editor.pending_input }
+  let stop_editor editor = {
+      editor
+        with
+        running = false
+    }
 
   let apply_operation op editor = {
       editor
@@ -2463,46 +2466,53 @@ module Ciseau = struct
         tileset = Tileset.apply_op editor.tileset op
     }
 
-  (* CLEANUP: refactor a bit this to leave editor arg implicit in partial application and
-   *          turn the 'match with' into a 'function' *)
-  let rec apply_command command editor =
-    match command with
-    | Noop    -> editor
-    | Stop    -> { editor with running = false }
-    | Resize  -> resize_editor editor
-    | TilesetOp op ->
-        apply_operation op editor
-    | MoveOp m ->
-        let fn = Fileview.apply_movement m in
-        let op = Tileset.FileviewOp fn in
-        apply_operation op editor
-    | MoveModeOp m ->
-        let fn any t = Fileview.set_mov_mode m t in
-        let op = Tileset.FileviewOp fn in
-        apply_operation op editor
-    | View fn ->
-        let op = Tileset.FileviewOp (fun ignored_view_height fileview -> fn fileview) in
-        apply_operation op editor
-      (* cannot happen ?? *)
-    | Pending ((Digit n) as d) ->
-        queue_pending_command editor d
+  let queue_pending_command n editor = {
+      editor
+        with
+        pending_input = enqueue_digit n editor.pending_input
+    }
+
+  let rec apply_command =
+    function
+      | Noop    -> (fun x -> x)
+      | Stop    -> stop_editor
+      | Resize  -> resize_editor
+      | TilesetOp op ->
+          apply_operation op
+      | MoveOp m ->
+          let fn = Fileview.apply_movement m in
+          let op = Tileset.FileviewOp fn in
+          apply_operation op
+      | MoveModeOp m ->
+          let fn any t = Fileview.set_mov_mode m t in
+          let op = Tileset.FileviewOp fn in
+          apply_operation op
+      | View fn ->
+          let fn' any fileview = fn fileview in
+          let op = Tileset.FileviewOp fn' in
+          apply_operation op
+      | Pending (Digit n) ->
+          (* cannot happen ?? *)
+          queue_pending_command n
 
   let apply_command_with_repetition n command editor =
     match command with
     | MoveOp m ->
-      let rec loop m n view_height fb =
-        if (n > 0)
-          then loop m (n - 1) view_height (Fileview.apply_movement m view_height fb)
-          else fb
-      in
-      let fileview_op = Tileset.FileviewOp (loop m n) in {
-        editor with
-        tileset = Tileset.apply_op editor.tileset fileview_op ;
-        pending_input = None ;
-      }
-    | Pending ((Digit n) as d)  -> queue_pending_command editor d
+          let rec loop m n view_height fb =
+            if (n > 0)
+              then loop m (n - 1) view_height (Fileview.apply_movement m view_height fb)
+              else fb
+          in
+          let fileview_op = Tileset.FileviewOp (loop m n) in {
+            editor with
+            tileset = Tileset.apply_op editor.tileset fileview_op ;
+            pending_input = None ;
+          }
+    | Pending (Digit n) ->
+          queue_pending_command n editor
       (* for other command, flush any pending digits *)
-    | _ -> apply_command command { editor with pending_input = None }
+    | _ ->
+          apply_command command { editor with pending_input = None }
 
   let show_status editor =
     let status_text1 = "Ciseau stats: win = "
@@ -2533,6 +2543,7 @@ module Ciseau = struct
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
+                           (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
     | Keys.ParenLeft    -> TilesetOp Tileset.RotateViewsLeft
     | Keys.ParenRight   -> TilesetOp Tileset.RotateViewsRight
     | Keys.BraceLeft    -> TilesetOp Tileset.ScreenLayoutCyclePrev
