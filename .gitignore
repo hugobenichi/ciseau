@@ -3,4 +3,5 @@
 *.cmx
 *.o
 spacetime*
+gmon.out
 build/*
