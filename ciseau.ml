@@ -6,36 +6,8 @@ let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
 let kDEBUG        = true
 
-let tab_to_spaces = "  "
-
-let alen = Array.length
-let blen = Bytes.length
-let slen = String.length
-
-let try_finally action cleanup =
-  let rez =
-    try Ok (action ()) with e -> Error e
-  in
-    cleanup () ;
-    match rez with
-    | Ok success  -> success
-    | Error error -> raise error
 
 let (>>) f g x = g (f x)
-
-let output_int f    = string_of_int >> output_string f
-let output_float f  = string_of_float >> output_string f
-
-let string_of_char c = String.make 1 c
-
-let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n')
-let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z'))
-let is_digit      chr = ('0' <= chr) && (chr <= '9')
-let is_alphanum   chr = (is_digit chr) || (is_letter chr)
-let is_printable  chr = (' ' <= chr) && (chr <= '~')
-
-let write fd buffer len =
-  if Unix.write fd buffer 0 len <> len then raise (Failure "fd write failed")
 
 
 module Error = struct
@@ -72,14 +44,56 @@ module Error = struct
         | _                     ->  None)
 end
 
+
+let tab_to_spaces = "  "
+
+let alen = Array.length
+let blen = Bytes.length
+let slen = String.length
+
+let try_finally action cleanup =
+  let rez =
+    try Ok (action ()) with e -> Error e
+  in
+    cleanup () ;
+    match rez with
+    | Ok success  -> success
+    | Error error -> raise error
+
+let output_int f    = string_of_int >> output_string f
+let output_float f  = string_of_float >> output_string f
+
+let string_of_char c = String.make 1 c
+
+let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n')
+let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z'))
+let is_digit      chr = ('0' <= chr) && (chr <= '9')
+let is_alphanum   chr = (is_digit chr) || (is_letter chr)
+let is_printable  chr = (' ' <= chr) && (chr <= '~')
+
 let _assert ?msg:(m="failed assert") condition =
   if not condition
     then raise (Error.e m)
 
-let sget s i =
+let write fd buffer len =
+  let n = Unix.write fd buffer 0 len in
+  if n <> len
+    then raise (Error.e "fd write failed")
+
+let string_at s i =
   if i < 0 || slen s <= i
     then raise (Error.e (Printf.sprintf "String.get \"%s\" %d out of bound" s i)) ;
   String.get s i
+
+let array_get a i =
+  if i < 0 || alen a <= i
+    then raise (Error.e (Printf.sprintf "Array.get len=%d at %d out of bound" (alen a) i)) ;
+  Array.get a i
+
+let array_set a i x =
+  if i < 0 || alen a <= i
+    then raise (Error.e (Printf.sprintf "Array.get len=%d at %d out of bound" (alen a) i)) ;
+  Array.set a i x
 
 
 module Slice = struct
@@ -1269,7 +1283,7 @@ module Filebuffer = struct
                                     && (x <= last_cursor_x filebuffer y)
 
   let char_at filebuffer x y =
-    sget (line_at filebuffer y) x
+    string_at (line_at filebuffer y) x
 end
 
 
@@ -2119,50 +2133,6 @@ end = struct
 end
 
 
-module FilebufferSet : sig
-  type t
-
-  val buffers_menu  : t -> Filebuffer.t (* TODO: this should return a Menu object that wraps a filebuffer *)
-  val list_buffers  : t -> Filebuffer.t Slice.t
-  val open_buffers  : string -> t -> (t * Filebuffer.t)
-  val get_buffer    : string -> t -> Filebuffer.t option
-  val close_buffers : string -> t -> t
-
-end = struct
-
-  type t = {
-    buffers : Filebuffer.t Slice.t
-  }
-
-  let buffers_menu t =
-    t.buffers |> Slice.map (fun fb -> fb.Filebuffer.filename)
-              |> Filebuffer.from_lines "opened buffers"
-
-  let list_buffers { buffers } =
-    buffers
-
-  let open_buffers filepath { buffers } =
-    (* check if that buffer is not opened yet ! *)
-    let fb = Filebuffer.init_filebuffer filepath in
-    let buffers' = buffers |> Slice.clone |> Slice.append fb in
-    ({ buffers = buffers' }, fb)
-
-  let get_buffer filepath { buffers } =
-    let e = Slice.len buffers in
-    let rec loop i =
-      if i < e
-        then
-          let fb = Slice.get buffers i in
-          if fb.Filebuffer.filename = filepath
-            then Some fb
-            else loop (i + 1)
-        else None
-    in loop 0
-
-  let close_buffers filepath t = (* IMPLEMENT *) t
-end
-
-
 module Stats = struct
 
   (* TODO: add every X a full stats collection for printing total current footprint *)
@@ -2839,6 +2809,51 @@ let () =
 
 
 (* dead code or unused code below *)
+
+
+module FilebufferSet : sig
+  type t
+
+  val buffers_menu  : t -> Filebuffer.t (* TODO: this should return a Menu object that wraps a filebuffer *)
+  val list_buffers  : t -> Filebuffer.t Slice.t
+  val open_buffers  : string -> t -> (t * Filebuffer.t)
+  val get_buffer    : string -> t -> Filebuffer.t option
+  val close_buffers : string -> t -> t
+
+end = struct
+
+  type t = {
+    buffers : Filebuffer.t Slice.t
+  }
+
+  let buffers_menu t =
+    t.buffers |> Slice.map (fun fb -> fb.Filebuffer.filename)
+              |> Filebuffer.from_lines "opened buffers"
+
+  let list_buffers { buffers } =
+    buffers
+
+  let open_buffers filepath { buffers } =
+    (* check if that buffer is not opened yet ! *)
+    let fb = Filebuffer.init_filebuffer filepath in
+    let buffers' = buffers |> Slice.clone |> Slice.append fb in
+    ({ buffers = buffers' }, fb)
+
+  let get_buffer filepath { buffers } =
+    let e = Slice.len buffers in
+    let rec loop i =
+      if i < e
+        then
+          let fb = Slice.get buffers i in
+          if fb.Filebuffer.filename = filepath
+            then Some fb
+            else loop (i + 1)
+        else None
+    in loop 0
+
+  let close_buffers filepath t = (* IMPLEMENT *) t
+end
+
 
 module FileNavigator = struct
 
