@@ -3,13 +3,14 @@ let logs = open_out "/tmp/ciseau.log"
 
 (* Debugging flags *)
 let kLOG_STATS    = true
-let kDRAW_SCREEN  = true
+let kDRAW_SCREEN  = false
 let kDEBUG        = true
 
 
 let (>>) f g x = g (f x)
 
 
+(* Exceptions with *real* backtraces *)
 module Error = struct
   open Printexc
 
@@ -17,16 +18,16 @@ module Error = struct
 
   let format_loc =
     function
-      | None -> "unknown loc"
-      | Some { filename ; line_number ; start_char ; end_char } ->
-          Printf.sprintf "at %s:\t%5d\t%d - %d" filename line_number start_char end_char
+      | None      -> "unknown loc"
+      | Some loc  -> Printf.sprintf
+                      "  at %s:\t%5d\t%d - %d" loc.filename loc.line_number loc.start_char loc.end_char
 
   let get_backtrace () =
     get_callstack default_depth
       |> backtrace_slots
       |> function
-          | None -> "no stacktrace info"
-          | Some slots ->
+          | None        -> "no stacktrace info"
+          | Some slots  ->
               slots
                 |> Array.map (Slot.location >> format_loc)
                 |> Array.to_list
@@ -38,6 +39,8 @@ module Error = struct
     E (msg, get_backtrace ())
 
   let _ =
+    record_backtrace true ;
+
     Printexc.register_printer
       (function
         | E (msg, stacktrace)   ->  Some (msg ^ "\n" ^ stacktrace)
@@ -45,20 +48,15 @@ module Error = struct
 end
 
 
-let tab_to_spaces = "  "
-
 let alen = Array.length
 let blen = Bytes.length
 let slen = String.length
 
 let try_finally action cleanup =
-  let rez =
-    try Ok (action ()) with e -> Error e
-  in
-    cleanup () ;
-    match rez with
-    | Ok success  -> success
-    | Error error -> raise error
+  (try Ok (action ()) with e -> Error e)
+    |> function
+        | Ok success  -> cleanup () ; success
+        | Error error -> cleanup () ; raise error
 
 let output_int f    = string_of_int >> output_string f
 let output_float f  = string_of_float >> output_string f
@@ -1279,6 +1277,7 @@ module Filebuffer = struct
 
   let is_valid_cursor filebuffer x y = (0 <= y)
                                     && (y <= last_line_index filebuffer)
+                                    && line_length filebuffer y > 0
                                     && (0 <= x)
                                     && (x <= last_cursor_x filebuffer y)
 
@@ -1928,11 +1927,23 @@ end = struct
     else t
 
   let apply_movement mov view_height t =
+    if kDEBUG then (
+      let msg =
+        Printf.sprintf"apply_movement before mode=%s mov=%s %d,%d\n"
+          (Movement.mode_to_string t.mov_mode)
+          (Movement.movement_to_string mov)
+          t.cursor.y t.cursor.x
+      in
+      output_string logs msg ;
+      flush logs ;
+      ()
+    ) ;
+
     let cursor' = Movement.compute_movement t.mov_mode mov t.filebuffer t.cursor in
 
     if kDEBUG then (
       let msg =
-        Printf.sprintf"apply_movement mode=%s mov=%s %d,%d -> %d,%d\n"
+        Printf.sprintf"apply_movement after mode=%s mov=%s %d,%d -> %d,%d\n"
           (Movement.mode_to_string t.mov_mode)
           (Movement.movement_to_string mov)
           t.cursor.y t.cursor.x
@@ -2650,7 +2661,6 @@ module Ciseau = struct
 
   let main () =
     try
-      Printexc.record_backtrace true ;
       let file =
         if alen Sys.argv > 1
           then Sys.argv.(1)
@@ -2660,8 +2670,7 @@ module Ciseau = struct
               |> Term.do_with_raw_mode
     with
       e ->
-          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n" ;
-          Printexc.print_backtrace stdout
+          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n"
 
 end
 
@@ -2694,7 +2703,6 @@ module Fuzzer = struct
 
   let main n =
     try
-      Printexc.record_backtrace true ;
       let file =
         if alen Sys.argv > 1
           then Sys.argv.(1)
@@ -2704,8 +2712,7 @@ module Fuzzer = struct
               |> Term.do_with_raw_mode
     with
       e ->
-          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n" ;
-          Printexc.print_backtrace stdout
+          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n"
 
 end
 
@@ -2721,7 +2728,7 @@ let sigwinch = 28 (* That's for OSX *)
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
   (* Ciseau.main () ; *)
-  Fuzzer.main 5000 ;
+  Fuzzer.main 1000 ;
   close_out logs
 
 
