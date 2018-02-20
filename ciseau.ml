@@ -1653,23 +1653,16 @@ end = struct
 end
 
 
-module BlockFinder : TokenFinder = struct
+module BaseTokenFinder (T: TokenKind) : TokenFinder = struct
   open Token
 
-  type k = Include | Exclude
-
-  let kind_of c =
-    if c <> ' ' && is_printable c
-      then Include
-      else Exclude
-
   let rec find_token_start line i =
-    if i < slen line && string_at line i |> kind_of = Exclude
+    if i < slen line && string_at line i |> T.kind_of = Exclude
       then find_token_start line (i + 1)
       else i
 
   let rec find_token_stop line i =
-    if i < slen line && string_at line i |> kind_of = Include
+    if i < slen line && string_at line i |> T.kind_of = Include
       then find_token_stop line (i + 1)
       else i
 
@@ -1686,8 +1679,31 @@ module BlockFinder : TokenFinder = struct
 end
 
 
+module BlockFinder = BaseTokenFinder(struct
+  let kind_of c =
+    if c <> ' ' && is_printable c
+      then Include
+      else Exclude
+end)
 module BlockMovement = TokenMovement(BlockFinder)
 
+
+module DigitFinder = BaseTokenFinder(struct
+  let kind_of c =
+    if is_digit c
+      then Include
+      else Exclude
+end)
+module DigitMovement = TokenMovement(DigitFinder)
+
+
+module WordFinder = BaseTokenFinder(struct
+  let kind_of c =
+    if is_alphanum c || c == '_'
+      then Include
+      else Exclude
+end)
+module WordMovement = TokenMovement(WordFinder)
 
 module LineMovement = struct
 
@@ -2033,9 +2049,12 @@ module Movement = struct
   let move =
     function
       | Spaces        -> BlockMovement.movement
-      (* | Spaces        -> SpaceTokens.movement *)
+      | Words         -> WordMovement.movement
+      | Digits        -> DigitMovement.movement
+      (* 
       | Words         -> WordTokens.movement
       | Digits        -> DigitTokens.movement
+      | Spaces        -> SpaceTokens.movement *)
       | Lines         -> LineMovement.movement
       | Chars         -> CharMovement.movement
       | Paragraphs    -> ParagraphMovement.movement
