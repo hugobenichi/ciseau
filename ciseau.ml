@@ -1591,6 +1591,15 @@ end = struct
               Some tok |> T.next line |> loop line x (n + 1)
     in
       loop line x 0 (T.next line None)
+        |> fun tok_opt ->
+            let s =
+              match tok_opt with
+                | None -> "none"
+                | Some n -> string_of_int n
+            in
+              Printf.fprintf logs "find_token_nth \"%s\":%d -> %s\n" line x s ;
+              flush logs ;
+              tok_opt
 
   let go_token_nth n line =
     let rec loop line n =
@@ -1608,7 +1617,17 @@ end = struct
       if y > Filebuffer.last_line_index filebuffer
         then None
         else
-          go_token_nth n (Filebuffer.line_at filebuffer y)
+          go_token_nth n(Filebuffer.line_at filebuffer y)
+        |> (fun tok_opt ->
+              let s =
+                match tok_opt with
+                  | None -> "none"
+                  | Some tok -> (string_of_int tok.start) ^ "," ^ (string_of_int tok.stop)
+              in
+                Printf.fprintf logs "go_token_nth \"%s\":%d -> %s\n"
+                  (Filebuffer.line_at filebuffer y) n s ;
+                flush logs ;
+                tok_opt )
             |> function
                 | None -> loop filebuffer (y + 1) n
                 | Some tok -> Some (mk_v2 tok.start y)
@@ -1617,7 +1636,7 @@ end = struct
         |> (function
             | None -> None
             | Some n ->
-                loop filebuffer cursor.y n)
+                loop filebuffer (cursor.y + 1) n)
                   |> function
                         | None -> cursor
                         | Some cursor' -> cursor'
@@ -1636,7 +1655,7 @@ end = struct
         |> (function
             | None -> None
             | Some n ->
-                loop filebuffer cursor.y n)
+                loop filebuffer (cursor.y - 1) n)
                   |> function
                         | None -> cursor
                         | Some cursor' -> cursor'
@@ -1673,7 +1692,9 @@ module BaseTokenFinder (T: TokenKind) : TokenFinder = struct
     in
       let start = find_token_start line i in
       let stop  = find_token_stop line start in
-      if start = i
+      Printf.fprintf logs "TokenFinder.next in \"%s\":%d -> (%d,%d)\n" line i start stop ;
+      flush logs;
+      if start = slen line
         then None
         else Some (Token.mk_tok start stop)
 end
