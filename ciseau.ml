@@ -10,6 +10,24 @@ let kDEBUG        = true
 let (>>) f g x = g (f x)
 
 
+module OptionCombinators = struct
+  let some x = Some x
+
+  let fmap fn =
+    function
+      | None    -> None
+      | Some a  -> fn a
+
+  let map fn =
+    fmap (fn >> some)
+
+  let get_or b =
+    function
+      | None    -> b
+      | Some a  -> a
+end
+
+
 (* Exceptions with *real* backtraces *)
 module Error = struct
   open Printexc
@@ -1309,85 +1327,82 @@ module TokenMovement (T : TokenFinder) : sig
   val movement        : Move.t -> Filebuffer.t -> v2 -> v2
 end = struct
   open Token
+  open OptionCombinators
 
   let find_token x line =
     let rec loop line x =
       function
-        | None -> None
-        | (Some tok) as tok_opt ->
-            if tok.start > x
-              then None
-            else if x < tok.stop
-              then tok_opt
-            else
-              tok_opt |> T.next line |> loop line x
+        | None                        -> None
+        | Some tok when tok.start > x -> None
+        | Some tok when x < tok.stop  -> Some tok
+        | tok_opt                     -> tok_opt
+                                          |> T.next line
+                                          |> loop line x
     in
       loop line x (T.next line None)
+
+  let token_start_to_cursor y { start } = mk_v2 start y
+  let token_stop_to_cursor y { stop }   = mk_v2 (stop - 1) y
 
   let go_token_start filebuffer cursor =
     Filebuffer.line_at filebuffer cursor.y
       |> find_token cursor.x
-      |> function
-          | Some tok  -> mk_v2 tok.start cursor.y
-          | None      -> cursor
+      |> map (token_start_to_cursor cursor.y)
+      |> get_or cursor
 
   let go_token_end filebuffer cursor =
     Filebuffer.line_at filebuffer cursor.y
       |> find_token cursor.x
-      |> function
-          | Some tok  -> mk_v2 (tok.stop - 1) cursor.y
-          | None      -> cursor
+      |> map (token_stop_to_cursor cursor.y)
+      |> get_or cursor
 
   let rec go_token_first filebuffer y =
     if y > Filebuffer.last_line_index filebuffer
       then None
       else
         T.next (Filebuffer.line_at filebuffer y) None
+          |> map (token_start_to_cursor y)
           |> function
-              | None      -> go_token_first filebuffer (y + 1)
-              | Some tok  -> Some (mk_v2 tok.start y)
+              | None   -> go_token_first filebuffer (y + 1)
+              | cursor -> cursor
 
   let go_token_right filebuffer cursor =
     let rec loop line x =
       function
-        | None -> None
-        | Some tok ->
-            if x < tok.start
-              then Some tok
-              else Some tok |> T.next line |> loop line x
+        | None                        -> None
+        | Some tok when x < tok.start -> Some tok
+        | tok_opt                     -> tok_opt
+                                          |> T.next line
+                                          |> loop line x
     in
       let line = Filebuffer.line_at filebuffer cursor.y in
       loop line cursor.x (T.next line None)
         |> function
-            | Some tok -> mk_v2 tok.start cursor.y
-            | None -> go_token_first filebuffer (cursor.y + 1)
-        |> function
-            | None          -> cursor
-            | Some cursor'  -> cursor'
+            | Some tok  -> mk_v2 tok.start cursor.y
+            | None      -> go_token_first filebuffer (cursor.y + 1)
+        |> get_or cursor
 
-  let rec go_token_last (filebuffer : Filebuffer.t) (y : int) : v2 option =
+  let rec go_token_last filebuffer y =
     let rec loop line tok_opt =
       match (tok_opt, T.next line tok_opt) with
-      | (None, None)      -> None
-      | (Some last, None) -> Some (mk_v2 last.start y)
-      | (_, next_tok_opt) -> loop line next_tok_opt
+        | (None,      None)         -> None
+        | (Some last, None)         -> Some (mk_v2 last.start y)
+        | (_,         next_tok_opt) -> loop line next_tok_opt
     in
       if y < 0
         then None
         else loop (Filebuffer.line_at filebuffer y) None
-          |> function
-              | None -> go_token_last filebuffer (y - 1)
-              | last -> last
+              |> function
+                  | None -> go_token_last filebuffer (y - 1)
+                  | last -> last
 
   let go_token_left filebuffer cursor =
     let rec loop line x tok_opt =
       T.next line tok_opt
         |> function
-            | None -> None
-            | Some tok ->
-                if token_contains x tok
-                  then tok_opt
-                  else loop line x (Some tok)
+            | None                                -> None
+            | Some tok when token_contains x tok  -> tok_opt
+            | next_tok_opt                        -> loop line x next_tok_opt
     in
       if cursor.y < 0
         then cursor
@@ -1395,41 +1410,26 @@ end = struct
           |> (function
               | None      -> go_token_last filebuffer (cursor.y - 1)
               | Some tok  -> Some (mk_v2 tok.start cursor.y))
-          |> function
-              | None          -> cursor
-              | Some cursor'  -> cursor'
+          |> get_or cursor
 
   let find_token_nth x line =
     let rec loop line x n =
       function
-        | None -> None
-        | Some tok ->
-            if tok.start > x
-              then None
-            else if x < tok.stop
-              then Some n
-            else
-              Some tok |> T.next line |> loop line x (n + 1)
+        | None                        -> None
+        | Some tok when tok.start > x -> None
+        | Some tok when x < tok.stop  -> Some n
+        | tok_opt                     -> tok_opt
+                                          |> T.next line
+                                          |> loop line x (n + 1)
     in
       loop line x 0 (T.next line None)
-        |> fun tok_opt ->
-            let s =
-              match tok_opt with
-                | None -> "none"
-                | Some n -> string_of_int n
-            in
-              Printf.fprintf logs "find_token_nth \"%s\":%d -> %s\n" line x s ;
-              flush logs ;
-              tok_opt
 
   let go_token_nth n line =
     let rec loop line n =
       function
-        | None -> None
-        | tok_opt ->
-            if n = 0
-              then tok_opt
-              else loop line (n - 1) (T.next line tok_opt)
+        | None                -> None
+        | tok_opt when n = 0  -> tok_opt
+        | tok_opt             -> loop line (n - 1) (T.next line tok_opt)
     in
       loop line n (T.next line None)
 
@@ -1439,28 +1439,14 @@ end = struct
         then None
         else
           go_token_nth n(Filebuffer.line_at filebuffer y)
-        |> (fun tok_opt ->
-              let s =
-                match tok_opt with
-                  | None -> "none"
-                  | Some tok -> (string_of_int tok.start) ^ "," ^ (string_of_int tok.stop)
-              in
-                Printf.fprintf logs "go_token_nth \"%s\":%d -> %s\n"
-                  (Filebuffer.line_at filebuffer y) n s ;
-                flush logs ;
-                tok_opt )
+            |> map (token_start_to_cursor y)
             |> function
-                | None -> loop filebuffer (y + 1) n
-                | Some tok -> Some (mk_v2 tok.start y)
+                | None  -> loop filebuffer (y + 1) n
+                | token -> token
     in
       find_token_nth cursor.x (Filebuffer.line_at filebuffer cursor.y)
-        |> (function
-            | None -> None
-            | Some n ->
-                loop filebuffer (cursor.y + 1) n)
-                  |> function
-                        | None -> cursor
-                        | Some cursor' -> cursor'
+        |> fmap (loop filebuffer (cursor.y + 1))
+        |> get_or cursor
 
   let go_token_up filebuffer cursor =
     let rec loop filebuffer y n =
@@ -1468,18 +1454,14 @@ end = struct
         then None
         else
           go_token_nth n (Filebuffer.line_at filebuffer y)
+            |> map (token_start_to_cursor y)
             |> function
-                | None -> loop filebuffer (y - 1) n
-                | Some tok -> Some (mk_v2 tok.start y)
+                | None  -> loop filebuffer (y - 1) n
+                | token -> token
     in
       find_token_nth cursor.x (Filebuffer.line_at filebuffer cursor.y)
-        |> (function
-            | None -> None
-            | Some n ->
-                loop filebuffer (cursor.y - 1) n)
-                  |> function
-                        | None -> cursor
-                        | Some cursor' -> cursor'
+        |> fmap (loop filebuffer (cursor.y - 1))
+        |> get_or cursor
 
   let movement =
     let open Move in
