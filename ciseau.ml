@@ -1561,29 +1561,18 @@ module LineMovement = struct
         mk_v2 x' y'
       else cursor
 
-  let go_first_block filebuffer cursor =
-    BlockMovement.go_token_first filebuffer cursor.y
-      |> function
-          | None          -> cursor
-          | Some cursor'  -> cursor'
-
-  (* BUG: if two blanc lines above, the cursor flip between current line and line just above *)
   let go_line_left filebuffer cursor =
-    let cursor' = go_first_block filebuffer cursor in
-    if cursor.x <= cursor'.x
-      then
-        let cursor2 = go_line_up filebuffer cursor in
-        let cursor3 = go_first_block filebuffer cursor2 in
-        (if cursor3 = cursor
-          then cursor2
-          else cursor3)
-      else cursor'
+    let cursor' = go_line_up filebuffer cursor in
+    if cursor.y = cursor'.y || Filebuffer.is_line_empty filebuffer cursor'.y
+      then cursor'
+      else BlockMovement.go_token_first filebuffer cursor'.y
+            |> OptionCombinators.get_or cursor'
 
   let go_line_right filebuffer cursor =
     let x' = Filebuffer.last_cursor_x filebuffer cursor.y in
     if cursor.x >= x'
       then go_line_down filebuffer cursor |> go_line_end filebuffer
-      else go_line_end filebuffer cursor
+      else mk_v2 x' cursor.y
 
   let movement =
     let open Move in
@@ -2814,7 +2803,6 @@ let () =
 (* next TODOs:
  *
  * new movements
- *  - cleanups TokenMovement code with Option combinators
  *  - fix bugs in DelimiterMovement
  *  - finish implementing up/down in DelimiterMovement
  *  - add delimiter movements for '{', '[', '<'
