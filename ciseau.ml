@@ -1804,47 +1804,31 @@ module DelimMovement(K : DelimiterKind) = struct
           then Some (mk_v2 x y)
           else go_left filebuffer (x - 1) y b'
 
-  let rec go_right filebuffer x_stop y_stop x y b =
-    Printf.fprintf logs "go_right from %d,%d b=%d\n" x y b ;
-    flush logs ;
-    if x > x_stop
+  let rec go_right filebuffer x y b =
+    if x >= Filebuffer.line_length filebuffer y
       then
-        (if y = y_stop
+        (if y = Filebuffer.last_line_index filebuffer
           then None
-          else go_right filebuffer (Filebuffer.last_cursor_x2 filebuffer (y + 1)) y_stop 0 (y + 1) b)
+          else go_right filebuffer 0 (y + 1) b)
       else
         let b' = b + (get_kind_at filebuffer x y) in
         if b' = 0
           then Some (mk_v2 x y)
-          else go_right filebuffer x_stop y_stop (x + 1) y b'
+          else go_right filebuffer (x + 1) y b'
 
   let go_delim_start filebuffer cursor =
-    Printf.fprintf logs "go_delim_start %d,%d\n" cursor.x cursor.y ;
-    flush logs ;
     let k = get_kind_at filebuffer cursor.x cursor.y in
     if is_left k
       then cursor
-      else
-        go_left
-          filebuffer
-          cursor.x
-          cursor.y
-          (0 - k - 1)
-      |> get_or cursor
+      else go_left filebuffer cursor.x cursor.y (0 - k - 1)
+            |> get_or cursor
 
   let go_delim_end filebuffer cursor =
     let k = get_kind_at filebuffer cursor.x cursor.y in
     if is_right k
       then cursor
-      else
-        go_right
-          filebuffer
-          (Filebuffer.last_cursor_x2 filebuffer cursor.y)
-          (Filebuffer.last_line_index filebuffer)
-          cursor.x
-          cursor.y
-          (1 - k)
-      |> get_or cursor
+      else go_right filebuffer cursor.x cursor.y (1 - k)
+            |> get_or cursor
 
   let go_delim_up filebuffer cursor =
     (* TODO *)
