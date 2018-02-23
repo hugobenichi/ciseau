@@ -1,6 +1,29 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
+
+(*
+
+  [   ]   [   ]   [   ]
+
+  [   [   ]   ]   [       ]
+
+  [
+      [
+          []
+          []
+          []
+      ]
+      []
+      []
+      [
+        ]
+  ]
+
+
+ *)
+
+
 (* Debugging flags *)
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
@@ -1714,51 +1737,92 @@ module ParagraphMovement = struct
 end
 
 
-module DelimiterMovement = struct
+module type DelimiterKind = sig
+  (* Returns:
+   *    +1 for left delimiter: '(', '[', '{'
+   *    -1 for right delimiter: ')', ']', '}'
+   *     0 for others *)
+  val get_kind : char -> int
+end
 
-  let left  = '('
-  let right = ')'
 
-  let get_kind =
-    function
-    | '('   ->  1
-    | ')'   -> -1
-    | _     ->  0
+module DelimMovement(K : DelimiterKind) = struct
+  open OptionCombinators
 
+  let is_left k = (k = 1)
+  let is_right k = (k = -1)
+
+  (* Returns kind score of char at x,y position, or 0 if x,y is not valid *)
   let get_kind_at filebuffer x y =
     if Filebuffer.is_valid_cursor filebuffer x y
-      then Filebuffer.char_at filebuffer x y |> get_kind
+      then Filebuffer.char_at filebuffer x y |> K.get_kind
       else 0
 
-  let rec go_left filebuffer x y b =
+  let rec go_first_left filebuffer x y skip =
     if x < 0
       then
         (if y = 0
-          then mk_v2 0 0
-          else go_left filebuffer (Filebuffer.last_cursor_x2 filebuffer (y - 1)) (y - 1) b)
+          then None
+          else
+            let y' = y - 1 in
+            let x' = Filebuffer.last_cursor_x filebuffer y' in
+            go_first_left filebuffer x' y' false)
+      else
+        if not skip && get_kind_at filebuffer x y |> is_left
+          then Some (mk_v2 x y)
+          else go_first_left filebuffer (x - 1) y false
+
+  let rec go_first_right filebuffer x y skip =
+    if x >= Filebuffer.line_length filebuffer y
+      then
+        (if y = Filebuffer.last_line_index filebuffer
+          then None
+          else go_first_right filebuffer 0 (y + 1) false)
+      else
+        if not skip && get_kind_at filebuffer x y |> is_left
+          then Some (mk_v2 x y)
+          else go_first_right filebuffer (x + 1) y false
+
+  let go_delim_left filebuffer cursor =
+    go_first_left filebuffer cursor.x cursor.y true |> get_or cursor
+
+  let go_delim_right filebuffer cursor =
+    go_first_right filebuffer cursor.x cursor.y true |> get_or cursor
+
+  (* Move cursor left until balance is 0 *)
+  let rec go_left filebuffer x y b =
+    Printf.fprintf logs "go_left from %d,%d b=%d\n" x y b ;
+    flush logs ;
+    if x < 0
+      then
+        (if y = 0
+          then None
+          else go_left filebuffer (Filebuffer.last_cursor_x filebuffer (y - 1)) (y - 1) b)
       else
         let b' = b + (get_kind_at filebuffer x y) in
         if b' = 0
-          then mk_v2 x y
+          then Some (mk_v2 x y)
           else go_left filebuffer (x - 1) y b'
 
   let rec go_right filebuffer x_stop y_stop x y b =
+    Printf.fprintf logs "go_right from %d,%d b=%d\n" x y b ;
+    flush logs ;
     if x > x_stop
       then
         (if y = y_stop
-          then mk_v2 x_stop y_stop
+          then None
           else go_right filebuffer (Filebuffer.last_cursor_x2 filebuffer (y + 1)) y_stop 0 (y + 1) b)
       else
         let b' = b + (get_kind_at filebuffer x y) in
         if b' = 0
-          then mk_v2 x y
+          then Some (mk_v2 x y)
           else go_right filebuffer x_stop y_stop (x + 1) y b'
 
   let go_delim_start filebuffer cursor =
     Printf.fprintf logs "go_delim_start %d,%d\n" cursor.x cursor.y ;
     flush logs ;
     let k = get_kind_at filebuffer cursor.x cursor.y in
-    if k = get_kind '('
+    if is_left k
       then cursor
       else
         go_left
@@ -1766,10 +1830,11 @@ module DelimiterMovement = struct
           cursor.x
           cursor.y
           (0 - k - 1)
+      |> get_or cursor
 
   let go_delim_end filebuffer cursor =
     let k = get_kind_at filebuffer cursor.x cursor.y in
-    if k = get_kind ')'
+    if is_right k
       then cursor
       else
         go_right
@@ -1779,21 +1844,7 @@ module DelimiterMovement = struct
           cursor.x
           cursor.y
           (1 - k)
-
-  let go_delim_left filebuffer cursor =
-    let { x ; y } = go_delim_start filebuffer cursor in
-    go_left filebuffer x y 0
-      |> go_delim_start filebuffer
-
-  let go_delim_right filebuffer cursor =
-    let { x ; y } = go_delim_end filebuffer cursor in
-    go_right
-      filebuffer
-      (Filebuffer.last_cursor_x2 filebuffer y)
-      (Filebuffer.last_line_index filebuffer)
-      x
-      y
-      0
+      |> get_or cursor
 
   let go_delim_up filebuffer cursor =
     (* TODO *)
@@ -1815,15 +1866,44 @@ module DelimiterMovement = struct
 end
 
 
+module ParenMovement = DelimMovement(struct
+  let get_kind =
+    function
+    | '('   ->  1
+    | ')'   -> -1
+    | _     ->  0
+end)
+
+
+module BracketMovement = DelimMovement(struct
+  let get_kind =
+    function
+    | '['   ->  1
+    | ']'   -> -1
+    | _     ->  0
+end)
+
+
+module BraceMovement = DelimMovement(struct
+  let get_kind =
+    function
+    | '{'   ->  1
+    | '}'   -> -1
+    | _     ->  0
+end)
+
+
 module Movement = struct
 
-  type mode = Spaces
+  type mode = Blocks
             | Words
             | Digits
             | Lines
             | Chars
             | Paragraphs
             | Parens
+            | Brackets
+            | Braces
 
   type movement = Left
                 | Right
@@ -1838,13 +1918,15 @@ module Movement = struct
 
   let mode_to_string =
     function
-      | Spaces        -> "Space separated blocks"
+      | Blocks        -> "Blocks"
       | Words         -> "Words"
       | Digits        -> "Digits"
       | Lines         -> "Lines"
       | Chars         -> "Chars"
       | Paragraphs    -> "Paragraphs"
       | Parens        -> "Parens"
+      | Brackets      -> "Brackets"
+      | Braces        -> "Braces"
 
   let movement_to_string =
     function
@@ -1883,13 +1965,15 @@ module Movement = struct
 
   let move =
     function
-      | Spaces        -> BlockMovement.movement
+      | Blocks        -> BlockMovement.movement
       | Words         -> WordMovement.movement
       | Digits        -> DigitMovement.movement
       | Lines         -> LineMovement.movement
       | Chars         -> CharMovement.movement
       | Paragraphs    -> ParagraphMovement.movement
-      | Parens        -> DelimiterMovement.movement
+      | Parens        -> ParenMovement.movement
+      | Brackets      -> BracketMovement.movement
+      | Braces        -> BraceMovement.movement
 
   let compute_movement mode =
     function
@@ -2630,13 +2714,13 @@ module Ciseau = struct
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
 
     | Keys.Lower_w      -> MoveModeOp Movement.Words
-    | Keys.Upper_w      -> MoveModeOp Movement.Spaces
+    | Keys.Upper_w      -> MoveModeOp Movement.Blocks
     | Keys.Lower_b      -> MoveModeOp Movement.Lines
     | Keys.Upper_b      -> MoveModeOp Movement.Lines
     | Keys.Lower_c      -> MoveModeOp Movement.Chars
     | Keys.Lower_d      -> MoveModeOp Movement.Digits
     | Keys.Lower_z      -> MoveModeOp Movement.Paragraphs
-    | Keys.Lower_x      -> MoveModeOp Movement.Parens
+    | Keys.Lower_x      -> MoveModeOp Movement.Brackets
 
     | Keys.ArrowUp      -> MoveOp Movement.Up
     | Keys.ArrowDown    -> MoveOp Movement.Down
@@ -2803,9 +2887,7 @@ let () =
 (* next TODOs:
  *
  * new movements
- *  - fix bugs in DelimiterMovement
- *  - finish implementing up/down in DelimiterMovement
- *  - add delimiter movements for '{', '[', '<'
+ *  - finish implementing up/down in DelimMovement
  *  - implement easymotion
  *
  *  highlightning
