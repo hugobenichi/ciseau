@@ -2,28 +2,6 @@ let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
 
-(*
-
-  [   ]   [   ]   [   ]
-
-  [   [   ]   ]   [       ]
-
-  [
-      [
-          []
-          []
-          []
-      ]
-      []
-      []
-      [
-        ]
-  ]
-
-
- *)
-
-
 (* Debugging flags *)
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
@@ -1758,6 +1736,7 @@ module DelimMovement(K : DelimiterKind) = struct
       then Filebuffer.char_at filebuffer x y |> K.get_kind
       else 0
 
+  (* Go to first 'left' delimiter on the left of current position *)
   let rec go_first_left filebuffer x y skip =
     if x < 0
       then
@@ -1772,6 +1751,7 @@ module DelimMovement(K : DelimiterKind) = struct
           then Some (mk_v2 x y)
           else go_first_left filebuffer (x - 1) y false
 
+  (* Go to first 'left' delimiter on the right of current position *)
   let rec go_first_right filebuffer x y skip =
     if x >= Filebuffer.line_length filebuffer y
       then
@@ -1783,11 +1763,20 @@ module DelimMovement(K : DelimiterKind) = struct
           then Some (mk_v2 x y)
           else go_first_right filebuffer (x + 1) y false
 
-  let go_delim_left filebuffer cursor =
-    go_first_left filebuffer cursor.x cursor.y true |> get_or cursor
-
-  let go_delim_right filebuffer cursor =
-    go_first_right filebuffer cursor.x cursor.y true |> get_or cursor
+  (* Go to first 'right' delimiter on the left of current position *)
+  let rec go_first_end_left filebuffer x y skip =
+    if x < 0
+      then
+        (if y = 0
+          then None
+          else
+            let y' = y - 1 in
+            let x' = Filebuffer.last_cursor_x filebuffer y' in
+            go_first_end_left filebuffer x' y' false)
+      else
+        if not skip && get_kind_at filebuffer x y |> is_right
+          then Some (mk_v2 x y)
+          else go_first_end_left filebuffer (x - 1) y false
 
   (* Move cursor left until balance is 0 *)
   let rec go_left filebuffer x y b =
@@ -1804,6 +1793,7 @@ module DelimMovement(K : DelimiterKind) = struct
           then Some (mk_v2 x y)
           else go_left filebuffer (x - 1) y b'
 
+  (* Move cursor right until balance is 0 *)
   let rec go_right filebuffer x y b =
     if x >= Filebuffer.line_length filebuffer y
       then
@@ -1815,6 +1805,15 @@ module DelimMovement(K : DelimiterKind) = struct
         if b' = 0
           then Some (mk_v2 x y)
           else go_right filebuffer (x + 1) y b'
+
+  let go_delim_left filebuffer cursor =
+    go_first_left filebuffer cursor.x cursor.y true |> get_or cursor
+
+  let go_delim_end_left filebuffer cursor =
+    go_first_end_left filebuffer cursor.x cursor.y true |> get_or cursor
+
+  let go_delim_right filebuffer cursor =
+    go_first_right filebuffer cursor.x cursor.y true |> get_or cursor
 
   let go_delim_start filebuffer cursor =
     let k = get_kind_at filebuffer cursor.x cursor.y in
@@ -1831,12 +1830,16 @@ module DelimMovement(K : DelimiterKind) = struct
             |> get_or cursor
 
   let go_delim_up filebuffer cursor =
-    (* TODO *)
     cursor
+      |> go_delim_start filebuffer
+      |> go_delim_end_left filebuffer
+      |> go_delim_start filebuffer
 
   let go_delim_down filebuffer cursor =
-    (* TODO *)
     cursor
+      |> go_delim_start filebuffer
+      |> go_delim_end filebuffer
+      |> go_delim_right filebuffer
 
   let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
     let open Move in
@@ -2704,7 +2707,7 @@ module Ciseau = struct
     | Keys.Lower_c      -> MoveModeOp Movement.Chars
     | Keys.Lower_d      -> MoveModeOp Movement.Digits
     | Keys.Lower_z      -> MoveModeOp Movement.Paragraphs
-    | Keys.Lower_x      -> MoveModeOp Movement.Brackets
+    | Keys.Lower_x      -> MoveModeOp Movement.Parens
 
     | Keys.ArrowUp      -> MoveOp Movement.Up
     | Keys.ArrowDown    -> MoveOp Movement.Down
@@ -2870,9 +2873,11 @@ let () =
 
 (* next TODOs:
  *
- * new movements
- *  - finish implementing up/down in DelimMovement
+ *  movements:
  *  - implement easymotion
+ *  - Number tokenizer which recognizes 0xdeadbeef and 6.667e-11
+ *  - Proper tree navigation
+ *  - bind brackets and braces delim movement
  *
  *  highlightning
  *    - mode for show all tokens in current token movement mode
@@ -2896,50 +2901,6 @@ let () =
  *  - find
  *    - add vim's incsearch feature
  *  - static keyword hightlightning
- *)
-
-(*
- * Just for debugging the paren delimiter movement
-
-(define Y
-  (lambda (h)
-    ((lambda (x) (x x))
-     (lambda (g)
-       (h (lambda args (apply (g g) args)))))))
-
-;; head-recursive factorial
-(define fac
-  (Y
-    (lambda (f)
-      (lambda (x)
-        (if (< x 2)
-            1
-            ( * x (f (- x 1))))))))
-
-;; tail-recursive factorial
-(define (fac2 n)
-  (letrec ((tail-fac
-             (Y (lambda (f)
-                  (lambda (n acc)
-                    (if (zero? n)
-                        acc
-                        (f (- n 1) ( * n acc))))))))
-    (tail-fac n 1)))
-
-(define fib
-  (Y
-    (lambda (f)
-      (lambda (x)
-        (if (< x 2)
-            x
-            (+ (f (- x 1)) (f (- x 2))))))))
-
-(display (fac 6))
-(newline)
-
-(display (fib 6))
-(newline)
-
  *)
 
 
