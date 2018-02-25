@@ -88,7 +88,7 @@ let is_digit      chr = ('0' <= chr) && (chr <= '9')
 let is_alphanum   chr = (is_digit chr) || (is_letter chr)
 let is_printable  chr = (' ' <= chr) && (chr <= '~')
 
-let _assert ?msg:(m="failed assert") condition =
+let assert_that ?msg:(m="failed assert") condition =
   if not condition
     then raise (Error.e m)
 
@@ -295,7 +295,7 @@ module Vec2 = struct
   (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
   let assert_v2_inside { x = xlim ; y = ylim } { x ; y } =
-    if (x < 0) && (y < 0) && (x > xlim) && (y > ylim)
+    if (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
       then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d" x y xlim ylim))
 end
 
@@ -1047,6 +1047,8 @@ module Framebuffer : sig
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
   val put_line          : t -> int -> int -> int -> Line.t -> unit
+  val blit_framebuffer  : t -> v2 -> t -> rect -> bool -> unit
+  val write_framebuffer : t -> rect -> t -> int -> bool -> unit (* TODO: add continuation string with color *)
 
 end = struct
 
@@ -1068,7 +1070,7 @@ end = struct
     mutable cursor : v2 ;
   }
 
-  module Priv = struct
+  module Rendering = struct
     let colors_at t offset =
       let open Color in {
         fg = t.fg_colors.(offset) ;
@@ -1151,7 +1153,7 @@ end = struct
     Bytevector.reset render_buffer ;
     Bytevector.append render_buffer Term.Control.cursor_hide ;
     Bytevector.append render_buffer Term.Control.gohome ;
-    Priv.render_all_sections frame_buffer render_buffer ;
+    Rendering.render_all_sections frame_buffer render_buffer ;
     Bytevector.append render_buffer (Term.Control.cursor_control_string frame_buffer.cursor) ;
     Bytevector.append render_buffer Term.Control.cursor_show ;
     if kDRAW_SCREEN
@@ -1168,13 +1170,13 @@ end = struct
   let put_cursor t cursor =
     t.cursor <- cursor
 
-  let get_offset t x y =
-    assert (x <= t.window.x) ;
-    assert (y <= t.window.y) ;
-    y * t.window.x + x
+  let to_offset window x y =
+    assert (x <= window.x) ;
+    assert (y <= window.y) ;
+    y * window.x + x
 
   let put_string t maxblitlen x y text =
-    let offset = get_offset t x y in
+    let offset = to_offset t.window x y in
     let blitlen = min maxblitlen (slen text) in
     assert (blitlen <= (t.len - offset)) ;
     Bytes.blit_string text 0 t.text offset blitlen
@@ -1182,7 +1184,7 @@ end = struct
   let put_block
       t maxblitlen x y
       { Block.text ; Block.offset = block_offset ; Block.len = block_len } =
-    let bytes_offset = get_offset t x y in
+    let bytes_offset = to_offset t.window x y in
     let blitlen = min maxblitlen block_len in
     assert (blitlen <= (t.len - bytes_offset)) ;
     Bytes.blit_string text block_offset t.text bytes_offset blitlen
@@ -1202,6 +1204,87 @@ end = struct
         let maxblitlen' = maxblitlen - blitlen in
         if blitlen = b.Block.len then
           put_line framebuffer maxblitlen' x' y (Blocks t)
+
+  (* Blit a rectangle 'src_rect' of framebuffer 'src' into 'dst' at destination offset 'dst_offset'.
+   * Copy cursor in 'dst' if 'copy_cursor' is true.
+   * Corresponds to 'Clip' mode for text render. *)
+  let blit_framebuffer dst dst_offset src src_rect copy_cursor =
+    assert_v2_inside dst.window dst_offset ;
+    assert_v2_inside src.window src_rect.topleft ;
+    assert_v2_inside src.window src_rect.bottomright ;
+
+    let w_dst = dst.window.x - dst_offset.x in
+    let w_src = src_rect.bottomright.x - src_rect.topleft.x in
+
+    let h_dst = dst.window.y - dst_offset.y in
+    let h_src = src_rect.bottomright.y - src_rect.topleft.y in
+
+    let w = min w_dst w_src in
+    let h = min h_src h_dst in
+
+    for y = 0 to h - 1 do
+      let y_dst = y + dst_offset.y in
+      let y_src = y + src_rect.topleft.y in
+
+      let x_dst = dst_offset.x in
+      let x_src = src_rect.topleft.x in
+
+      let o_dst = to_offset dst.window x_dst y_dst in
+      let o_src = to_offset src.window x_src y_src in
+
+      Bytes.blit src.text o_src dst.text o_dst w ;
+      Array.blit src.fg_colors o_src dst.fg_colors o_dst w ;
+      Array.blit src.bg_colors o_src dst.bg_colors o_dst w ;
+    done ;
+
+    if copy_cursor then
+      let x_dst_space = src.cursor.x + dst_offset.x - src_rect.topleft.x in
+      let y_dst_space = src.cursor.y + dst_offset.y - src_rect.topleft.y in
+      dst.cursor <- mk_v2 x_dst_space y_dst_space
+
+  (* Write at max 'n_line' of 'src' into a rectangle 'dst_rect' of 'dst'.
+   * Lines from 'src' which do not fit in 'dst_rect' are wrapped to the next line in 'dst'.
+   * Lines must be implicitly terminated with '0' in the 'text' buffer of 'src'.
+   * Copy cursor in 'dst' if 'copy_cursor' is true.
+   * Corresponds to 'Overflow' mode for text render. *)
+  let write_framebuffer dst dst_rect src n_line copy_cursor =
+    assert_v2_inside dst.window dst_rect.topleft ;
+    assert_v2_inside dst.window dst_rect.bottomright ;
+    assert_that (n_line < src.window.y) ;
+
+    let w_dst = dst_rect.bottomright.y - dst_rect.topleft.y in
+    let x_dst = dst_rect.topleft.x in
+    let y_dst = ref dst_rect.topleft.y in
+
+    let x_src = ref 0 in
+    let y_src = ref 0 in
+    let x_src_stop = ref 0 in
+
+    while !y_dst < dst_rect.bottomright.y && !y_src < n_line do
+      let o_dst = to_offset dst.window x_dst !y_dst in
+      let o_src = to_offset src.window !x_src !y_src in
+
+      if 0 = !x_src then
+        (try
+          x_src_stop := Bytes.index_from src.text o_src '\000'
+        with
+          e -> raise (Error.e "no '\\0' terminating the line!") ) ;
+
+      let len = min w_dst !x_src_stop in
+
+      Bytes.blit src.text o_src dst.text o_dst len ;
+      Array.blit src.fg_colors o_src dst.fg_colors o_dst len ;
+      Array.blit src.bg_colors o_src dst.bg_colors o_dst len ;
+
+      (* TODO: add cursor copy *)
+
+      y_dst := !y_dst + 1 ;
+      x_src := !x_src + w_dst ;
+      if !x_src >= !x_src_stop then (
+        x_src := 0 ;
+        y_src := !y_src + 1 ;
+      )
+    done
 end
 
 
@@ -2127,8 +2210,8 @@ end = struct
       in
       output_string logs msg ;
       flush logs ;
-      _assert (cursor'.y >= 0) ~msg:msg ;
-      _assert (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg ;
+      assert_that (cursor'.y >= 0) ~msg:msg ;
+      assert_that (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg ;
       ()
     ) ;
 
@@ -2155,6 +2238,9 @@ end = struct
   let get_token_box t =
     let token_s = Movement.compute_movement t.mov_mode Movement.Start t.filebuffer t.cursor in
     let token_e = Movement.compute_movement t.mov_mode Movement.End t.filebuffer token_s in
+    (* BUG: if token_s.y = token_e.y then return a segment
+     *      otherwise return a list of lines *)
+    (* BUG: return Nil if token is 1 char width *)
     let rect = mk_rect token_s.x token_s.y (token_e.x + 1) token_e.y in
     let area = Area.Rectangle rect in
     Colorblock.mk_colorblock area Config.default.colors.selection
