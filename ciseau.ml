@@ -408,6 +408,7 @@ module Config = struct
     numbers       : color_cell ;
     default       : color_cell ;
     cursor_line   : color_cell ;
+    selection     : color_cell ;
     line_numbers  : color_cell ;
     focus_header  : color_cell ;
     header        : color_cell ;
@@ -453,6 +454,10 @@ module Config = struct
       cursor_line = {
         fg    = white ;
         bg    = black ;
+      } ;
+      selection = {
+        fg    = white ;
+        bg    = blue ;
       } ;
       line_numbers = {
         fg    = green ;
@@ -705,8 +710,9 @@ module Area = struct
    *  - last line in included: y length is correct for for loops
    *  - right-most column is excluded: horizontal length is correct for blit like functions *)
   let area_to_rectangle screen_offset screen_size =
+    let open Segment in
     function
-      | HorizontalSegment { Segment.pos ; Segment.len } ->
+      | HorizontalSegment { pos ; len } ->
           assert (pos.x < screen_size.x) ;
           assert (pos.y < screen_size.y) ;
           assert (pos.x + len <= screen_size.x) ;
@@ -715,7 +721,7 @@ module Area = struct
             (screen_offset.y + pos.y)
             (screen_offset.x + len)
             (screen_offset.y + pos.y)
-      | VerticalSegment { Segment.pos ; Segment.len } ->
+      | VerticalSegment { pos ; len } ->
           assert (pos.x < screen_size.x) ;
           assert (pos.y < screen_size.y) ;
           assert (len <= screen_size.y) ;
@@ -739,15 +745,48 @@ module Area = struct
             (screen_offset.x + x + 1)
             (screen_offset.y + screen_size.y)
       | Rectangle { topleft ; bottomright } ->
-          assert (topleft.x < screen_size.x) ;
-          assert (topleft.y < screen_size.y) ;
-          assert (bottomright.x < screen_size.x) ;
-          assert (bottomright.y < screen_size.y) ;
+          Printf.fprintf logs "rect %d,%d -> %d.%d in screen %d,%d\n"
+            topleft.x
+            topleft.y
+            bottomright.x
+            bottomright.y
+            screen_size.x
+            screen_size.y ;
+            flush logs ;
+          assert (topleft.x <= screen_size.x) ;
+          assert (topleft.y <= screen_size.y) ;
+          assert (bottomright.x <= screen_size.x) ;
+          assert (bottomright.y <= screen_size.y) ;
           mk_rect
             (screen_offset.x + topleft.x)
             (screen_offset.y + topleft.y)
             (screen_offset.x + bottomright.x)
             (screen_offset.y + bottomright.y)
+
+  let apply_offset_and_clip x_offset y_offset x_max y_max =
+    let open Segment in
+    function
+      | HorizontalSegment { pos ; len } ->
+          let x'     = min x_max (pos.x + x_offset) in
+          let y'     = min y_max (pos.y + y_offset) in
+          let x_end' = min x_max (pos.x + x_offset + len) in
+          let len'   = x_end' - x' in
+          HorizontalSegment { pos = mk_v2 x' y' ; len = len' }
+      | Rectangle { topleft ; bottomright } ->
+          let topleft' =
+            mk_v2
+              (min x_max (topleft.x + x_offset))
+              (min y_max (topleft.y + y_offset))
+          in
+          let bottomright' =
+            mk_v2
+              (min x_max (bottomright.x + x_offset))
+              (min y_max (bottomright.y + y_offset))
+          in
+            Rectangle { topleft = topleft' ; bottomright = bottomright' }
+      | any -> any
+          (* TODO: VerticalSegment and Column should be mapped to None !
+           *       This requires enhancing area with an empty area Variant *)
 end
 
 
@@ -2107,9 +2146,18 @@ end = struct
     | Overflow  -> Clip
     in { t with linebreaking = new_mode }
 
+  (* TODO: this should also recenter the view horizontally in Clip mode *)
   let recenter_view view_height t =
     let new_start = t.cursor.y - view_height / 2 in
     { t with view_start = max new_start 0 }
+
+
+  let get_token_box t =
+    let token_s = Movement.compute_movement t.mov_mode Movement.Start t.filebuffer t.cursor in
+    let token_e = Movement.compute_movement t.mov_mode Movement.End t.filebuffer token_s in
+    let rect = mk_rect token_s.x token_s.y (token_e.x + 1) token_e.y in
+    let area = Area.Rectangle rect in
+    Colorblock.mk_colorblock area Config.default.colors.selection
 
   (* TODO: move drawing in separate module ? *)
 
@@ -2131,9 +2179,13 @@ end = struct
     (* output *)
     line_buffer     : Line.t Slice.t ;
     frame_buffer    : Line.t Slice.t ;
+    colors          : Colorblock.t Slice.t ;
     mutable cursor  : v2 ;
     mutable last_y  : int ; (* index of the last line in line_buffer *)
   }
+
+  let compute_text_colorblocks t =
+      Slice.init_slice 1 (get_token_box t)
 
   (* PERF: hoist in fileview struct *)
   let mk_linesinfo t screen_size =
@@ -2150,6 +2202,7 @@ end = struct
       line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
       frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
       line_number   = LineNumberCache.get line_number_offset ;
+      colors        = compute_text_colorblocks t ;
       cursor        = v2_zero ;
       last_y        = 0 ;
     }
@@ -2159,7 +2212,10 @@ end = struct
     let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
     let x_scrolling = max 0 (t.cursor.x - x_last_index) in
     linesinfo.cursor <- mk_v2 (t.cursor.x - x_scrolling) (t.cursor.y - t.view_start) ;
-    for i = 0 to linesinfo.text_stop_y - 1 do
+    (* Deal with text *)
+    let x_max = text_size.x in
+    let y_max = linesinfo.text_stop_y - 1 in
+    for i = 0 to y_max do
       let line_idx = i + t.view_start in
       let l = Slice.get t.filebuffer.buffer line_idx in
       let x_len = (slen l) - x_scrolling in
@@ -2167,12 +2223,19 @@ end = struct
         if x_len < 1 then Line.zero_line else {
           Block.text = l ;
           Block.offset = x_scrolling ;
-          Block.len = min x_len text_size.x ;
+          Block.len = min x_len x_max ;
         } |> Line.of_block
       in
       Slice.set line_buffer i b ;
       Slice.set frame_buffer (i + 1) (line_number line_idx) ;
       linesinfo.last_y <- i
+    done ;
+    (* Deal with color blocks *)
+    for i = 0 to (Slice.len linesinfo.colors) - 1 do
+      let { Colorblock.area ; Colorblock.colors } = Slice.get linesinfo.colors i in
+      let area' = Area.apply_offset_and_clip x_scrolling (-t.view_start) x_max y_max area in
+      Colorblock.mk_colorblock area' colors
+        |> Slice.set linesinfo.colors i
     done
 
   let fill_linesinfo_with_wrapping t linesinfo =
@@ -2222,6 +2285,7 @@ end = struct
       colors        = Slice.wrap_array [|
         Colorblock.mk_colorblock (Area.Line linesinfo.cursor.y) Config.default.colors.cursor_line ;
         Colorblock.mk_colorblock (Area.Column linesinfo.cursor.x) Config.default.colors.cursor_line ;
+        Slice.get linesinfo.colors 0 ;
       |] ;
       cursor        = if is_focused then Some linesinfo.cursor else None ;
     } |> Screen.put_text text_screen
@@ -2262,6 +2326,12 @@ end = struct
     }
 
   let draw t screen is_focused =
+    (* - put the color blocks for the text area first here in some kind of buffer,
+     * w.r.t to text coordinates
+     * - in fill_linesinfo, translate the color blocks buffer from text coordinates to
+     * screenview coordinates, breaking lines that need to be broken, as the text cursor
+     * goes from top to bottom
+     *)
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
     fill_linesinfo t.linebreaking t linesinfo ;
     Slice.set linesinfo.frame_buffer 0 (Line.of_blocks [
@@ -2875,7 +2945,10 @@ let () =
  *
  *  movements:
  *  - implement easymotion
- *  - Number tokenizer which recognizes 0xdeadbeef and 6.667e-11
+ *  - once I have a proper tokenizer for the text:
+ *    - Number tokenizer which recognizes 0xdeadbeef and 6.667e-11
+ *    - Math operator movement
+ *    - string movement
  *  - Proper tree navigation
  *  - bind brackets and braces delim movement
  *
@@ -2890,6 +2963,9 @@ let () =
  *
  * perfs:
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
+ *  - memory optimization for
+ *      TokenMovement
+ *      DelimMovement
  *
  * others:
  *  - hammer the code with asserts and search for more bugs in the drawing
