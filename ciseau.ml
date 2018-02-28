@@ -1047,6 +1047,7 @@ module Framebuffer : sig
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
   val put_line          : t -> int -> int -> int -> Line.t -> unit
+  (* TODO: change to have the same interface ! *)
   val blit_framebuffer  : t -> v2 -> t -> rect -> bool -> unit
   val write_framebuffer : t -> rect -> t -> int -> bool -> unit (* TODO: add continuation string with color *)
 
@@ -1189,7 +1190,10 @@ end = struct
     assert (blitlen <= (t.len - bytes_offset)) ;
     Bytes.blit_string text block_offset t.text bytes_offset blitlen
 
-  let rec put_line framebuffer maxblitlen x y =
+  (* TODO: add a internal buffer to track the rightmost cursor written for every line
+   *       this is necessary for blitting a framebuffer into another framebuffer without
+   *       hackeries like terminating '\0' *)
+  let rec put_line framebuffer x y maxblitlen =
     let open Line in
     function
     | String s        ->
@@ -1203,7 +1207,7 @@ end = struct
         let x' = x + blitlen in
         let maxblitlen' = maxblitlen - blitlen in
         if blitlen = b.Block.len then
-          put_line framebuffer maxblitlen' x' y (Blocks t)
+          put_line framebuffer x' y maxblitlen' (Blocks t)
 
   (* Blit a rectangle 'src_rect' of framebuffer 'src' into 'dst' at destination offset 'dst_offset'.
    * Copy cursor in 'dst' if 'copy_cursor' is true.
@@ -1297,6 +1301,9 @@ module Screen : sig
   val get_height    : t -> int
   val mk_screen     : Framebuffer.t -> rect -> t
   val mk_subscreen  : t -> rect -> t
+  val put_color_rect: t -> Color.color_cell -> rect -> unit
+  val put_colorblock: t -> Colorblock.t -> unit
+  val put_line      : t -> int -> int -> int -> Line.t -> unit
   val put_text      : t -> Textview.t -> unit
 
 end = struct
@@ -1337,15 +1344,28 @@ end = struct
       bottomright = (screen_offset <+> bottomright) ;
     }
 
-  (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
-  let put_line screen line_y_offset line =
-    if line_y_offset < screen.size.y then
+  let put_color_rect screen colors { topleft ; bottomright } =
+    Framebuffer.put_color_rect
+      screen.frame_buffer
+      colors
+      (mk_rect
+        (screen.screen_offset.x + topleft.x)
+        (screen.screen_offset.y + topleft.y)
+        (screen.screen_offset.x + bottomright.x)
+        (screen.screen_offset.y + bottomright.y))
+
+  let put_line screen x y maxlen line =
+    if y < screen.size.y then
       Framebuffer.put_line
         screen.frame_buffer
-        screen.size.x
-        screen.screen_offset.x
-        (screen.screen_offset.y + line_y_offset)
+        (screen.screen_offset.x + x)
+        (screen.screen_offset.y + y)
+        (min screen.size.x maxlen)
         line
+
+  (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
+  let put_line2 screen y line =
+    put_line screen 0 y screen.size.x line
 
   let put_colorblock screen { Colorblock.area ; Colorblock.colors } =
     area
@@ -1353,7 +1373,7 @@ end = struct
       |> Framebuffer.put_color_rect screen.frame_buffer colors
 
   let put_text screen { Textview.lines ; Textview.colors ; Textview.cursor } =
-    Slice.iteri (put_line screen) lines ;
+    Slice.iteri (put_line2 screen) lines ;
     Slice.iter (put_colorblock screen) colors ;
     match cursor with
     | Some pos ->
@@ -2263,8 +2283,8 @@ end = struct
     text_size       : v2 ;
     line_number     : int -> Line.t ;
     (* output *)
+    framebuffer     : Framebuffer.t ;
     line_buffer     : Line.t Slice.t ;
-    frame_buffer    : Line.t Slice.t ;
     colors          : Colorblock.t Slice.t ;
     mutable cursor  : v2 ;
     mutable last_y  : int ; (* index of the last line in line_buffer *)
@@ -2272,6 +2292,8 @@ end = struct
 
   let compute_text_colorblocks t =
       Slice.init_slice 1 (get_token_box t)
+
+  let framebuffer = Framebuffer.init_framebuffer (mk_v2 1000 500)
 
   (* PERF: hoist in fileview struct *)
   let mk_linesinfo t screen_size =
@@ -2286,7 +2308,7 @@ end = struct
       text_size     = mk_v2 text_width text_height ;
       text_stop_y   = min text_height (view_height t) ;
       line_buffer   = Slice.init_slice text_height DrawingDefault.text_line ;
-      frame_buffer  = Slice.init_slice screen_size.y DrawingDefault.frame_line ;
+      framebuffer   = framebuffer ;
       line_number   = LineNumberCache.get line_number_offset ;
       colors        = compute_text_colorblocks t ;
       cursor        = v2_zero ;
@@ -2294,7 +2316,7 @@ end = struct
     }
 
   let fill_linesinfo_with_clipping (t : t) (linesinfo : linesinfo) =
-    let { text_size ; line_number ; line_buffer ; frame_buffer } = linesinfo in
+    let { text_size ; line_number ; line_buffer } = linesinfo in
     let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
     let x_scrolling = max 0 (t.cursor.x - x_last_index) in
     linesinfo.cursor <- mk_v2 (t.cursor.x - x_scrolling) (t.cursor.y - t.view_start) ;
@@ -2313,7 +2335,7 @@ end = struct
         } |> Line.of_block
       in
       Slice.set line_buffer i b ;
-      Slice.set frame_buffer (i + 1) (line_number line_idx) ;
+      (* Slice.set frame_buffer (i + 1) (line_number line_idx) ; *)
       linesinfo.last_y <- i
     done ;
     (* Deal with color blocks *)
@@ -2325,7 +2347,7 @@ end = struct
     done
 
   let fill_linesinfo_with_wrapping t linesinfo =
-    let { text_size ; line_number ; line_buffer ; frame_buffer } = linesinfo in
+    let { text_size ; line_number ; line_buffer } = linesinfo in
     (* 'i' is the input index, 'j' is the output index *)
     let rec loop j i line_x_pos =
       if j < linesinfo.text_stop_y then (
@@ -2345,10 +2367,10 @@ end = struct
             else (i, line_x_pos + b.len)
         in
         Slice.set line_buffer j (Line.of_block b) ;
-        Slice.set frame_buffer (j + 1)
+        (* Slice.set frame_buffer (j + 1)
           (if line_x_pos = 0
             then (line_number line_y_pos)
-            else DrawingDefault.line_continuation) ;
+            else DrawingDefault.line_continuation) ; *)
         if line_y_pos = t.cursor.y && line_x_pos = 0 then (
           linesinfo.cursor <- mk_v2 (t.cursor.x mod text_size.x) (j + t.cursor.x / text_size.x) ;
           Printf.fprintf logs "line_y_pox=%d j=%d i=%d <-cursor.y=%d\n" line_y_pos j i linesinfo.cursor.y ;
@@ -2376,34 +2398,38 @@ end = struct
       cursor        = if is_focused then Some linesinfo.cursor else None ;
     } |> Screen.put_text text_screen
 
-  let put_frame screen linesinfo is_focused =
-    let open Textview in {
-      lines         = linesinfo.frame_buffer ;
-      colors        = Slice.wrap_array [|
-        (* PERF: this array could be hoisted into the fileview *)
-        (if is_focused
-          then DrawingDefault.header_focused_colorblock
-          else DrawingDefault.header_unfocused_colorblock) ;
-        (* default '~' column *)
-        Colorblock.mk_colorblock
-          (Area.VerticalSegment (Segment.mk_segment 1 1 linesinfo.text_size.y))
-          Config.default.colors.no_text ;
-        (* line numbers *)
-        Colorblock.mk_colorblock
-          (Area.Rectangle (mk_rect 1 1 6 (1 + linesinfo.last_y)))
-          Config.default.colors.line_numbers ;
-        (* border *)
-        Colorblock.mk_colorblock
-          (Area.VerticalSegment (Segment.mk_segment 0 1 linesinfo.text_size.y))
-          Config.default.colors.border ;
-        (* current cursor line *)
-        Colorblock.mk_colorblock
-          (Area.HorizontalSegment
-            (Segment.mk_segment 1 (linesinfo.cursor.y + 1 (* +1 for header *)) 5))
-          Config.default.colors.string ;
-      |] ;
-      cursor        = None ;
-    } |> Screen.put_text screen
+  let put_border_frame t screen linesinfo is_focused =
+    Screen.put_line screen 0 0 10000 (Line.of_blocks [
+      Block.mk_block t.filebuffer.Filebuffer.header  ;
+      Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
+      Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
+    ]) ;
+    let frame_default_line = Line.of_string "~" in
+    for y = 1 to linesinfo.text_size.y do
+      Screen.put_line screen 1 y 10000 frame_default_line
+    done ;
+    (* CLEANUP/PERF: migrate to raw rectangles ! *)
+    Screen.put_colorblock screen
+      (if is_focused
+        then DrawingDefault.header_focused_colorblock
+        else DrawingDefault.header_unfocused_colorblock) ;
+    (* default '~' column *)
+    Screen.put_colorblock screen (Colorblock.mk_colorblock
+      (Area.VerticalSegment (Segment.mk_segment 1 1 linesinfo.text_size.y))
+      Config.default.colors.no_text) ;
+    (* line numbers *)
+    Screen.put_colorblock screen (Colorblock.mk_colorblock
+      (Area.Rectangle (mk_rect 1 1 6 (1 + linesinfo.last_y)))
+      Config.default.colors.line_numbers) ;
+    (* border *)
+    Screen.put_colorblock screen (Colorblock.mk_colorblock
+      (Area.VerticalSegment (Segment.mk_segment 0 1 linesinfo.text_size.y))
+      Config.default.colors.border) ;
+    (* current cursor line *)
+    Screen.put_colorblock screen (Colorblock.mk_colorblock
+      (Area.HorizontalSegment
+        (Segment.mk_segment 1 (linesinfo.cursor.y + 1 (* +1 for header *)) 5))
+      Config.default.colors.string)
 
   let mk_text_subscreen screen =
     Screen.mk_subscreen screen {
@@ -2420,19 +2446,11 @@ end = struct
      *)
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
     fill_linesinfo t.linebreaking t linesinfo ;
-    Slice.set linesinfo.frame_buffer 0 (Line.of_blocks [
-      Block.mk_block t.filebuffer.Filebuffer.header  ;
-      Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
-      Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
-    ]) ;
     put_text_lines
       (mk_text_subscreen screen)
       linesinfo
       is_focused ;
-    put_frame
-      screen
-      linesinfo
-      is_focused
+    put_border_frame t screen linesinfo is_focused
 
 end
 
