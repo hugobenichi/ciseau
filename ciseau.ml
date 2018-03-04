@@ -8,7 +8,16 @@ let kDRAW_SCREEN  = true
 let kDEBUG        = true
 
 
-let (>>) f g x = g (f x)
+module CommonCombinators = struct
+  let id x          = x
+  let const a b     = a
+  let flip f a b    = f b a
+  let psi f g a1 a2 = f (g a1) (g a2)
+  let (>>) f g x    = g (f x)
+end
+
+
+open CommonCombinators
 
 
 module OptionCombinators = struct
@@ -109,7 +118,7 @@ let array_get a i =
 
 let array_set a i x =
   if i < 0 || alen a <= i
-    then raise (Error.e (Printf.sprintf "Array.get len=%d at %d out of bound" (alen a) i)) ;
+    then raise (Error.e (Printf.sprintf "Array.set len=%d at %d out of bound" (alen a) i)) ;
   Array.set a i x
 
 
@@ -150,7 +159,7 @@ module Slice = struct
     get slice ((len slice) - 1)
 
   let set { data ; range } i x =
-    Array.set data (shift range i) x (* memory opt: do not use partial application + |> or >> *)
+    array_set data (shift range i) x (* memory opt: do not use partial application + |> or >> *)
 
   let mk_slice s e data =
     check_range (s, e) (alen data) ;
@@ -246,7 +255,7 @@ module Slice = struct
           Array.blit data 0 new_data 0 len ;
           new_data
     in
-      Array.set data' e elem ;
+      array_set data' e elem ;
       mk_slice s (e + 1) data'
 
   let cat slice1 slice2 =
@@ -1047,9 +1056,8 @@ module Framebuffer : sig
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
   val put_line          : t -> int -> int -> int -> Line.t -> unit
-  (* TODO: change to have the same interface ! *)
-  val blit_framebuffer  : t -> v2 -> t -> rect -> bool -> unit
-  val write_framebuffer : t -> rect -> t -> int -> bool -> unit (* TODO: add continuation string with color *)
+  (* TODO: add continuation offset *)
+  val put_framebuffer : t -> rect -> t -> int -> linebreak -> bool -> unit
 
 end = struct
 
@@ -1062,6 +1070,7 @@ end = struct
 
   type t = {
     text        : Bytes.t ;
+    line_lengths : int array ;
     fg_colors   : Color.t array ;
     bg_colors   : Color.t array ;
     z_index     : int array ;
@@ -1136,6 +1145,7 @@ end = struct
     let len = vec2.x * vec2.y
     in {
       text        = Bytes.make len Default.text ;
+      line_lengths = Array.make vec2.x 0 ;
       fg_colors   = Array.make len Default.fg ;
       bg_colors   = Array.make len Default.bg ;
       z_index     = Array.make len Default.z ;
@@ -1146,6 +1156,7 @@ end = struct
 
   let clear t =
     Bytes.fill t.text 0 t.len Default.text ;
+    Array.fill t.line_lengths 0 t.window.x 0 ;
     Array.fill t.fg_colors 0 t.len Default.fg ;
     Array.fill t.bg_colors 0 t.len Default.bg ;
     Array.fill t.z_index 0 t.len Default.z
@@ -1179,7 +1190,9 @@ end = struct
   let put_string t maxblitlen x y text =
     let offset = to_offset t.window x y in
     let blitlen = min maxblitlen (slen text) in
+    assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - offset)) ;
+    array_set t.line_lengths y blitlen ;
     Bytes.blit_string text 0 t.text offset blitlen
 
   let put_block
@@ -1187,12 +1200,11 @@ end = struct
       { Block.text ; Block.offset = block_offset ; Block.len = block_len } =
     let bytes_offset = to_offset t.window x y in
     let blitlen = min maxblitlen block_len in
+    assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - bytes_offset)) ;
+    array_set t.line_lengths y blitlen ;
     Bytes.blit_string text block_offset t.text bytes_offset blitlen
 
-  (* TODO: add a internal buffer to track the rightmost cursor written for every line
-   *       this is necessary for blitting a framebuffer into another framebuffer without
-   *       hackeries like terminating '\0' *)
   let rec put_line framebuffer x y maxblitlen =
     let open Line in
     function
@@ -1209,54 +1221,16 @@ end = struct
         if blitlen = b.Block.len then
           put_line framebuffer x' y maxblitlen' (Blocks t)
 
-  (* Blit a rectangle 'src_rect' of framebuffer 'src' into 'dst' at destination offset 'dst_offset'.
-   * Copy cursor in 'dst' if 'copy_cursor' is true.
-   * Corresponds to 'Clip' mode for text render. *)
-  let blit_framebuffer dst dst_offset src src_rect copy_cursor =
-    assert_v2_inside dst.window dst_offset ;
-    assert_v2_inside src.window src_rect.topleft ;
-    assert_v2_inside src.window src_rect.bottomright ;
-
-    let w_dst = dst.window.x - dst_offset.x in
-    let w_src = src_rect.bottomright.x - src_rect.topleft.x in
-
-    let h_dst = dst.window.y - dst_offset.y in
-    let h_src = src_rect.bottomright.y - src_rect.topleft.y in
-
-    let w = min w_dst w_src in
-    let h = min h_src h_dst in
-
-    for y = 0 to h - 1 do
-      let y_dst = y + dst_offset.y in
-      let y_src = y + src_rect.topleft.y in
-
-      let x_dst = dst_offset.x in
-      let x_src = src_rect.topleft.x in
-
-      let o_dst = to_offset dst.window x_dst y_dst in
-      let o_src = to_offset src.window x_src y_src in
-
-      Bytes.blit src.text o_src dst.text o_dst w ;
-      Array.blit src.fg_colors o_src dst.fg_colors o_dst w ;
-      Array.blit src.bg_colors o_src dst.bg_colors o_dst w ;
-    done ;
-
-    if copy_cursor then
-      let x_dst_space = src.cursor.x + dst_offset.x - src_rect.topleft.x in
-      let y_dst_space = src.cursor.y + dst_offset.y - src_rect.topleft.y in
-      dst.cursor <- mk_v2 x_dst_space y_dst_space
-
-  (* Write at max 'n_line' of 'src' into a rectangle 'dst_rect' of 'dst'.
-   * Lines from 'src' which do not fit in 'dst_rect' are wrapped to the next line in 'dst'.
-   * Lines must be implicitly terminated with '0' in the 'text' buffer of 'src'.
-   * Copy cursor in 'dst' if 'copy_cursor' is true.
-   * Corresponds to 'Overflow' mode for text render. *)
-  let write_framebuffer dst dst_rect src n_line copy_cursor =
+  (* Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
+   * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
+   * wrapped to the next line in 'dst'.
+   * Copy cursor in 'dst' if 'copy_cursor' is true. *)
+  let put_framebuffer dst dst_rect src n_line linebreaking copy_cursor =
     assert_v2_inside dst.window dst_rect.topleft ;
     assert_v2_inside dst.window dst_rect.bottomright ;
     assert_that (n_line < src.window.y) ;
 
-    let w_dst = dst_rect.bottomright.y - dst_rect.topleft.y in
+    let w_dst = dst_rect.bottomright.x - dst_rect.topleft.x in
     let x_dst = dst_rect.topleft.x in
     let y_dst = ref dst_rect.topleft.y in
 
@@ -1269,10 +1243,7 @@ end = struct
       let o_src = to_offset src.window !x_src !y_src in
 
       if 0 = !x_src then
-        (try
-          x_src_stop := Bytes.index_from src.text o_src '\000'
-        with
-          e -> raise (Error.e "no '\\0' terminating the line!") ) ;
+        x_src_stop := array_get src.line_lengths !y_src ;
 
       let len = min w_dst !x_src_stop in
 
@@ -1280,7 +1251,10 @@ end = struct
       Array.blit src.fg_colors o_src dst.fg_colors o_dst len ;
       Array.blit src.bg_colors o_src dst.bg_colors o_dst len ;
 
-      (* TODO: add cursor copy *)
+      if src.cursor.y = !y_src && 0 = !x_src then
+        let x_dst_space = dst_rect.topleft.x + (src.cursor.x mod w_dst) in
+        let y_dst_space = dst_rect.topleft.y + (!y_src + src.cursor.x / w_dst) in
+        dst.cursor <- mk_v2 x_dst_space y_dst_space ;
 
       y_dst := !y_dst + 1 ;
       x_src := !x_src + w_dst ;
@@ -2157,7 +2131,7 @@ end = struct
       Array.init hardcoded_size (format_n >> Line.of_string)
 
     let get base_offset n =
-      Array.get cache (base_offset + n + negative_offset)
+      array_get cache (base_offset + n + negative_offset)
 
     let line_number_cache_t2 = Sys.time () ;;
     Printf.fprintf logs "cache %f\n" (line_number_cache_t2 -. line_number_cache_t1) ;;
@@ -3005,7 +2979,7 @@ module Fuzzer = struct
       if !i > n
         then stop_key
         else
-          Random.State.int r l |> Array.get fuzz_keys
+          Random.State.int r l |> array_get fuzz_keys
     in loop
 
   let run_editor_loop n editor () =
