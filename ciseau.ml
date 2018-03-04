@@ -89,6 +89,8 @@ let try_finally action cleanup =
 let output_int f    = string_of_int >> output_string f
 let output_float f  = string_of_float >> output_string f
 
+let (+=) r x = (r := !r + x)
+
 let string_of_char c = String.make 1 c
 
 let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n')
@@ -704,7 +706,7 @@ end
 
 module Area = struct
 
-  (* Specifies an area w.r.t to a Screen, typically to be converted to a rectangle in Frambuffer
+  (* Specifies an area w.r.t to a Screen, typically to be converted to a rectangle in Framebuffer
    * space for blitting colors or text *)
   type t =
       HorizontalSegment of Segment.t
@@ -1057,7 +1059,7 @@ module Framebuffer : sig
   val put_cursor        : t -> v2 -> unit
   val put_line          : t -> int -> int -> int -> Line.t -> unit
   (* TODO: add continuation offset *)
-  val put_framebuffer : t -> rect -> t -> int -> linebreak -> bool -> unit
+  val put_framebuffer : t -> rect -> t -> linebreak -> bool -> unit
 
 end = struct
 
@@ -1145,7 +1147,7 @@ end = struct
     let len = vec2.x * vec2.y
     in {
       text        = Bytes.make len Default.text ;
-      line_lengths = Array.make vec2.x 0 ;
+      line_lengths = Array.make vec2.x 0 ; (* CLEANUP: rename me *)
       fg_colors   = Array.make len Default.fg ;
       bg_colors   = Array.make len Default.bg ;
       z_index     = Array.make len Default.z ;
@@ -1192,6 +1194,7 @@ end = struct
     let blitlen = min maxblitlen (slen text) in
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - offset)) ;
+    (* BUG: this should only set that array if it is a higher number *)
     array_set t.line_lengths y blitlen ;
     Bytes.blit_string text 0 t.text offset blitlen
 
@@ -1202,6 +1205,7 @@ end = struct
     let blitlen = min maxblitlen block_len in
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - bytes_offset)) ;
+    (* BUG: this should only set that array if it is a higher number *)
     array_set t.line_lengths y blitlen ;
     Bytes.blit_string text block_offset t.text bytes_offset blitlen
 
@@ -1225,10 +1229,10 @@ end = struct
    * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
    * wrapped to the next line in 'dst'.
    * Copy cursor in 'dst' if 'copy_cursor' is true. *)
-  let put_framebuffer dst dst_rect src n_line linebreaking copy_cursor =
+  let put_framebuffer dst dst_rect src linebreaking copy_cursor =
     assert_v2_inside dst.window dst_rect.topleft ;
     assert_v2_inside dst.window dst_rect.bottomright ;
-    assert_that (n_line < src.window.y) ;
+    assert_that (src.window.y >= dst_rect.bottomright.y - dst_rect.topleft.y) ;
 
     let w_dst = dst_rect.bottomright.x - dst_rect.topleft.x in
     let x_dst = dst_rect.topleft.x in
@@ -1238,7 +1242,9 @@ end = struct
     let y_src = ref 0 in
     let x_src_stop = ref 0 in
 
-    while !y_dst < dst_rect.bottomright.y && !y_src < n_line do
+    while !y_dst < dst_rect.bottomright.y do
+      Printf.fprintf logs "put_framebuffer 0,%d <- %d(%d),%d\n" !y_dst !x_src !x_src_stop !y_src ;
+      flush logs;
       let o_dst = to_offset dst.window x_dst !y_dst in
       let o_src = to_offset src.window !x_src !y_src in
 
@@ -1251,16 +1257,17 @@ end = struct
       Array.blit src.fg_colors o_src dst.fg_colors o_dst len ;
       Array.blit src.bg_colors o_src dst.bg_colors o_dst len ;
 
-      if src.cursor.y = !y_src && 0 = !x_src then
+      if src.cursor.y = !y_src && 0 = !x_src then (
         let x_dst_space = dst_rect.topleft.x + (src.cursor.x mod w_dst) in
         let y_dst_space = dst_rect.topleft.y + (!y_src + src.cursor.x / w_dst) in
-        dst.cursor <- mk_v2 x_dst_space y_dst_space ;
+        dst.cursor <- mk_v2 x_dst_space y_dst_space
+      ) ;
 
-      y_dst := !y_dst + 1 ;
-      x_src := !x_src + w_dst ;
+      incr y_dst ;
+      x_src += w_dst ;
       if !x_src >= !x_src_stop then (
         x_src := 0 ;
-        y_src := !y_src + 1 ;
+        incr y_src ;
       )
     done
 end
@@ -1280,6 +1287,7 @@ module Screen : sig
   val put_line      : t -> int -> int -> int -> Line.t -> unit
   val put_line2     : t -> int -> Line.t -> unit
   val put_cursor    : t -> v2 -> unit
+  val put_framebuffer : t -> Framebuffer.t -> linebreak -> bool -> unit
 
 end = struct
 
@@ -1350,6 +1358,11 @@ end = struct
   let put_cursor screen pos =
     Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
 
+  let put_framebuffer screen =
+    Framebuffer.put_framebuffer screen.frame_buffer {
+      topleft     = screen.screen_offset ;
+      bottomright = screen.screen_offset <+> screen.size ;
+    }
 end
 
 
@@ -2253,6 +2266,7 @@ end = struct
     text_size       : v2 ;
     line_number     : int -> Line.t ;
     (* output *)
+    (* TODO; cleanup ! *)
     framebuffer     : Framebuffer.t ;
     line_buffer     : Line.t Slice.t ;
     colors          : Colorblock.t Slice.t ;
@@ -2284,6 +2298,42 @@ end = struct
       cursor        = v2_zero ;
       last_y        = 0 ;
     }
+
+  let fill_framebuffer (t : t) screen linesinfo =
+    let { text_size ; line_number ; line_buffer } = linesinfo in
+    let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
+    let x_scrolling = max 0 (t.cursor.x - x_last_index) in
+    (* Deal with text *)
+    let x_max = text_size.x in
+    let y_max = linesinfo.text_stop_y - 1 in
+    for i = 0 to y_max do
+      let line_idx = i + t.view_start in
+      let l = Slice.get t.filebuffer.buffer line_idx in
+      let x_len = (slen l) - x_scrolling in
+      let b =
+        if x_len < 1 then Line.zero_line else {
+          Block.text = l ;
+          Block.offset = x_scrolling ;
+          Block.len = min x_len x_max ;
+        } |> Line.of_block
+      in
+      Framebuffer.put_line framebuffer 0 i 6 (line_number line_idx) ;
+      Framebuffer.put_line framebuffer 6 i 1000 b ;
+      linesinfo.last_y <- i
+    done ;
+    (* TODO: put color blocks for text: current cursor line, number lines *)
+    (* TODO: finish iterating the remaining lines in screen and put the "~" *)
+    (* Deal with color blocks *)
+    for i = 0 to (Slice.len linesinfo.colors) - 1 do
+      let { Colorblock.area ; Colorblock.colors } = Slice.get linesinfo.colors i in
+      Area.apply_offset_and_clip x_scrolling (-t.view_start) x_max y_max area
+        |> Area.area_to_rectangle (Screen.get_offset screen) (Screen.get_size screen)
+        |> Framebuffer.put_color_rect framebuffer colors
+
+    done ;
+    (* Cursor *)
+    let cursor = mk_v2 (t.cursor.x - x_scrolling) (t.cursor.y - t.view_start) in
+    Framebuffer.put_cursor framebuffer cursor
 
   let fill_linesinfo_with_clipping (t : t) (linesinfo : linesinfo) =
     let { text_size ; line_number ; line_buffer } = linesinfo in
@@ -2377,6 +2427,8 @@ end = struct
     ]) ;
     let frame_default_line = Line.of_string "~" in
     for y = 1 to linesinfo.text_size.y do
+      (* TODO: first for [0, text_len[ put the default '...',
+       *       then for [text_len, scren_y[ put the '~' for remaining space *)
       Screen.put_line screen 1 y 10000 frame_default_line
     done ;
     (* CLEANUP/PERF: migrate to raw rectangles ! *)
@@ -2385,10 +2437,12 @@ end = struct
         then DrawingDefault.header_focused_colorblock
         else DrawingDefault.header_unfocused_colorblock) ;
     (* default '~' column *)
+    (* TODO: move to fill_framebuffer *)
     Screen.put_colorblock screen (Colorblock.mk_colorblock
       (Area.VerticalSegment (Segment.mk_segment 1 1 linesinfo.text_size.y))
       Config.default.colors.no_text) ;
     (* line numbers *)
+    (* TODO: move to fill_framebuffer *)
     Screen.put_colorblock screen (Colorblock.mk_colorblock
       (Area.Rectangle (mk_rect 1 1 6 (1 + linesinfo.last_y)))
       Config.default.colors.line_numbers) ;
@@ -2397,6 +2451,7 @@ end = struct
       (Area.VerticalSegment (Segment.mk_segment 0 1 linesinfo.text_size.y))
       Config.default.colors.border) ;
     (* current cursor line *)
+    (* TODO: move to fill_framebuffer *)
     Screen.put_colorblock screen (Colorblock.mk_colorblock
       (Area.HorizontalSegment
         (Segment.mk_segment 1 (linesinfo.cursor.y + 1 (* +1 for header *)) 5))
@@ -2415,12 +2470,10 @@ end = struct
      * screenview coordinates, breaking lines that need to be broken, as the text cursor
      * goes from top to bottom
      *)
+    Framebuffer.clear framebuffer ;
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
-    fill_linesinfo t.linebreaking t linesinfo ;
-    put_text_lines
-      (mk_text_subscreen screen)
-      linesinfo
-      is_focused ;
+    fill_framebuffer t screen linesinfo ;
+    Screen.put_framebuffer screen framebuffer t.linebreaking is_focused ;
     put_border_frame t screen linesinfo is_focused
 
 end
