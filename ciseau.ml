@@ -1278,7 +1278,8 @@ module Screen : sig
   val put_color_rect: t -> Color.color_cell -> rect -> unit
   val put_colorblock: t -> Colorblock.t -> unit
   val put_line      : t -> int -> int -> int -> Line.t -> unit
-  val put_text      : t -> Textview.t -> unit
+  val put_line2     : t -> int -> Line.t -> unit
+  val put_cursor    : t -> v2 -> unit
 
 end = struct
 
@@ -1346,14 +1347,9 @@ end = struct
       |> Area.area_to_rectangle screen.screen_offset screen.size
       |> Framebuffer.put_color_rect screen.frame_buffer colors
 
-  let put_text screen { Textview.lines ; Textview.colors ; Textview.cursor } =
-    Slice.iteri (put_line2 screen) lines ;
-    Slice.iter (put_colorblock screen) colors ;
-    match cursor with
-    | Some pos ->
-        Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
-    | None ->
-        ()
+  let put_cursor screen pos =
+    Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
+
 end
 
 
@@ -2361,16 +2357,17 @@ end = struct
     | Clip      -> fill_linesinfo_with_clipping
     | Overflow  -> fill_linesinfo_with_wrapping
 
-  let put_text_lines text_screen linesinfo is_focused =
-    let open Textview in {
-      lines         = linesinfo.line_buffer ;
-      colors        = Slice.wrap_array [|
-        Colorblock.mk_colorblock (Area.Line linesinfo.cursor.y) Config.default.colors.cursor_line ;
-        Colorblock.mk_colorblock (Area.Column linesinfo.cursor.x) Config.default.colors.cursor_line ;
-        Slice.get linesinfo.colors 0 ;
-      |] ;
-      cursor        = if is_focused then Some linesinfo.cursor else None ;
-    } |> Screen.put_text text_screen
+  let put_text_lines screen linesinfo is_focused =
+    Slice.iteri (Screen.put_line2 screen) linesinfo.line_buffer ;
+    Array.iter (Screen.put_colorblock screen) [|
+      Colorblock.mk_colorblock
+        (Area.Line linesinfo.cursor.y) Config.default.colors.cursor_line ;
+      Colorblock.mk_colorblock
+        (Area.Column linesinfo.cursor.x) Config.default.colors.cursor_line ;
+      Slice.get linesinfo.colors 0 ;
+    |] ;
+    if is_focused then
+      Screen.put_cursor screen linesinfo.cursor
 
   let put_border_frame t screen linesinfo is_focused =
     Screen.put_line screen 0 0 10000 (Line.of_blocks [
@@ -2812,15 +2809,9 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-      let open Textview in
-      Screen.put_text editor.status_screen {
-        lines         = Slice.wrap_array [|
-          Line.String status_text1 ;
-          Line.String status_text2 ;
-        |] ;
-        colors        = editor.status_colorblocks ;
-        cursor        = None ;
-      }
+    Screen.put_line2 editor.status_screen 0 (Line.String status_text1) ;
+    Screen.put_line2 editor.status_screen 1 (Line.String status_text2) ;
+    Slice.iter (Screen.put_colorblock editor.status_screen) editor.status_colorblocks
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
