@@ -704,117 +704,17 @@ module Line = struct
 end
 
 
-(* TODO: get rid of area *)
-module Area = struct
-
-  (* Specifies an area w.r.t to a Screen, typically to be converted to a rectangle in Framebuffer
-   * space for blitting colors or text *)
-  type t =
-      HorizontalSegment of Segment.t
-    | VerticalSegment of Segment.t
-    | Rectangle of rect
-      (* Bounds for Line and Column are implicitly defined w.r.t some Screen bounds *)
-    | Line of int
-    | Column of int
-
-  (* Converts an area in screen space into a rectangle in framebuffer space.
-   * This follows the Framebuffer.put_color_rect convention:
-   *  - last line in included: y length is correct for for loops
-   *  - right-most column is excluded: horizontal length is correct for blit like functions *)
-  let area_to_rectangle screen_offset screen_size =
-    let open Segment in
-    function
-      | HorizontalSegment { pos ; len } ->
-          assert (pos.x < screen_size.x) ;
-          assert (pos.y < screen_size.y) ;
-          assert (pos.x + len <= screen_size.x) ;
-          mk_rect
-            (screen_offset.x + pos.x)
-            (screen_offset.y + pos.y)
-            (screen_offset.x + len)
-            (screen_offset.y + pos.y)
-      | VerticalSegment { pos ; len } ->
-          assert (pos.x < screen_size.x) ;
-          assert (pos.y < screen_size.y) ;
-          assert (len <= screen_size.y) ;
-          mk_rect
-            (screen_offset.x + pos.x)
-            (screen_offset.y + pos.y)
-            (screen_offset.x + pos.x + 1)
-            (screen_offset.y + len)
-      | Line y ->
-          assert (y < screen_size.y) ;
-          mk_rect
-            (screen_offset.x + 0)
-            (screen_offset.y + y)
-            (screen_offset.x + screen_size.x)
-            (screen_offset.y + y)
-      | Column x ->
-          assert (x < screen_size.x) ;
-          mk_rect
-            (screen_offset.x + x)
-            (screen_offset.y + 0)
-            (screen_offset.x + x + 1)
-            (screen_offset.y + screen_size.y)
-      | Rectangle { topleft ; bottomright } ->
-          Printf.fprintf logs "rect %d,%d -> %d.%d in screen %d,%d\n"
-            topleft.x
-            topleft.y
-            bottomright.x
-            bottomright.y
-            screen_size.x
-            screen_size.y ;
-            flush logs ;
-          assert (topleft.x <= screen_size.x) ;
-          assert (topleft.y <= screen_size.y) ;
-          assert (bottomright.x <= screen_size.x) ;
-          assert (bottomright.y <= screen_size.y) ;
-          mk_rect
-            (screen_offset.x + topleft.x)
-            (screen_offset.y + topleft.y)
-            (screen_offset.x + bottomright.x)
-            (screen_offset.y + bottomright.y)
-
-  let apply_offset_and_clip x_offset y_offset x_max y_max =
-    let open Segment in
-    function
-      | HorizontalSegment { pos ; len } ->
-          let x'     = min x_max (pos.x + x_offset) in
-          let y'     = min y_max (pos.y + y_offset) in
-          let x_end' = min x_max (pos.x + x_offset + len) in
-          let len'   = x_end' - x' in
-          HorizontalSegment { pos = mk_v2 x' y' ; len = len' }
-      | Rectangle { topleft ; bottomright } ->
-          let topleft' =
-            mk_v2
-              (min x_max (topleft.x + x_offset))
-              (min y_max (topleft.y + y_offset))
-          in
-          let bottomright' =
-            mk_v2
-              (min x_max (bottomright.x + x_offset))
-              (min y_max (bottomright.y + y_offset))
-          in
-            Rectangle { topleft = topleft' ; bottomright = bottomright' }
-      | any -> any
-          (* TODO: VerticalSegment and Column should be mapped to None !
-           *       This requires enhancing area with an empty area Variant *)
-end
-
-
+(* TODO: delete or use ?? *)
 module Colorblock = struct
   type t = {
-    area    : Area.t ;
+    rect    : rect ;
     colors  : Color.color_cell ;
   }
 
-  let mk_colorblock area colors = {
-    area    = area ;
+  let mk_colorblock rect colors = {
+    rect    = rect ;
     colors  = colors;
   }
-
-  let mk_colorsegment x y len colors =
-    mk_colorblock (Area.HorizontalSegment (Segment.mk_segment x y len)) colors
 end
 
 
@@ -1293,7 +1193,6 @@ module Screen : sig
   val mk_screen     : Framebuffer.t -> rect -> t
   val mk_subscreen  : t -> rect -> t
   val put_color_rect: t -> Color.color_cell -> rect -> unit
-  val put_colorblock: t -> Colorblock.t -> unit
   val put_line      : t -> int -> int -> int -> Line.t -> unit
   val put_line2     : t -> int -> Line.t -> unit
   val put_cursor    : t -> v2 -> unit
@@ -1360,11 +1259,6 @@ end = struct
   (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
   let put_line2 screen y line =
     put_line screen 0 y screen.size.x line
-
-  let put_colorblock screen { Colorblock.area ; Colorblock.colors } =
-    area
-      |> Area.area_to_rectangle screen.screen_offset screen.size
-      |> Framebuffer.put_color_rect screen.frame_buffer colors
 
   let put_cursor screen pos =
     Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
@@ -2261,19 +2155,9 @@ end = struct
      *      otherwise return a list of lines *)
     (* BUG: return Nil if token is 1 char width *)
     let rect = mk_rect token_s.x token_s.y (token_e.x + 1) token_e.y in
-    let area = Area.Rectangle rect in
-    Colorblock.mk_colorblock area Config.default.colors.selection
+    Colorblock.mk_colorblock rect Config.default.colors.selection
 
   (* TODO: move drawing in separate module ? *)
-
-  module DrawingDefault = struct
-    let frame_line        = Line.String " ~"
-    let line_continuation = Line.String " ..."
-    let text_line         = Line.String ""
-
-    let header_focused_colorblock   = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.focus_header
-    let header_unfocused_colorblock = Colorblock.mk_colorblock (Area.Line 0) Config.default.colors.header
-  end
 
   (* facilitates passing data in and out of fill_linesinfo, put_text_lines, put_frame, ... *)
   type linesinfo = {
@@ -2380,15 +2264,18 @@ end = struct
       screen
       Config.default.colors.cursor_line
       (mk_rect x 0 (x + 1) linesinfo.text_size.y) ;
-    (* CLEANUP/PERF: migrate to raw rectangles ! *)
-    Screen.put_colorblock screen
+    (* header *)
+    Screen.put_color_rect
+      screen
       (if is_focused
-        then DrawingDefault.header_focused_colorblock
-        else DrawingDefault.header_unfocused_colorblock) ;
+        then Config.default.colors.focus_header
+        else Config.default.colors.header)
+      (mk_rect 0 0 size.x 0) ;
     (* border *)
-    Screen.put_colorblock screen (Colorblock.mk_colorblock
-      (Area.VerticalSegment (Segment.mk_segment 0 1 linesinfo.text_size.y))
-      Config.default.colors.border)
+    Screen.put_color_rect
+      screen
+      Config.default.colors.border
+      (mk_rect 0 1 1 linesinfo.text_size.y)
 
   let mk_text_subscreen screen =
     Screen.mk_subscreen screen {
@@ -2403,6 +2290,7 @@ end = struct
      * screenview coordinates, breaking lines that need to be broken, as the text cursor
      * goes from top to bottom
      *)
+    (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
     let textscreen = mk_text_subscreen screen in
     Framebuffer.clear framebuffer ;
@@ -2654,7 +2542,6 @@ module Ciseau = struct
     filebuffers     : Filebuffer.t Slice.t ; (* TODO: turn this into buffer management layer *)
     user_input      : string ;
     pending_input   : pending_command ;
-    status_colorblocks : Colorblock.t Slice.t ;
     stats           : Stats.t ;
     log_stats       : bool ;
   }
@@ -2682,13 +2569,6 @@ module Ciseau = struct
   let test_mk_fileviews term_dim =
     Slice.map Fileview.init_fileview
 
-  let mk_status_colorblocks term_width =
-    Slice.wrap_array [|
-      (* TODO: replace with Area.Line *)
-      Colorblock.mk_colorsegment 0 0 term_width Config.default.colors.status ;
-      Colorblock.mk_colorsegment 0 1 term_width Config.default.colors.user_input ;
-    |]
-
   let mk_tileset term_dim filebuffers =
     filebuffers
       |> Slice.map Fileview.init_fileview
@@ -2711,7 +2591,6 @@ module Ciseau = struct
 
       user_input      = "" ;
       pending_input   = None;
-      status_colorblocks = mk_status_colorblocks term_dim.x ;
       stats           = Stats.init_stats () ;
       log_stats       = kLOG_STATS ;
     }
@@ -2726,7 +2605,6 @@ module Ciseau = struct
       frame_buffer    = frame_buffer ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
       tileset         = Tileset.apply_op editor.tileset (Tileset.Resize (main_screen_dimensions term_dim)) ;
-      status_colorblocks = mk_status_colorblocks term_dim.x ;
     }
 
   let stop_editor editor = {
@@ -2798,7 +2676,7 @@ module Ciseau = struct
     in
     Screen.put_line2 editor.status_screen 0 (Line.String status_text1) ;
     Screen.put_line2 editor.status_screen 1 (Line.String status_text2) ;
-    Slice.iter (Screen.put_colorblock editor.status_screen) editor.status_colorblocks
+    Screen.put_color_rect editor.status_screen Config.default.colors.status (mk_rect 0 0 editor.term_dim.x 0)
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
@@ -3006,10 +2884,10 @@ let () =
  *    - cursor position is incorrect when some lines have wrapped above the cursor
  *    - cursor lines moves in all open file views !
  *    - crash when changing focus to another view !
- *  - remove Area code
  *  - general cleanup, renaming of variables, solidification
  *  - finish wrapping all Array function for better error handling !
  *  - need to work on memory and cpu perfs. The frame latency went up by x15 ~ x20 !!
+ *    - it looks like put_framebuffer is quite inefficient: in single fileview mode the latency drops by 66% ...
  *
  *  movements:
  *  - implement easymotion
