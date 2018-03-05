@@ -690,7 +690,7 @@ module Segment = struct
 end
 
 
-type linebreak = Clip | Overflow
+type linebreak = Clip | Overflow (* TODO: consider putting the linebreaking offset here ? *)
 
 
 module Line = struct
@@ -1058,9 +1058,9 @@ module Framebuffer : sig
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
+  val get_cursor        : t -> v2
   val put_line          : t -> int -> int -> int -> Line.t -> unit
-  (* TODO: add continuation offset *)
-  val put_framebuffer : t -> rect -> t -> linebreak -> bool -> unit
+  val put_framebuffer   : t -> rect -> int -> t -> linebreak -> bool -> unit
 
 end = struct
 
@@ -1186,11 +1186,14 @@ end = struct
       let len = bottomright.x - topleft.x in
       Array.fill t.fg_colors offset len fg ;
       Array.fill t.bg_colors offset len bg ;
-      update_line_end t y 0 bottomright.x
+      update_line_end t y topleft.x bottomright.x
     done
 
   let put_cursor t cursor =
     t.cursor <- cursor
+
+  let get_cursor t =
+    t.cursor
 
   let to_offset window x y =
     assert (x <= window.x) ;
@@ -1236,13 +1239,13 @@ end = struct
    * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
    * wrapped to the next line in 'dst'.
    * Copy cursor in 'dst' if 'copy_cursor' is true. *)
-  let put_framebuffer dst dst_rect src linebreaking copy_cursor =
+  let put_framebuffer dst dst_rect linebreaking_offset src linebreaking copy_cursor =
     assert_v2_inside dst.window dst_rect.topleft ;
     assert_v2_inside dst.window dst_rect.bottomright ;
     assert_that (src.window.y >= dst_rect.bottomright.y - dst_rect.topleft.y) ;
 
     let w_dst = dst_rect.bottomright.x - dst_rect.topleft.x in
-    let x_dst = dst_rect.topleft.x in
+    let x_dst = ref dst_rect.topleft.x in
     let y_dst = ref dst_rect.topleft.y in
 
     let x_src = ref 0 in
@@ -1250,7 +1253,7 @@ end = struct
     let x_src_stop = ref 0 in
 
     while !y_dst < dst_rect.bottomright.y do
-      let o_dst = to_offset dst.window x_dst !y_dst in
+      let o_dst = to_offset dst.window !x_dst !y_dst in
       let o_src = to_offset src.window !x_src !y_src in
 
       if 0 = !x_src then
@@ -1268,12 +1271,14 @@ end = struct
         dst.cursor <- mk_v2 x_dst_space y_dst_space
       ) ;
 
-      incr y_dst ;
+      x_dst := dst_rect.topleft.x + linebreaking_offset ;
       x_src += w_dst ;
-      if linebreaking = Clip || !x_src >= !x_src_stop then (
+      incr y_dst ;
+      if linebreaking = Clip || linebreaking = Overflow && !x_src >= !x_src_stop then (
+        x_dst := dst_rect.topleft.x ;
         x_src := 0 ;
-        incr y_src ;
-      )
+        incr y_src
+      ) ;
     done
 end
 
@@ -1292,6 +1297,7 @@ module Screen : sig
   val put_line      : t -> int -> int -> int -> Line.t -> unit
   val put_line2     : t -> int -> Line.t -> unit
   val put_cursor    : t -> v2 -> unit
+  val get_cursor    : t -> v2
   val put_framebuffer : t -> Framebuffer.t -> linebreak -> bool -> unit
 
 end = struct
@@ -1363,11 +1369,16 @@ end = struct
   let put_cursor screen pos =
     Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
 
+  let get_cursor screen =
+    Framebuffer.get_cursor screen.frame_buffer
+
+  let put_framebuffer_linebreaking_offset = 6 (* CLEANUP that hack *)
+
   let put_framebuffer screen =
     Framebuffer.put_framebuffer screen.frame_buffer {
       topleft     = screen.screen_offset ;
       bottomright = screen.screen_offset <+> screen.size ;
-    }
+    } put_framebuffer_linebreaking_offset
 end
 
 
@@ -2280,7 +2291,9 @@ end = struct
       Slice.init_slice 1 (get_token_box t)
 
   let framebuffer = Framebuffer.init_framebuffer (mk_v2 1000 500)
-  let frame_default_line = Line.of_string "~"
+
+  let frame_default_line      = Line.of_string "~  "
+  let frame_continuation_line = Line.of_string "..."
 
   (* PERF: hoist in fileview struct *)
   let mk_linesinfo t screen_size =
@@ -2303,6 +2316,12 @@ end = struct
     let { text_size ; line_number } = linesinfo in
     let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
     let x_scrolling = max 0 (t.cursor.x - x_last_index) in
+
+    (* Continuation dots for overflow mode *)
+    if t.linebreaking = Overflow then
+      for y = 0 to linesinfo.text_size.y do
+        Screen.put_line screen 0 y 3 frame_continuation_line
+      done ;
 
     (* Text area *)
     let x_max = text_size.x in
@@ -2330,7 +2349,7 @@ end = struct
 
     (* No-text area *)
     for y = linesinfo.text_stop_y to linesinfo.text_size.y do
-      Framebuffer.put_line framebuffer 0 y 1 frame_default_line
+      Framebuffer.put_line framebuffer 0 y 3 frame_default_line
     done ;
     Framebuffer.put_color_rect
       framebuffer
@@ -2342,16 +2361,8 @@ end = struct
     Framebuffer.put_cursor framebuffer cursor ;
     Framebuffer.put_color_rect
       framebuffer
-      Config.default.colors.cursor_line
-      (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
-    Framebuffer.put_color_rect
-      framebuffer
       Config.default.colors.string
-      (mk_rect 0 cursor.y 6 cursor.y) ;
-    Framebuffer.put_color_rect
-      framebuffer
-      Config.default.colors.cursor_line
-      (mk_rect 6 cursor.y x_last_index cursor.y)
+      (mk_rect 0 cursor.y 6 cursor.y)
 
   let put_border_frame t screen linesinfo is_focused =
     Screen.put_line screen 0 0 10000 (Line.of_blocks [
@@ -2359,6 +2370,16 @@ end = struct
       Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
       Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
     ]) ;
+    let size = Screen.get_size screen in
+    let { x ; y } = Screen.get_cursor screen in
+    Screen.put_color_rect
+      screen
+      Config.default.colors.cursor_line
+      (mk_rect 6 y size.x y) ;
+    Screen.put_color_rect
+      screen
+      Config.default.colors.cursor_line
+      (mk_rect x 0 (x + 1) linesinfo.text_size.y) ;
     (* CLEANUP/PERF: migrate to raw rectangles ! *)
     Screen.put_colorblock screen
       (if is_focused
@@ -2385,9 +2406,9 @@ end = struct
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
     let textscreen = mk_text_subscreen screen in
     Framebuffer.clear framebuffer ;
-    put_border_frame t screen linesinfo is_focused ;
     fill_framebuffer t textscreen linesinfo ;
-    Screen.put_framebuffer textscreen framebuffer t.linebreaking is_focused
+    Screen.put_framebuffer textscreen framebuffer t.linebreaking is_focused ;
+    put_border_frame t screen linesinfo is_focused
 
 end
 
@@ -2977,6 +2998,18 @@ let () =
 
 
 (* next TODOs:
+ *
+ * rendering:
+ *  - fix bugs with new methods
+ *    - when scrolling in Clip mode, the cursor gets to the beginning of next line
+ *    - line wrapping in Overflow mode only prints 1 char on the second line !
+ *    - cursor position is incorrect when some lines have wrapped above the cursor
+ *    - cursor lines moves in all open file views !
+ *    - crash when changing focus to another view !
+ *  - remove Area code
+ *  - general cleanup, renaming of variables, solidification
+ *  - finish wrapping all Array function for better error handling !
+ *  - need to work on memory and cpu perfs. The frame latency went up by x15 ~ x20 !!
  *
  *  movements:
  *  - implement easymotion
