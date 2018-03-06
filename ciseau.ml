@@ -958,9 +958,8 @@ module Framebuffer : sig
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
-  val get_cursor        : t -> v2
   val put_line          : t -> int -> int -> int -> Line.t -> unit
-  val put_framebuffer   : t -> rect -> int -> t -> linebreak -> bool -> unit
+  val put_framebuffer   : t -> rect -> int -> t -> linebreak -> v2
 
 end = struct
 
@@ -1059,10 +1058,11 @@ end = struct
 
   let clear t =
     Bytes.fill t.text 0 t.len Default.text ;
-    Array.fill t.line_lengths 0 t.window.x 0 ;
+    (* why Array.fill is so slow ?!? *)
     Array.fill t.fg_colors 0 t.len Default.fg ;
     Array.fill t.bg_colors 0 t.len Default.bg ;
-    Array.fill t.z_index 0 t.len Default.z
+    Array.fill t.z_index 0 t.len Default.z ;
+    Array.fill t.line_lengths 0 t.window.x 0
 
   let render frame_buffer render_buffer =
     Bytevector.reset render_buffer ;
@@ -1086,14 +1086,11 @@ end = struct
       let len = bottomright.x - topleft.x in
       Array.fill t.fg_colors offset len fg ;
       Array.fill t.bg_colors offset len bg ;
-      update_line_end t y topleft.x bottomright.x
+      update_line_end t topleft.x y bottomright.x
     done
 
   let put_cursor t cursor =
     t.cursor <- cursor
-
-  let get_cursor t =
-    t.cursor
 
   let to_offset window x y =
     assert (x <= window.x) ;
@@ -1139,7 +1136,7 @@ end = struct
    * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
    * wrapped to the next line in 'dst'.
    * Copy cursor in 'dst' if 'copy_cursor' is true. *)
-  let put_framebuffer dst dst_rect linebreaking_offset src linebreaking copy_cursor =
+  let put_framebuffer dst dst_rect linebreaking_offset src linebreaking =
     assert_v2_inside dst.window dst_rect.topleft ;
     assert_v2_inside dst.window dst_rect.bottomright ;
     assert_that (src.window.y >= dst_rect.bottomright.y - dst_rect.topleft.y) ;
@@ -1151,6 +1148,8 @@ end = struct
     let x_src = ref 0 in
     let y_src = ref 0 in
     let x_src_stop = ref 0 in
+
+    let cursor_out = ref v2_zero in
 
     while !y_dst < dst_rect.bottomright.y do
       let o_dst = to_offset dst.window !x_dst !y_dst in
@@ -1165,10 +1164,10 @@ end = struct
       Array.blit src.fg_colors o_src dst.fg_colors o_dst len ;
       Array.blit src.bg_colors o_src dst.bg_colors o_dst len ;
 
-      if copy_cursor && src.cursor.y = !y_src && 0 = !x_src then (
+      if src.cursor.y = !y_src && 0 = !x_src then (
         let x_dst_space = dst_rect.topleft.x + (src.cursor.x mod w_dst) in
         let y_dst_space = dst_rect.topleft.y + (!y_src + src.cursor.x / w_dst) in
-        dst.cursor <- mk_v2 x_dst_space y_dst_space
+        cursor_out := mk_v2 x_dst_space y_dst_space
       ) ;
 
       x_dst := dst_rect.topleft.x + linebreaking_offset ;
@@ -1179,7 +1178,10 @@ end = struct
         x_src := 0 ;
         incr y_src
       ) ;
-    done
+    done ;
+
+    !cursor_out
+
 end
 
 
@@ -1196,8 +1198,7 @@ module Screen : sig
   val put_line      : t -> int -> int -> int -> Line.t -> unit
   val put_line2     : t -> int -> Line.t -> unit
   val put_cursor    : t -> v2 -> unit
-  val get_cursor    : t -> v2
-  val put_framebuffer : t -> Framebuffer.t -> linebreak -> bool -> unit
+  val put_framebuffer : t -> Framebuffer.t -> linebreak -> v2
 
 end = struct
 
@@ -1262,9 +1263,6 @@ end = struct
 
   let put_cursor screen pos =
     Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
-
-  let get_cursor screen =
-    Framebuffer.get_cursor screen.frame_buffer
 
   let put_framebuffer_linebreaking_offset = 6 (* CLEANUP that hack *)
 
@@ -2174,6 +2172,7 @@ end = struct
   let compute_text_colorblocks t =
       Slice.init_slice 1 (get_token_box t)
 
+  (* PERF: resize dynamically and fit to term size ! *)
   let framebuffer = Framebuffer.init_framebuffer (mk_v2 1000 500)
 
   let frame_default_line      = Line.of_string "~  "
@@ -2248,22 +2247,21 @@ end = struct
       Config.default.colors.string
       (mk_rect 0 cursor.y 6 cursor.y)
 
-  let put_border_frame t screen linesinfo is_focused =
+  let put_border_frame t screen linesinfo is_focused cursor =
     Screen.put_line screen 0 0 10000 (Line.of_blocks [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
       Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
       Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
     ]) ;
     let size = Screen.get_size screen in
-    let { x ; y } = Screen.get_cursor screen in
     Screen.put_color_rect
       screen
       Config.default.colors.cursor_line
-      (mk_rect 6 y size.x y) ;
+      (mk_rect 6 cursor.y size.x cursor.y) ;
     Screen.put_color_rect
       screen
       Config.default.colors.cursor_line
-      (mk_rect x 0 (x + 1) linesinfo.text_size.y) ;
+      (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
     (* header *)
     Screen.put_color_rect
       screen
@@ -2275,7 +2273,9 @@ end = struct
     Screen.put_color_rect
       screen
       Config.default.colors.border
-      (mk_rect 0 1 1 linesinfo.text_size.y)
+      (mk_rect 0 1 1 linesinfo.text_size.y) ;
+    if is_focused then
+      Screen.put_cursor screen cursor (* BUG: do this on textscreen ! *)
 
   let mk_text_subscreen screen =
     Screen.mk_subscreen screen {
@@ -2293,10 +2293,10 @@ end = struct
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
     let textscreen = mk_text_subscreen screen in
-    Framebuffer.clear framebuffer ;
+    Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
     fill_framebuffer t textscreen linesinfo ;
-    Screen.put_framebuffer textscreen framebuffer t.linebreaking is_focused ;
-    put_border_frame t screen linesinfo is_focused
+    let cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
+    put_border_frame t screen linesinfo is_focused cursor
 
 end
 
@@ -2888,6 +2888,7 @@ let () =
  *  - finish wrapping all Array function for better error handling !
  *  - need to work on memory and cpu perfs. The frame latency went up by x15 ~ x20 !!
  *    - it looks like put_framebuffer is quite inefficient: in single fileview mode the latency drops by 66% ...
+ *      - turns out that Framebuffer.clear is very slow !!
  *
  *  movements:
  *  - implement easymotion
