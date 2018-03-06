@@ -66,6 +66,9 @@ module Error = struct
   let e msg =
     E (msg, get_backtrace ())
 
+  let wrap e =
+    E (to_string e, get_backtrace ())
+
   let _ =
     record_backtrace true ;
 
@@ -123,6 +126,17 @@ let array_set a i x =
     then raise (Error.e (Printf.sprintf "Array.set len=%d at %d out of bound" (alen a) i)) ;
   Array.set a i x
 
+let array_fill dst dst_o len value =
+  try
+    Array.fill dst dst_o len value
+  with
+    e -> raise (Error.wrap e)
+
+let array_blit src src_o dst dst_o len =
+  try
+    Array.blit src src_o dst dst_o len
+  with
+    e -> raise (Error.wrap e)
 
 module Slice = struct
 
@@ -245,7 +259,7 @@ module Slice = struct
     let len = min (len dst_slice) (len src_slice) in
     let src_offset = shift src_slice.range 0 in
     let dst_offset = shift dst_slice.range 0 in
-    Array.blit src_slice.data src_offset dst_slice.data dst_offset len
+    array_blit src_slice.data src_offset dst_slice.data dst_offset len
 
   let append elem { data ; range = (s, e) } =
     let len = alen data in
@@ -254,7 +268,7 @@ module Slice = struct
         then data
         else
           let new_data = Array.make (2 * len) data.(0) in
-          Array.blit data 0 new_data 0 len ;
+          array_blit data 0 new_data 0 len ;
           new_data
     in
       array_set data' e elem ;
@@ -1059,10 +1073,12 @@ end = struct
   let clear t =
     Bytes.fill t.text 0 t.len Default.text ;
     (* why Array.fill is so slow ?!? *)
-    Array.fill t.fg_colors 0 t.len Default.fg ;
-    Array.fill t.bg_colors 0 t.len Default.bg ;
-    Array.fill t.z_index 0 t.len Default.z ;
-    Array.fill t.line_lengths 0 t.window.x 0
+    (*
+    array_fill t.fg_colors 0 t.len Default.fg ;
+    array_fill t.bg_colors 0 t.len Default.bg ;
+    array_fill t.z_index 0 t.len Default.z ;
+    *)
+    array_fill t.line_lengths 0 t.window.x 0
 
   let render frame_buffer render_buffer =
     Bytevector.reset render_buffer ;
@@ -1084,8 +1100,8 @@ end = struct
     for y = topleft.y to bottomright.y do
       let offset = y * t.window.x + topleft.x in
       let len = bottomright.x - topleft.x in
-      Array.fill t.fg_colors offset len fg ;
-      Array.fill t.bg_colors offset len bg ;
+      array_fill t.fg_colors offset len fg ;
+      array_fill t.bg_colors offset len bg ;
       update_line_end t topleft.x y bottomright.x
     done
 
@@ -1161,8 +1177,8 @@ end = struct
       let len = min w_dst !x_src_stop in
 
       Bytes.blit src.text o_src dst.text o_dst len ;
-      Array.blit src.fg_colors o_src dst.fg_colors o_dst len ;
-      Array.blit src.bg_colors o_src dst.bg_colors o_dst len ;
+      array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
+      array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
 
       if src.cursor.y = !y_src && 0 = !x_src then (
         let x_dst_space = dst_rect.topleft.x + (src.cursor.x mod w_dst) in
@@ -2885,10 +2901,12 @@ let () =
  *    - cursor lines moves in all open file views !
  *    - crash when changing focus to another view !
  *  - general cleanup, renaming of variables, solidification
- *  - finish wrapping all Array function for better error handling !
  *  - need to work on memory and cpu perfs. The frame latency went up by x15 ~ x20 !!
  *    - it looks like put_framebuffer is quite inefficient: in single fileview mode the latency drops by 66% ...
- *      - turns out that Framebuffer.clear is very slow !!
+ *      - turns out that Framebuffer.clear is very slow because
+ *        - Array.fill do a one by one set
+ *        - Array.blit only do memmove for array of floats or ints,
+ *          but arrays of pointers from old gen to old or new degenrates to one by one loop ...
  *
  *  movements:
  *  - implement easymotion
