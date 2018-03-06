@@ -321,7 +321,7 @@ module Vec2 = struct
    * and first v2 argument as bottomright corner. *)
   let assert_v2_inside { x = xlim ; y = ylim } { x ; y } =
     if (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
-      then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d" x y xlim ylim))
+      then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" x y xlim ylim))
 end
 
 
@@ -1134,6 +1134,8 @@ end = struct
       array_set t.line_lengths y new_end
 
   let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
+    assert_v2_inside t.window topleft ;
+    assert_v2_inside t.window bottomright ;
     for y = topleft.y to bottomright.y do
       let offset = y * t.window.x + topleft.x in
       let len = bottomright.x - topleft.x in
@@ -1292,6 +1294,8 @@ end = struct
     }
 
   let put_color_rect screen colors { topleft ; bottomright } =
+    assert_v2_inside screen.size topleft ;
+    assert_v2_inside screen.size bottomright ;
     Framebuffer.put_color_rect
       screen.frame_buffer
       colors
@@ -1319,11 +1323,16 @@ end = struct
 
   let put_framebuffer_linebreaking_offset = 6 (* CLEANUP that hack *)
 
-  let put_framebuffer screen =
-    Framebuffer.put_framebuffer screen.frame_buffer {
+  let put_framebuffer screen src linebreaking =
+    let { x ; y } = Framebuffer.put_framebuffer screen.frame_buffer {
+      (* CLEANUP: screen and framebuffer should have compatible rectangle conventions ? *)
       topleft     = screen.screen_offset ;
       bottomright = screen.screen_offset <+> screen.size ;
-    } put_framebuffer_linebreaking_offset
+    } put_framebuffer_linebreaking_offset src linebreaking
+    in {
+      x = x - screen.screen_offset.x ;
+      y = y - screen.screen_offset.y ;
+    }
 end
 
 
@@ -2300,22 +2309,14 @@ end = struct
       Config.default.colors.string
       (mk_rect 0 cursor.y 6 cursor.y)
 
-  let put_border_frame t screen linesinfo is_focused cursor =
+  let put_border_frame t screen linesinfo is_focused =
     Screen.put_line screen 0 0 10000 (Line.of_blocks [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
       Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
       Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
     ]) ;
-    let size = Screen.get_size screen in
-    Screen.put_color_rect
-      screen
-      Config.default.colors.cursor_line
-      (mk_rect 6 cursor.y size.x cursor.y) ;
-    Screen.put_color_rect
-      screen
-      Config.default.colors.cursor_line
-      (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
     (* header *)
+    let size = Screen.get_size screen in
     Screen.put_color_rect
       screen
       (if is_focused
@@ -2326,9 +2327,20 @@ end = struct
     Screen.put_color_rect
       screen
       Config.default.colors.border
-      (mk_rect 0 1 1 linesinfo.text_size.y) ;
+      (mk_rect 0 1 1 linesinfo.text_size.y)
+
+  let put_cursor screen linesinfo is_focused cursor =
+    let size = Screen.get_size screen in
+    Screen.put_color_rect
+      screen
+      Config.default.colors.cursor_line
+      (mk_rect 6 cursor.y size.x cursor.y) ;
+    Screen.put_color_rect
+      screen
+      Config.default.colors.cursor_line
+      (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
     if is_focused then
-      Screen.put_cursor screen cursor (* BUG: do this on textscreen ! *)
+      Screen.put_cursor screen cursor
 
   let mk_text_subscreen screen =
     Screen.mk_subscreen screen {
@@ -2346,10 +2358,11 @@ end = struct
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let linesinfo = mk_linesinfo t (Screen.get_size screen) in
     let textscreen = mk_text_subscreen screen in
+    put_border_frame t screen linesinfo is_focused ;
     Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
     fill_framebuffer t textscreen linesinfo ;
     let cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-    put_border_frame t screen linesinfo is_focused cursor
+    put_cursor textscreen linesinfo is_focused cursor
 
 end
 
@@ -2935,7 +2948,6 @@ let () =
  *    - when scrolling in Clip mode, the cursor gets to the beginning of next line
  *    - line wrapping in Overflow mode only prints 1 char on the second line !
  *    - cursor position is incorrect when some lines have wrapped above the cursor
- *    - crash when changing focus to another view !
  *  - general cleanup, renaming of variables, solidification
  *  - need to work on memory pressure with new put_framebuffer.
  *
