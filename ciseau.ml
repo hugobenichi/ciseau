@@ -906,6 +906,30 @@ module Term = struct
 
     let color_control_string_table : (Color.color_cell, string) Hashtbl.t = Hashtbl.create 1000
 
+    let color_index_table : (Color.t, int) Hashtbl.t = Hashtbl.create 1000
+
+    (* CLEANUP: not thread safe, add asserts ! *)
+    let color_table = Array.make 1000 Color.black
+    let color_table_index = ref 0
+
+    let color_to_index color =
+      match Hashtbl.find color_index_table color with
+      | idx -> idx
+      | exception Not_found ->
+          let idx = !color_table_index in
+          Hashtbl.add color_index_table color idx ;
+          incr color_table_index ;
+          array_set color_table idx color ;
+          idx
+
+    let index_to_color idx =
+      array_get color_table idx
+
+    (* CLEANUP these constants somewhere *)
+    let white_index     = color_to_index Color.white
+    let darkgray_index  = color_to_index Config.darkgray
+    let black_index     = color_to_index Color.black
+
     let color_control_string colors =
       match Hashtbl.find color_control_string_table colors with
       | control_string -> control_string
@@ -987,8 +1011,8 @@ end = struct
   type t = {
     text        : Bytes.t ;
     line_lengths : int array ;
-    fg_colors   : Color.t array ;
-    bg_colors   : Color.t array ;
+    fg_colors   : int array ;
+    bg_colors   : int array ;
     z_index     : int array ;
     len         : int ;
     window      : v2 ;
@@ -999,8 +1023,8 @@ end = struct
   module Rendering = struct
     let colors_at t offset =
       let open Color in {
-        fg = t.fg_colors.(offset) ;
-        bg = t.bg_colors.(offset) ;
+        fg = t.fg_colors.(offset) |> Term.Control.index_to_color ;
+        bg = t.bg_colors.(offset) |> Term.Control.index_to_color ;
       }
 
     let colors_equal t i j =
@@ -1062,23 +1086,36 @@ end = struct
     in {
       text        = Bytes.make len Default.text ;
       line_lengths = Array.make vec2.x 0 ; (* CLEANUP: rename me *)
-      fg_colors   = Array.make len Default.fg ;
-      bg_colors   = Array.make len Default.bg ;
+      fg_colors   = Array.make len Term.Control.white_index ;
+      bg_colors   = Array.make len Term.Control.darkgray_index ;
       z_index     = Array.make len Default.z ;
       len         = len ;
       window      = vec2 ;
       cursor      = v2_zero ;
     }
 
+  let default_fg_colors   = Array.make 1000000 Term.Control.white_index
+  let default_bg_colors   = Array.make 1000000 Term.Control.darkgray_index
+  let default_line_length = Array.make 1000 0
+
+  let fill_fg_color t offset len color =
+    color
+      |> Term.Control.color_to_index
+      |> array_fill t.fg_colors offset len
+
+  let fill_bg_color t offset len color =
+    color
+      |> Term.Control.color_to_index
+      |> array_fill t.bg_colors offset len
+
   let clear t =
     Bytes.fill t.text 0 t.len Default.text ;
-    (* why Array.fill is so slow ?!? *)
+    array_blit default_fg_colors 0 t.fg_colors 0 t.len ;
+    array_blit default_bg_colors 0 t.bg_colors 0 t.len ;
     (*
-    array_fill t.fg_colors 0 t.len Default.fg ;
-    array_fill t.bg_colors 0 t.len Default.bg ;
     array_fill t.z_index 0 t.len Default.z ;
     *)
-    array_fill t.line_lengths 0 t.window.x 0
+    array_blit default_line_length 0 t.line_lengths 0 t.window.y
 
   let render frame_buffer render_buffer =
     Bytevector.reset render_buffer ;
@@ -1100,8 +1137,8 @@ end = struct
     for y = topleft.y to bottomright.y do
       let offset = y * t.window.x + topleft.x in
       let len = bottomright.x - topleft.x in
-      array_fill t.fg_colors offset len fg ;
-      array_fill t.bg_colors offset len bg ;
+      fill_fg_color t offset len fg ;
+      fill_bg_color t offset len bg ;
       update_line_end t topleft.x y bottomright.x
     done
 
@@ -2189,7 +2226,7 @@ end = struct
       Slice.init_slice 1 (get_token_box t)
 
   (* PERF: resize dynamically and fit to term size ! *)
-  let framebuffer = Framebuffer.init_framebuffer (mk_v2 1000 500)
+  let framebuffer = Framebuffer.init_framebuffer (mk_v2 300 100)
 
   let frame_default_line      = Line.of_string "~  "
   let frame_continuation_line = Line.of_string "..."
@@ -2898,15 +2935,9 @@ let () =
  *    - when scrolling in Clip mode, the cursor gets to the beginning of next line
  *    - line wrapping in Overflow mode only prints 1 char on the second line !
  *    - cursor position is incorrect when some lines have wrapped above the cursor
- *    - cursor lines moves in all open file views !
  *    - crash when changing focus to another view !
  *  - general cleanup, renaming of variables, solidification
- *  - need to work on memory and cpu perfs. The frame latency went up by x15 ~ x20 !!
- *    - it looks like put_framebuffer is quite inefficient: in single fileview mode the latency drops by 66% ...
- *      - turns out that Framebuffer.clear is very slow because
- *        - Array.fill do a one by one set
- *        - Array.blit only do memmove for array of floats or ints,
- *          but arrays of pointers from old gen to old or new degenrates to one by one loop ...
+ *  - need to work on memory pressure with new put_framebuffer.
  *
  *  movements:
  *  - implement easymotion
