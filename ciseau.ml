@@ -141,16 +141,23 @@ let array_blit src src_o dst dst_o len =
   with
     e -> raise (Error.wrap e)
 
-
 let bytes_blit src src_o dst dst_o len =
   try
     Bytes.blit src src_o dst dst_o len
   with
-    e ->
-      let m =
-        Printf.sprintf "invalid blit: %d bytes from [%d,%d] to [%d,%d]" len src_o (blen src) dst_o (blen dst)
-      in
-      raise (Error.e m)
+    e ->  Printf.sprintf "invalid blit: %d bytes from [%d,%d] to [%d,%d]"
+            len src_o (blen src) dst_o (blen dst)
+            |> Error.e
+            |> raise
+
+let bytes_blit_string src src_o dst dst_o len =
+  try
+    Bytes.blit_string src src_o dst dst_o len
+  with
+    e ->  Printf.sprintf "invalid blit_string: %d bytes from [%d,%d] to [%d,%d]"
+            len src_o (slen src) dst_o (blen dst)
+            |> Error.e
+            |> raise
 
 
 module Slice = struct
@@ -723,13 +730,12 @@ type linebreak = Clip | Overflow (* TODO: consider putting the linebreaking offs
 
 
 module Line = struct
-  type t = String of string | Block of Block.t | Blocks of Block.t list
+  type t = String of string | Block of Block.t
 
   let zero_line = String ""
 
   let of_string s   = String s
   let of_block b    = Block b
-  let of_blocks bs  = Blocks bs
 end
 
 
@@ -743,15 +749,6 @@ module Colorblock = struct
   let mk_colorblock rect colors = {
     rect    = rect ;
     colors  = colors;
-  }
-end
-
-
-module Textview = struct
-  type t = {
-    lines         : Line.t Slice.t ;
-    colors        : Colorblock.t Slice.t ;
-    cursor        : v2 option ;
   }
 end
 
@@ -883,11 +880,11 @@ end = struct
 
   let append bvec s =
     let len = slen s in
-    Bytes.blit_string s 0 bvec.bytes bvec.cursor len ;
+    bytes_blit_string s 0 bvec.bytes bvec.cursor len ;
     bvec.cursor <- bvec.cursor + len
 
   let append_bytes bvec src offset len =
-    Bytes.blit src offset bvec.bytes bvec.cursor len ;
+    bytes_blit src offset bvec.bytes bvec.cursor len ;
     bvec.cursor <- bvec.cursor + len
 
   let write fd bvec =
@@ -1173,40 +1170,30 @@ end = struct
     assert (y <= window.y) ;
     y * window.x + x
 
-  let put_string t maxblitlen x y text =
+  let put_string t len x y text =
     let offset = to_offset t.window x y in
-    let blitlen = min maxblitlen (slen text) in
+    let blitlen = min len (slen text) in
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - offset)) ;
     (* BUG: this should only set that array if it is a higher number *)
     update_line_end t x y blitlen ;
-    Bytes.blit_string text 0 t.text offset blitlen
+    bytes_blit_string text 0 t.text offset blitlen
 
   let put_block
-      t maxblitlen x y
+      t len x y
       { Block.text ; Block.offset = block_offset ; Block.len = block_len } =
     let bytes_offset = to_offset t.window x y in
-    let blitlen = min maxblitlen block_len in
+    let blitlen = min len block_len in
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - bytes_offset)) ;
     update_line_end t x y blitlen ;
-    Bytes.blit_string text block_offset t.text bytes_offset blitlen
+    bytes_blit_string text block_offset t.text bytes_offset blitlen
 
-  let rec put_line framebuffer x y maxblitlen =
+  let rec put_line framebuffer x y len =
     let open Line in
     function
-    | String s        ->
-        put_string framebuffer maxblitlen x y s
-    | Block b         ->
-        put_block framebuffer maxblitlen x y b
-    | Blocks []       -> ()
-    | Blocks (b :: t) ->
-        put_block framebuffer maxblitlen x y b ;
-        let blitlen = min maxblitlen b.Block.len in
-        let x' = x + blitlen in
-        let maxblitlen' = maxblitlen - blitlen in
-        if blitlen = b.Block.len then
-          put_line framebuffer x' y maxblitlen' (Blocks t)
+      | String s  -> put_string framebuffer len x y s
+      | Block b   -> put_block framebuffer len x y b
 
   (* Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
    * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
@@ -2131,7 +2118,6 @@ end = struct
 
   open Filebuffer
 
-  type view       = Textview.t
   type filebuffer = Filebuffer.t
   type screen     = Screen.t
 
@@ -2171,7 +2157,7 @@ end = struct
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Overflow ;
+    linebreaking  = Clip ;
     mov_mode      = Movement.Chars ;
   }
 
@@ -2331,7 +2317,7 @@ end = struct
       Config.default.colors.no_text
       (mk_rect 0 0 1 (linesinfo.text_size.y - linesinfo.text_stop_y)) ;
 
-    (* Cursor *)
+    (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
     let cursor = mk_v2 (6 + t.cursor.x - x_scrolling_offset) (t.cursor.y - t.view_start) in
     Framebuffer.put_cursor framebuffer cursor ;
     Framebuffer.put_color_rect
@@ -2340,12 +2326,12 @@ end = struct
       (mk_rect 0 cursor.y 6 cursor.y)
 
   let put_border_frame t screen linesinfo is_focused =
-    (* CLEANUP: remove blocks usage and eliminates Line.Blocks *)
-    Screen.put_line screen 0 0 10000 (Line.of_blocks [
-      Block.mk_block t.filebuffer.Filebuffer.header  ;
-      Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
-      Block.mk_block ("  mode=" ^ Movement.mode_to_string t.mov_mode) ;
-    ]) ;
+    Screen.put_line screen 0 0 10000 (Line.of_string
+      (Printf.sprintf
+        "%s %d,%d  mode=%s"
+        t.filebuffer.Filebuffer.header
+        t.cursor.y t.cursor.x
+        (Movement.mode_to_string t.mov_mode))) ;
     (* header *)
     let size = Screen.get_size screen in
     Screen.put_color_rect
