@@ -1,11 +1,14 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
+(* bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux *)
+(* bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux *)
+(* bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux *)
 
 (* Debugging flags *)
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
-let kDEBUG        = true
+let kDEBUG        = false
 
 
 module CommonCombinators = struct
@@ -137,6 +140,18 @@ let array_blit src src_o dst dst_o len =
     Array.blit src src_o dst dst_o len
   with
     e -> raise (Error.wrap e)
+
+
+let bytes_blit src src_o dst dst_o len =
+  try
+    Bytes.blit src src_o dst dst_o len
+  with
+    e ->
+      let m =
+        Printf.sprintf "invalid blit: %d bytes from [%d,%d] to [%d,%d]" len src_o (blen src) dst_o (blen dst)
+      in
+      raise (Error.e m)
+
 
 module Slice = struct
 
@@ -996,6 +1011,12 @@ module Framebuffer : sig
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
+  (* CLEANUP: consider alternative api to remove the need to have a Line.t
+   * for instance:
+      val put_line : t -> int (* dst_x *) -> int (* dst_y *)
+                    -> string -> int (* src_offset *) -> int (* len *)
+                    -> unit
+   *)
   val put_line          : t -> int -> int -> int -> Line.t -> unit
   val put_framebuffer   : t -> rect -> int -> t -> linebreak -> v2
 
@@ -1213,26 +1234,48 @@ end = struct
       if 0 = !x_src then
         x_src_stop := array_get src.line_lengths !y_src ;
 
-      let len = min w_dst !x_src_stop in
+      let len = w_dst in
 
-      Bytes.blit src.text o_src dst.text o_dst len ;
+      Printf.fprintf logs "cursor:%d,%d src:%d,%d dst:%d,%d stop:%d len:%d\n"
+        src.cursor.x src.cursor.y !x_src !y_src !x_dst !y_dst !x_src_stop len ;
+      flush logs ;
+
+      bytes_blit src.text o_src dst.text o_dst len ;
       array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
       array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
 
+      (*
       if src.cursor.y = !y_src && 0 = !x_src then (
         let x_dst_space = dst_rect.topleft.x + (src.cursor.x mod w_dst) in
-        let y_dst_space = dst_rect.topleft.y + (!y_src + src.cursor.x / w_dst) in
+        let y_dst_space = dst_rect.topleft.y + !y_src + src.cursor.x / w_dst in
         cursor_out := mk_v2 x_dst_space y_dst_space
       ) ;
+      *)
 
-      x_dst := dst_rect.topleft.x + linebreaking_offset ;
-      x_src += w_dst ;
-      incr y_dst ;
-      if linebreaking = Clip || linebreaking = Overflow && !x_src >= !x_src_stop then (
-        x_dst := dst_rect.topleft.x ;
-        x_src := 0 ;
-        incr y_src
+      (* Works in Overflow mode *)
+      if src.cursor.y = !y_src && !x_src <= src.cursor.x && src.cursor.x < !x_src + w_dst then (
+        let x_dst_space = !x_dst + src.cursor.x mod w_dst in
+        let y_dst_space = !y_dst in
+        Printf.fprintf logs "cursor_out:%d,%d\n" x_dst_space y_dst_space ;
+        flush logs ;
+        cursor_out := mk_v2 x_dst_space y_dst_space ;
+        assert_v2_inside dst.window !cursor_out
       ) ;
+
+      incr y_dst;
+      match linebreaking with
+        | Clip -> (
+          incr y_src
+        )
+        | Overflow -> (
+          x_src += w_dst ;
+          x_dst := dst_rect.topleft.x + linebreaking_offset ;
+          if !x_src_stop < !x_src then (
+            x_src := 0 ;
+            x_dst := dst_rect.topleft.x ;
+            incr y_src
+          )
+        )
     done ;
 
     !cursor_out
@@ -1599,8 +1642,6 @@ module BaseTokenFinder (T: TokenKind) : TokenFinder = struct
     in
       let start = find_token_start line i in
       let stop  = find_token_stop line start in
-      Printf.fprintf logs "TokenFinder.next in \"%s\":%d -> (%d,%d)\n" line i start stop ;
-      flush logs;
       if start = slen line
         then None
         else Some (Token.mk_tok start stop)
@@ -2130,7 +2171,7 @@ end = struct
     cursor        = v2_zero ;
     view_start    = 0 ;
     numbering     = CursorRelative ;
-    linebreaking  = Clip ;
+    linebreaking  = Overflow ;
     mov_mode      = Movement.Chars ;
   }
 
@@ -2159,18 +2200,6 @@ end = struct
     else t
 
   let apply_movement mov view_height t =
-    if kDEBUG then (
-      let msg =
-        Printf.sprintf"apply_movement before mode=%s mov=%s %d,%d\n"
-          (Movement.mode_to_string t.mov_mode)
-          (Movement.movement_to_string mov)
-          t.cursor.y t.cursor.x
-      in
-      output_string logs msg ;
-      flush logs ;
-      ()
-    ) ;
-
     let cursor' = Movement.compute_movement t.mov_mode mov t.filebuffer t.cursor in
 
     if kDEBUG then (
@@ -2181,11 +2210,8 @@ end = struct
           t.cursor.y t.cursor.x
           cursor'.y cursor'.x
       in
-      output_string logs msg ;
-      flush logs ;
       assert_that (cursor'.y >= 0) ~msg:msg ;
-      assert_that (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg ;
-      ()
+      assert_that (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg
     ) ;
 
     adjust_view view_height { t with cursor = cursor' }
@@ -2260,7 +2286,11 @@ end = struct
   let fill_framebuffer (t : t) screen linesinfo =
     let { text_size ; line_number } = linesinfo in
     let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
-    let x_scrolling = max 0 (t.cursor.x - x_last_index) in
+    let x_scrolling_offset =
+      if t.linebreaking = Clip
+        then max 0 (t.cursor.x - x_last_index)
+        else 0
+    in
 
     (* Continuation dots for overflow mode *)
     if t.linebreaking = Overflow then
@@ -2269,23 +2299,23 @@ end = struct
       done ;
 
     (* Text area *)
-    let x_max = text_size.x in
-    let y_max = linesinfo.text_stop_y - 1 in
-    for i = 0 to y_max do
+    for i = 0 to linesinfo.text_stop_y - 1 do
       let line_idx = i + t.view_start in
       let l = Slice.get t.filebuffer.buffer line_idx in
-      let x_len = (slen l) - x_scrolling in
+      let x_len = (slen l) - x_scrolling_offset in
       let b =
+        (* PERF: if x_scrolling_offset is zero, use Line.String instead *)
         if x_len < 1 then Line.zero_line else {
           Block.text = l ;
-          Block.offset = x_scrolling ;
-          Block.len = min x_len x_max ;
+          Block.offset = x_scrolling_offset ;
+          Block.len = x_len ;
         } |> Line.of_block
       in
       Framebuffer.put_line framebuffer 0 i 6 (line_number line_idx) ;
       Framebuffer.put_line framebuffer 6 i 1000 b ;
       linesinfo.last_y <- i
     done ;
+
     (* Text area color blocks *)
     Framebuffer.put_color_rect
       framebuffer
@@ -2302,7 +2332,7 @@ end = struct
       (mk_rect 0 0 1 (linesinfo.text_size.y - linesinfo.text_stop_y)) ;
 
     (* Cursor *)
-    let cursor = mk_v2 (6 + t.cursor.x - x_scrolling) (t.cursor.y - t.view_start) in
+    let cursor = mk_v2 (6 + t.cursor.x - x_scrolling_offset) (t.cursor.y - t.view_start) in
     Framebuffer.put_cursor framebuffer cursor ;
     Framebuffer.put_color_rect
       framebuffer
@@ -2310,6 +2340,7 @@ end = struct
       (mk_rect 0 cursor.y 6 cursor.y)
 
   let put_border_frame t screen linesinfo is_focused =
+    (* CLEANUP: remove blocks usage and eliminates Line.Blocks *)
     Screen.put_line screen 0 0 10000 (Line.of_blocks [
       Block.mk_block t.filebuffer.Filebuffer.header  ;
       Block.mk_block (Printf.sprintf "%d,%d" t.cursor.y t.cursor.x) ;
@@ -2638,7 +2669,7 @@ module Ciseau = struct
   let mk_tileset term_dim filebuffers =
     filebuffers
       |> Slice.map Fileview.init_fileview
-      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
+      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.zero
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
@@ -2945,9 +2976,11 @@ let () =
  *
  * rendering:
  *  - fix bugs with new methods
- *    - when scrolling in Clip mode, the cursor gets to the beginning of next line
- *    - line wrapping in Overflow mode only prints 1 char on the second line !
- *    - cursor position is incorrect when some lines have wrapped above the cursor
+ *    - cursor vanishes when scrolling on the right in Clip mode:
+ *      - fill_framebuffer/put_framebuffer incompatibilities ?
+ *    - in Overflow mode, the left border gets eaten by overflow !
+ *    - crash when resizing and the right edge goes over the cursor
+ *    - crashes when scrolling down due to cursor lines, only in non-Single view mode though
  *  - general cleanup, renaming of variables, solidification
  *  - need to work on memory pressure with new put_framebuffer.
  *
