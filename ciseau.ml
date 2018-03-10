@@ -2319,6 +2319,8 @@ end = struct
 
     (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
     let cursor = mk_v2 (6 + t.cursor.x - x_scrolling_offset) (t.cursor.y - t.view_start) in
+Printf.fprintf logs "fillframebuffer/put_cursor %d,%d (x_scrolling: %d, text_cursor: %d,%d)\n" cursor.x cursor.y x_scrolling_offset t.cursor.x t.cursor.y ;
+flush logs ;
     Framebuffer.put_cursor framebuffer cursor ;
     Framebuffer.put_color_rect
       framebuffer
@@ -2348,6 +2350,8 @@ end = struct
 
   let put_cursor screen linesinfo is_focused cursor =
     let size = Screen.get_size screen in
+    let offset = Screen.get_offset screen in
+    (*
     Screen.put_color_rect
       screen
       Config.default.colors.cursor_line
@@ -2356,8 +2360,12 @@ end = struct
       screen
       Config.default.colors.cursor_line
       (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
-    if is_focused then
+      *)
+    if is_focused then (
+      Printf.fprintf logs "final cursor position: %d,%d w.r.t to screen %d,%d at %d,%d\n" cursor.x cursor.y size.x size.y offset.x offset.y ;
+      flush logs ;
       Screen.put_cursor screen cursor
+    )
 
   let mk_text_subscreen screen =
     Screen.mk_subscreen screen {
