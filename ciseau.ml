@@ -82,10 +82,6 @@ module Error = struct
 end
 
 
-let alen = Array.length
-let blen = Bytes.length
-let slen = String.length
-
 let try_finally action cleanup =
   (try Ok (action ()) with e -> Error e)
     |> function
@@ -114,50 +110,62 @@ let write fd buffer len =
   if n <> len
     then raise (Error.e "fd write failed")
 
-let string_at s i =
-  if i < 0 || slen s <= i
-    then raise (Error.e (Printf.sprintf "String.get \"%s\" %d out of bound" s i)) ;
-  String.get s i
 
-let array_get a i =
-  if i < 0 || alen a <= i
-    then raise (Error.e (Printf.sprintf "Array.get len=%d at %d out of bound" (alen a) i)) ;
-  Array.get a i
+(* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
+module ArrayOperations = struct
 
-let array_set a i x =
-  if i < 0 || alen a <= i
-    then raise (Error.e (Printf.sprintf "Array.set len=%d at %d out of bound" (alen a) i)) ;
-  Array.set a i x
+  let alen = Array.length
+  let blen = Bytes.length
+  let slen = String.length
 
-let array_fill dst dst_o len value =
-  try
-    Array.fill dst dst_o len value
-  with
-    e -> raise (Error.wrap e)
+  let string_at s i =
+    if i < 0 || slen s <= i
+      then raise (Error.e (Printf.sprintf "String.get \"%s\" %d out of bound" s i)) ;
+    String.get s i
 
-let array_blit src src_o dst dst_o len =
-  try
-    Array.blit src src_o dst dst_o len
-  with
-    e -> raise (Error.wrap e)
+  let array_get a i =
+    if i < 0 || alen a <= i
+      then raise (Error.e (Printf.sprintf "Array.get len=%d at %d out of bound" (alen a) i)) ;
+    Array.get a i
 
-let bytes_blit src src_o dst dst_o len =
-  try
-    Bytes.blit src src_o dst dst_o len
-  with
-    e ->  Printf.sprintf "invalid blit: %d bytes from [%d,%d] to [%d,%d]"
-            len src_o (blen src) dst_o (blen dst)
-            |> Error.e
-            |> raise
+  let array_set a i x =
+    if i < 0 || alen a <= i
+      then raise (Error.e (Printf.sprintf "Array.set len=%d at %d out of bound" (alen a) i)) ;
+    Array.set a i x
 
-let bytes_blit_string src src_o dst dst_o len =
-  try
-    Bytes.blit_string src src_o dst dst_o len
-  with
-    e ->  Printf.sprintf "invalid blit_string: %d bytes from [%d,%d] to [%d,%d]"
-            len src_o (slen src) dst_o (blen dst)
-            |> Error.e
-            |> raise
+  let array_fill dst dst_o len value =
+    try
+      Array.fill dst dst_o len value
+    with
+      e -> raise (Error.wrap e)
+
+  let array_blit src src_o dst dst_o len =
+    try
+      Array.blit src src_o dst dst_o len
+    with
+      e -> raise (Error.wrap e)
+
+  let bytes_blit src src_o dst dst_o len =
+    try
+      Bytes.blit src src_o dst dst_o len
+    with
+      e ->  Printf.sprintf "invalid blit: %d bytes from [%d,%d] to [%d,%d]"
+              len src_o (blen src) dst_o (blen dst)
+              |> Error.e
+              |> raise
+
+  let bytes_blit_string src src_o dst dst_o len =
+    try
+      Bytes.blit_string src src_o dst dst_o len
+    with
+      e ->  Printf.sprintf "invalid blit_string: %d bytes from [%d,%d] to [%d,%d]"
+              len src_o (slen src) dst_o (blen dst)
+              |> Error.e
+              |> raise
+end
+
+
+open ArrayOperations
 
 
 module Slice = struct
@@ -341,9 +349,12 @@ module Vec2 = struct
 
   (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
-  let assert_v2_inside { x = xlim ; y = ylim } { x ; y } =
-    if (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
-      then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" x y xlim ylim))
+  let is_v2_outside { x = xlim ; y = ylim } { x ; y } =
+    (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
+
+  let assert_v2_inside box_v2 v2 =
+    if is_v2_outside box_v2 v2
+      then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y))
 end
 
 
@@ -710,19 +721,6 @@ module Block = struct
 
   let zero_block =
     mk_block ""
-end
-
-
-module Segment = struct
-  type t = {
-    pos : v2 ;
-    len : int ;
-  }
-
-  let mk_segment x y l = {
-    pos = mk_v2 x y ;
-    len = l ;
-  }
 end
 
 
@@ -1127,6 +1125,7 @@ end = struct
       |> array_fill t.bg_colors offset len
 
   let clear t =
+    (* BUG: sometime crashes when resizing *)
     Bytes.fill t.text 0 t.len Default.text ;
     array_blit default_fg_colors 0 t.fg_colors 0 t.len ;
     array_blit default_bg_colors 0 t.bg_colors 0 t.len ;
@@ -1214,6 +1213,14 @@ end = struct
 
     let cursor_out = ref v2_zero in
 
+    (* BUG: because of line are laid down from top to bottom, in Overflow mode the cursor can fallover below the
+     * visible portaion of the screen !
+     * To fix this properly I would need to either:
+     *    1) start puting lines from the cursors, both upward and downward
+     *    2) repeat put_framebuffer adding y offset until the cursor would not fall off the screen !
+     *    3) make view_adjust, recenter, y scrolling, ... works with the final on frame position instead of the
+     *       text position.
+     *)
     while !y_dst < dst_rect.bottomright.y do
       let o_dst = to_offset dst.window !x_dst !y_dst in
       let o_src = to_offset src.window !x_src !y_src in
@@ -1324,16 +1331,17 @@ end = struct
     }
 
   let put_color_rect screen colors { topleft ; bottomright } =
-    assert_v2_inside screen.size topleft ;
-    assert_v2_inside screen.size bottomright ;
-    Framebuffer.put_color_rect
-      screen.frame_buffer
-      colors
-      (mk_rect
-        (screen.screen_offset.x + topleft.x)
-        (screen.screen_offset.y + topleft.y)
-        (screen.screen_offset.x + bottomright.x)
-        (screen.screen_offset.y + bottomright.y))
+    (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
+    if not (is_v2_outside screen.size topleft) then
+    if not (is_v2_outside screen.size bottomright) then
+      Framebuffer.put_color_rect
+        screen.frame_buffer
+        colors
+        (mk_rect
+          (screen.screen_offset.x + topleft.x)
+          (screen.screen_offset.y + topleft.y)
+          (screen.screen_offset.x + bottomright.x)
+          (screen.screen_offset.y + bottomright.y))
 
   let put_line screen x y maxlen line =
     if y < screen.size.y then
@@ -2236,11 +2244,6 @@ end = struct
     (* input *)
     text_stop_y     : int ;
     text_size       : v2 ;
-    line_number     : int -> Line.t ;
-    (* output *)
-    (* TODO; cleanup ! *)
-    mutable cursor  : v2 ;
-    mutable last_y  : int ; (* index of the last line in line_buffer *)
   }
 
   let compute_text_colorblocks t =
@@ -2256,69 +2259,76 @@ end = struct
   let mk_linesinfo t screen_size =
     let text_width = screen_size.x - 6 in (* line number offset *)
     let text_height = screen_size.y - 1 in (* header line *)
+    {
+      text_size     = mk_v2 text_width text_height ;
+      text_stop_y   = min text_height (view_height t) ;
+    }
+
+  (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
+  let fill_framebuffer (t : t) screen =
+    let screen_size = Screen.get_size screen in
+    let text_width = screen_size.x - 5 in (* line number offset *)
+    let text_height = screen_size.y in (* header line *)
+    let text_size     = mk_v2 text_width text_height  in
+    let text_stop_y   = min text_height (view_height t) in
+
     let line_number_offset =
       match t.numbering with
         | Absolute        -> 1
         | CursorRelative  -> -t.cursor.y
     in
-    {
-      text_size     = mk_v2 text_width text_height ;
-      text_stop_y   = min text_height (view_height t) ;
-      line_number   = LineNumberCache.get line_number_offset ;
-      cursor        = v2_zero ;
-      last_y        = 0 ;
-    }
 
-  let fill_framebuffer (t : t) screen linesinfo =
-    let { text_size ; line_number } = linesinfo in
-    let x_last_index = text_size.x - 1 in (* Last valid x cursor position before scrolling *)
-    let x_scrolling_offset =
-      if t.linebreaking = Clip
-        then max 0 (t.cursor.x - x_last_index)
-        else 0
+    let last_x_index = text_size.x - 1 in
+    let base_scrolling_offset = last_x_index - 1 in
+    let (cursor_x, scrolling_offset) =
+      if t.linebreaking = Overflow || t.cursor.x < last_x_index
+        then (t.cursor.x, 0)
+        else (base_scrolling_offset, t.cursor.x - base_scrolling_offset)
     in
+    let cursor_x_screenspace = 6 + cursor_x in
+
+    let x_scrolling_offset = scrolling_offset in
 
     (* Continuation dots for overflow mode *)
     if t.linebreaking = Overflow then
-      for y = 0 to linesinfo.text_size.y do
+      for y = 0 to text_size.y do
         Screen.put_line screen 0 y 3 frame_continuation_line
       done ;
 
     (* Text area *)
-    for i = 0 to linesinfo.text_stop_y - 1 do
+    for i = 0 to text_stop_y - 1 do
       let line_idx = i + t.view_start in
       let l = Slice.get t.filebuffer.buffer line_idx in
       let x_len = (slen l) - x_scrolling_offset in
       let b =
         (* PERF: if x_scrolling_offset is zero, use Line.String instead *)
         if x_len < 1 then Line.zero_line else {
-          Block.text = l ;
-          Block.offset = x_scrolling_offset ;
-          Block.len = x_len ;
+          Block.text    = l ;
+          Block.offset  = x_scrolling_offset ;
+          Block.len     = x_len ;
         } |> Line.of_block
       in
-      Framebuffer.put_line framebuffer 0 i 6 (line_number line_idx) ;
+      Framebuffer.put_line framebuffer 0 i 6 (LineNumberCache.get line_number_offset line_idx) ;
       Framebuffer.put_line framebuffer 6 i 1000 b ;
-      linesinfo.last_y <- i
     done ;
 
     (* Text area color blocks *)
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.line_numbers
-      (mk_rect 0 0 6 linesinfo.text_stop_y) ;
+      (mk_rect 0 0 6 text_stop_y) ;
 
     (* No-text area *)
-    for y = linesinfo.text_stop_y to linesinfo.text_size.y do
+    for y = text_stop_y to text_size.y do
       Framebuffer.put_line framebuffer 0 y 3 frame_default_line
     done ;
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.no_text
-      (mk_rect 0 0 1 (linesinfo.text_size.y - linesinfo.text_stop_y)) ;
+      (mk_rect 0 0 1 (text_size.y - text_stop_y)) ;
 
     (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
-    let cursor = mk_v2 (6 + t.cursor.x - x_scrolling_offset) (t.cursor.y - t.view_start) in
+    let cursor = mk_v2 cursor_x_screenspace (t.cursor.y - t.view_start) in
 Printf.fprintf logs "fillframebuffer/put_cursor %d,%d (x_scrolling: %d, text_cursor: %d,%d)\n" cursor.x cursor.y x_scrolling_offset t.cursor.x t.cursor.y ;
 flush logs ;
     Framebuffer.put_cursor framebuffer cursor ;
@@ -2351,7 +2361,6 @@ flush logs ;
   let put_cursor screen linesinfo is_focused cursor =
     let size = Screen.get_size screen in
     let offset = Screen.get_offset screen in
-    (*
     Screen.put_color_rect
       screen
       Config.default.colors.cursor_line
@@ -2360,7 +2369,6 @@ flush logs ;
       screen
       Config.default.colors.cursor_line
       (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
-      *)
     if is_focused then (
       Printf.fprintf logs "final cursor position: %d,%d w.r.t to screen %d,%d at %d,%d\n" cursor.x cursor.y size.x size.y offset.x offset.y ;
       flush logs ;
@@ -2385,7 +2393,7 @@ flush logs ;
     let textscreen = mk_text_subscreen screen in
     put_border_frame t screen linesinfo is_focused ;
     Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
-    fill_framebuffer t textscreen linesinfo ;
+    fill_framebuffer t textscreen ;
     let cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
     put_cursor textscreen linesinfo is_focused cursor
 
@@ -2970,11 +2978,9 @@ let () =
  *
  * rendering:
  *  - fix bugs with new methods
- *    - cursor vanishes when scrolling on the right in Clip mode:
- *      - fill_framebuffer/put_framebuffer incompatibilities ?
- *    - in Overflow mode, the left border gets eaten by overflow !
  *    - crash when resizing and the right edge goes over the cursor
- *    - crashes when scrolling down due to cursor lines, only in non-Single view mode though
+ *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
+ *    the right Overflow view !
  *  - general cleanup, renaming of variables, solidification
  *  - need to work on memory pressure with new put_framebuffer.
  *
