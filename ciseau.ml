@@ -137,13 +137,18 @@ module ArrayOperations = struct
     try
       Array.fill dst dst_o len value
     with
-      e -> raise (Error.wrap e)
+      e ->  Printf.sprintf "invalid fill: %d cells for [%d,%d]" len dst_o (alen dst)
+              |> Error.e
+              |> raise
 
   let array_blit src src_o dst dst_o len =
     try
       Array.blit src src_o dst dst_o len
     with
-      e -> raise (Error.wrap e)
+      e ->  Printf.sprintf "invalid blit: %d cells from [%d,%d] to [%d,%d]"
+              len src_o (alen src) dst_o (alen dst)
+              |> Error.e
+              |> raise
 
   let bytes_blit src src_o dst dst_o len =
     try
@@ -2119,6 +2124,7 @@ module Fileview : sig
   val last_line_index         : t -> int
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
+  val toggle_show_token       : t -> t
   val recenter_view           : int -> t -> t
   val draw                    : t -> Screen.t -> bool -> unit
 
@@ -2158,6 +2164,7 @@ end = struct
     numbering     : numbering_mode ;
     linebreaking  : linebreak ;
     mov_mode      : Movement.mode ;
+    show_token    : bool ;
   }
 
   let init_fileview filebuffer = {
@@ -2167,6 +2174,7 @@ end = struct
     numbering     = CursorRelative ;
     linebreaking  = Clip ;
     mov_mode      = Movement.Chars ;
+    show_token    = true ;
   }
 
   let set_mov_mode m t =
@@ -2222,25 +2230,15 @@ end = struct
     | Overflow  -> Clip
     in { t with linebreaking = new_mode }
 
+  let toggle_show_token t =
+    { t with show_token = not t.show_token }
+
   (* TODO: this should also recenter the view horizontally in Clip mode *)
   let recenter_view view_height t =
     let new_start = t.cursor.y - view_height / 2 in
     { t with view_start = max new_start 0 }
 
-
-  let get_token_box t =
-    let token_s = Movement.compute_movement t.mov_mode Movement.Start t.filebuffer t.cursor in
-    let token_e = Movement.compute_movement t.mov_mode Movement.End t.filebuffer token_s in
-    (* BUG: if token_s.y = token_e.y then return a segment
-     *      otherwise return a list of lines *)
-    (* BUG: return Nil if token is 1 char width *)
-    let rect = mk_rect token_s.x token_s.y (token_e.x + 1) token_e.y in
-    Colorblock.mk_colorblock rect Config.default.colors.selection
-
   (* TODO: move drawing in separate module ? *)
-
-  let compute_text_colorblocks t =
-      Slice.init_slice 1 (get_token_box t)
 
   (* PERF: resize dynamically and fit to term size ! *)
   let framebuffer = Framebuffer.init_framebuffer (mk_v2 300 100)
@@ -2369,7 +2367,25 @@ flush logs ;
     Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
     fill_framebuffer t textscreen ;
     let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-    put_cursor textscreen textsize is_focused final_cursor
+    put_cursor textscreen textsize is_focused final_cursor ;
+
+    if t.show_token then (
+      let token_s = Movement.compute_movement t.mov_mode Movement.Start t.filebuffer t.cursor in
+      let token_e = Movement.compute_movement t.mov_mode Movement.End t.filebuffer token_s in
+      for i = token_s.y to token_e.y do
+        let len = Filebuffer.line_length t.filebuffer i in
+        let s = if i = token_s.y then token_s.x else 0 in
+        let e = if i = token_e.y then (token_e.x + 1) else len in
+        let s' = min s e in
+        let e' = max s e in
+        let y = i - t.view_start in
+        (* BUG: this does not take into account the additional offset from Overflow mode *)
+        Screen.put_color_rect
+          textscreen
+          Config.default.colors.selection
+          (mk_rect (s' + 6) y (e' + 6) y) ;
+      done ;
+    )
 
 end
 
@@ -2763,6 +2779,7 @@ module Ciseau = struct
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
+    | Keys.Colon        -> View Fileview.toggle_show_token
                            (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
     | Keys.ParenLeft    -> TilesetOp Tileset.RotateViewsLeft
     | Keys.ParenRight   -> TilesetOp Tileset.RotateViewsRight
@@ -2815,7 +2832,6 @@ module Ciseau = struct
     | Keys.Ctrl_j       -> Noop
     | Keys.Ctrl_k       -> Noop
     | Keys.Upper_g      -> Noop
-    | Keys.Colon        -> Noop
     | Keys.Unknown      -> Noop (* ignore for now *)
 
     | Keys.EINTR        -> Resize
