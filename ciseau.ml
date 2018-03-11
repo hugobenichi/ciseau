@@ -2239,13 +2239,6 @@ end = struct
 
   (* TODO: move drawing in separate module ? *)
 
-  (* facilitates passing data in and out of fill_linesinfo, put_text_lines, put_frame, ... *)
-  type linesinfo = {
-    (* input *)
-    text_stop_y     : int ;
-    text_size       : v2 ;
-  }
-
   let compute_text_colorblocks t =
       Slice.init_slice 1 (get_token_box t)
 
@@ -2255,22 +2248,12 @@ end = struct
   let frame_default_line      = Line.of_string "~  "
   let frame_continuation_line = Line.of_string "..."
 
-  (* PERF: hoist in fileview struct *)
-  let mk_linesinfo t screen_size =
-    let text_width = screen_size.x - 6 in (* line number offset *)
-    let text_height = screen_size.y - 1 in (* header line *)
-    {
-      text_size     = mk_v2 text_width text_height ;
-      text_stop_y   = min text_height (view_height t) ;
-    }
-
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
-  let fill_framebuffer (t : t) screen =
+  let fill_framebuffer t screen =
     let screen_size = Screen.get_size screen in
-    let text_width = screen_size.x - 5 in (* line number offset *)
-    let text_height = screen_size.y in (* header line *)
-    let text_size     = mk_v2 text_width text_height  in
-    let text_stop_y   = min text_height (view_height t) in
+    let text_width  = screen_size.x - 5 in
+    let text_height = screen_size.y in
+    let text_stop_y = min text_height (view_height t) in
 
     let line_number_offset =
       match t.numbering with
@@ -2278,7 +2261,7 @@ end = struct
         | CursorRelative  -> -t.cursor.y
     in
 
-    let last_x_index = text_size.x - 1 in
+    let last_x_index = text_width - 1 in
     let base_scrolling_offset = last_x_index - 1 in
     let (cursor_x, scrolling_offset) =
       if t.linebreaking = Overflow || t.cursor.x < last_x_index
@@ -2291,7 +2274,7 @@ end = struct
 
     (* Continuation dots for overflow mode *)
     if t.linebreaking = Overflow then
-      for y = 0 to text_size.y do
+      for y = 0 to text_height do
         Screen.put_line screen 0 y 3 frame_continuation_line
       done ;
 
@@ -2319,13 +2302,13 @@ end = struct
       (mk_rect 0 0 6 text_stop_y) ;
 
     (* No-text area *)
-    for y = text_stop_y to text_size.y do
+    for y = text_stop_y to text_height do
       Framebuffer.put_line framebuffer 0 y 3 frame_default_line
     done ;
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.no_text
-      (mk_rect 0 0 1 (text_size.y - text_stop_y)) ;
+      (mk_rect 0 0 1 (text_height - text_stop_y)) ;
 
     (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
     let cursor = mk_v2 cursor_x_screenspace (t.cursor.y - t.view_start) in
@@ -2337,7 +2320,7 @@ flush logs ;
       Config.default.colors.string
       (mk_rect 0 cursor.y 6 cursor.y)
 
-  let put_border_frame t screen linesinfo is_focused =
+  let put_border_frame t screen textsize is_focused =
     Screen.put_line screen 0 0 10000 (Line.of_string
       (Printf.sprintf
         "%s %d,%d  mode=%s"
@@ -2356,9 +2339,9 @@ flush logs ;
     Screen.put_color_rect
       screen
       Config.default.colors.border
-      (mk_rect 0 1 1 linesinfo.text_size.y)
+      (mk_rect 0 1 1 textsize.y)
 
-  let put_cursor screen linesinfo is_focused cursor =
+  let put_cursor screen textsize is_focused cursor =
     let size = Screen.get_size screen in
     let offset = Screen.get_offset screen in
     Screen.put_color_rect
@@ -2368,34 +2351,25 @@ flush logs ;
     Screen.put_color_rect
       screen
       Config.default.colors.cursor_line
-      (mk_rect cursor.x 0 (cursor.x + 1) linesinfo.text_size.y) ;
+      (mk_rect cursor.x 0 (cursor.x + 1) textsize.y) ;
     if is_focused then (
       Printf.fprintf logs "final cursor position: %d,%d w.r.t to screen %d,%d at %d,%d\n" cursor.x cursor.y size.x size.y offset.x offset.y ;
       flush logs ;
       Screen.put_cursor screen cursor
     )
 
-  let mk_text_subscreen screen =
-    Screen.mk_subscreen screen {
+  let draw t screen is_focused =
+    (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
+    let textscreen = Screen.mk_subscreen screen {
       topleft = mk_v2 1 1 ; (* 1 for border column, 1 for header space *)
       bottomright = Screen.get_size screen ;
-    }
-
-  let draw t screen is_focused =
-    (* - put the color blocks for the text area first here in some kind of buffer,
-     * w.r.t to text coordinates
-     * - in fill_linesinfo, translate the color blocks buffer from text coordinates to
-     * screenview coordinates, breaking lines that need to be broken, as the text cursor
-     * goes from top to bottom
-     *)
-    (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
-    let linesinfo = mk_linesinfo t (Screen.get_size screen) in
-    let textscreen = mk_text_subscreen screen in
-    put_border_frame t screen linesinfo is_focused ;
+    } in
+    let textsize = Screen.get_size textscreen in
+    put_border_frame t screen textsize is_focused ;
     Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
     fill_framebuffer t textscreen ;
-    let cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-    put_cursor textscreen linesinfo is_focused cursor
+    let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
+    put_cursor textscreen textsize is_focused final_cursor
 
 end
 
