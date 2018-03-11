@@ -1235,28 +1235,14 @@ end = struct
 
       let len = w_dst in
 
-      Printf.fprintf logs "cursor:%d,%d src:%d,%d dst:%d,%d stop:%d len:%d\n"
-        src.cursor.x src.cursor.y !x_src !y_src !x_dst !y_dst !x_src_stop len ;
-      flush logs ;
-
       bytes_blit src.text o_src dst.text o_dst len ;
       array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
       array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
-
-      (*
-      if src.cursor.y = !y_src && 0 = !x_src then (
-        let x_dst_space = dst_rect.topleft.x + (src.cursor.x mod w_dst) in
-        let y_dst_space = dst_rect.topleft.y + !y_src + src.cursor.x / w_dst in
-        cursor_out := mk_v2 x_dst_space y_dst_space
-      ) ;
-      *)
 
       (* Works in Overflow mode *)
       if src.cursor.y = !y_src && !x_src <= src.cursor.x && src.cursor.x < !x_src + w_dst then (
         let x_dst_space = !x_dst + src.cursor.x mod w_dst in
         let y_dst_space = !y_dst in
-        Printf.fprintf logs "cursor_out:%d,%d\n" x_dst_space y_dst_space ;
-        flush logs ;
         cursor_out := mk_v2 x_dst_space y_dst_space ;
         assert_v2_inside dst.window !cursor_out
       ) ;
@@ -1413,7 +1399,7 @@ module Filebuffer = struct
 
   let line_at { buffer } = Slice.get buffer
 
-  let line_length { buffer } = Slice.get buffer >> slen (* TODO: take into account '\t' *)
+  let line_length { buffer } y = Slice.get buffer y |> slen (* TODO: take into account '\t' *)
 
   let file_length { buflen } = buflen
   let last_line_index { buflen } = buflen - 1
@@ -1916,8 +1902,6 @@ module DelimMovement(K : DelimiterKind) = struct
 
   (* Move cursor left until balance is 0 *)
   let rec go_left filebuffer x y b =
-    Printf.fprintf logs "go_left from %d,%d b=%d\n" x y b ;
-    flush logs ;
     if x < 0
       then
         (if y = 0
@@ -2310,8 +2294,6 @@ end = struct
 
     (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
     let cursor = mk_v2 cursor_x_screenspace (t.cursor.y - t.view_start) in
-Printf.fprintf logs "fillframebuffer/put_cursor %d,%d (x_scrolling: %d, text_cursor: %d,%d)\n" cursor.x cursor.y x_scrolling_offset t.cursor.x t.cursor.y ;
-flush logs ;
     Framebuffer.put_cursor framebuffer cursor ;
     Framebuffer.put_color_rect
       framebuffer
@@ -2351,8 +2333,6 @@ flush logs ;
       Config.default.colors.cursor_line
       (mk_rect cursor.x 0 (cursor.x + 1) textsize.y) ;
     if is_focused then (
-      Printf.fprintf logs "final cursor position: %d,%d w.r.t to screen %d,%d at %d,%d\n" cursor.x cursor.y size.x size.y offset.x offset.y ;
-      flush logs ;
       Screen.put_cursor screen cursor
     )
 
