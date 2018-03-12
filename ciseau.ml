@@ -479,6 +479,9 @@ module Config = struct
     user_input    : color_cell ;
     border        : color_cell ;
     no_text       : color_cell ;
+
+    leftright_neighbor  : color_cell ;
+    updown_neighbor     : color_cell ;
   }
 
   type cfg = {
@@ -521,6 +524,14 @@ module Config = struct
       selection = {
         fg    = white ;
         bg    = blue ;
+      } ;
+      leftright_neighbor = {
+        fg    = white ;
+        bg    = red ;
+      } ;
+      updown_neighbor = {
+        fg    = white ;
+        bg    = green ;
       } ;
       line_numbers = {
         fg    = green ;
@@ -567,6 +578,7 @@ module Keys = struct
                   | Ctrl_z
                   | Space
                   | Colon
+                  | SemiColon
                   | Equal
                   | ArrowUp
                   | ArrowDown
@@ -640,6 +652,7 @@ module Keys = struct
     mk_key Ctrl_z      "Ctrl_z"        26 ;
     mk_key Space       "Space"         32 ;
     mk_key Colon       ":"             58 ;
+    mk_key SemiColon   ";"             59 ;
     mk_key Equal       "Equal"         61 ;
     mk_key ArrowUp     "ArrowUp"       65 ;
     mk_key ArrowDown   "ArrowDown"     66 ;
@@ -2109,6 +2122,7 @@ module Fileview : sig
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
   val toggle_show_token       : t -> t
+  val toggle_show_neighbor    : t -> t
   val recenter_view           : int -> t -> t
   val draw                    : t -> Screen.t -> bool -> unit
 
@@ -2149,6 +2163,7 @@ end = struct
     linebreaking  : linebreak ;
     mov_mode      : Movement.mode ;
     show_token    : bool ;
+    show_neighbor : bool ;
   }
 
   let init_fileview filebuffer = {
@@ -2159,6 +2174,7 @@ end = struct
     linebreaking  = Clip ;
     mov_mode      = Movement.Chars ;
     show_token    = true ;
+    show_neighbor = true ;
   }
 
   let set_mov_mode m t =
@@ -2217,6 +2233,9 @@ end = struct
   let toggle_show_token t =
     { t with show_token = not t.show_token }
 
+  let toggle_show_neighbor t =
+    { t with show_neighbor = not t.show_neighbor }
+
   (* TODO: this should also recenter the view horizontally in Clip mode *)
   let recenter_view view_height t =
     let new_start = t.cursor.y - view_height / 2 in
@@ -2229,6 +2248,11 @@ end = struct
 
   let frame_default_line      = Line.of_string "~  "
   let frame_continuation_line = Line.of_string "..."
+
+  let lightup_pixel t screen colors pos =
+      let x = pos.x + 6 in
+      let y = pos.y - t.view_start in
+      Screen.put_color_rect screen colors (mk_rect x y (x + 1) y)
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
   let fill_framebuffer t screen =
@@ -2323,7 +2347,6 @@ end = struct
 
   let put_cursor screen textsize is_focused cursor =
     let size = Screen.get_size screen in
-    let offset = Screen.get_offset screen in
     Screen.put_color_rect
       screen
       Config.default.colors.cursor_line
@@ -2349,6 +2372,7 @@ end = struct
     let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
     put_cursor textscreen textsize is_focused final_cursor ;
 
+    (* Show token where cursor currently is *)
     if t.show_token then (
       let token_s = Movement.compute_movement t.mov_mode Movement.Start t.filebuffer t.cursor in
       let token_e = Movement.compute_movement t.mov_mode Movement.End t.filebuffer token_s in
@@ -2365,6 +2389,22 @@ end = struct
           Config.default.colors.selection
           (mk_rect (s' + 6) y (e' + 6) y) ;
       done ;
+
+    ) ;
+
+    (* Show Left/Right/Up/Down tokens relatively to where current token is *)
+    if t.show_neighbor then (
+      Movement.compute_movement t.mov_mode Movement.Left t.filebuffer t.cursor
+        |> lightup_pixel t textscreen Config.default.colors.leftright_neighbor ;
+
+      Movement.compute_movement t.mov_mode Movement.Right t.filebuffer t.cursor
+        |> lightup_pixel t textscreen Config.default.colors.leftright_neighbor ;
+
+      Movement.compute_movement t.mov_mode Movement.Up t.filebuffer t.cursor
+        |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
+
+      Movement.compute_movement t.mov_mode Movement.Down t.filebuffer t.cursor
+        |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
     )
 
 end
@@ -2760,6 +2800,7 @@ module Ciseau = struct
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
     | Keys.Colon        -> View Fileview.toggle_show_token
+    | Keys.SemiColon    -> View Fileview.toggle_show_neighbor
                            (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
     | Keys.ParenLeft    -> TilesetOp Tileset.RotateViewsLeft
     | Keys.ParenRight   -> TilesetOp Tileset.RotateViewsRight
