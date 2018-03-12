@@ -590,6 +590,7 @@ module Keys = struct
                   | Lower_l
                   | Lower_b
                   | Lower_c
+                  | Lower_s
                   | Lower_d
                   | Lower_w
                   | Lower_x
@@ -667,6 +668,7 @@ module Keys = struct
     mk_key Upper_l     "L"             76 ;
     mk_key Lower_b     "w"             98 ;
     mk_key Lower_c     "c"             99 ;
+    mk_key Lower_s     "s"             115 ;
     mk_key Lower_d     "d"             100 ;
     mk_key Lower_z     "z"             122 ;
     mk_key Lower_x     "x"             120 ;
@@ -2013,7 +2015,49 @@ module BraceMovement = DelimMovement(struct
 end)
 
 
-module Movement = struct
+module MovementContext = struct
+  type t = {
+    selection : v2 array ;
+  }
+end
+
+module SelectionMovement = struct
+  open MovementContext
+
+  let is_v2_less_or_equal va vb = (va.x < vb.x) || (va.x = vb.x) && (va.y <= vb.y)
+  let is_v2_less          va vb = (va.x < vb.x) || (va.x = vb.x) && (va.y < vb.y)
+
+  let noop any cursor = cursor
+
+  (* PERF: do binary search instead *)
+  let selection_prev { selection } any v2 =
+    let rec loop s c i =
+      if i = alen s || is_v2_less_or_equal c (array_get s i)
+        then (i - 1 + (alen s)) mod alen s (* mod == remainder *)
+        else loop s c (i + 1)
+    in
+    array_get selection (loop selection v2 0)
+
+  let selection_next { selection } any v2 =
+    let rec loop s c i =
+      if i = alen s || is_v2_less c (array_get s i)
+        then i mod alen s
+        else loop s c (i + 1)
+    in
+    array_get selection (loop selection v2 0)
+
+  let movement movement_context =
+    let open Move in
+    function
+      | Start
+      | End
+      | Up
+      | Down    -> noop
+      | Left    -> selection_prev movement_context
+      | Right   -> selection_next movement_context
+end
+
+module Movement (* TODO: formalize module signature *) = struct
 
   type mode = Blocks
             | Words
@@ -2024,6 +2068,7 @@ module Movement = struct
             | Parens
             | Brackets
             | Braces
+            | Selection
 
   type movement = Left
                 | Right
@@ -2047,6 +2092,7 @@ module Movement = struct
       | Parens        -> "Parens"
       | Brackets      -> "Brackets"
       | Braces        -> "Braces"
+      | Selection     -> "Selection"
 
   let movement_to_string =
     function
@@ -2083,7 +2129,7 @@ module Movement = struct
   let noop_move mov filebuffer cursor =
     cursor
 
-  let move =
+  let move movement_context =
     function
       | Blocks        -> BlockMovement.movement
       | Words         -> WordMovement.movement
@@ -2094,15 +2140,16 @@ module Movement = struct
       | Parens        -> ParenMovement.movement
       | Brackets      -> BracketMovement.movement
       | Braces        -> BraceMovement.movement
+      | Selection     -> SelectionMovement.movement movement_context
 
-  let compute_movement mode =
+  let compute_movement movement_context mode =
     function
-      | Left          -> move mode Move.Left
-      | Right         -> move mode Move.Right
-      | Up            -> move mode Move.Up
-      | Down          -> move mode Move.Down
-      | Start         -> move mode Move.Start
-      | End           -> move mode Move.End
+      | Left          -> move movement_context mode Move.Left
+      | Right         -> move movement_context mode Move.Right
+      | Up            -> move movement_context mode Move.Up
+      | Down          -> move movement_context mode Move.Down
+      | Start         -> move movement_context mode Move.Start
+      | End           -> move movement_context mode Move.End
       | PageUp        -> move_page_up
       | PageDown      -> move_page_down
       | FileStart     -> move_file_start
@@ -2164,6 +2211,7 @@ end = struct
     mov_mode      : Movement.mode ;
     show_token    : bool ;
     show_neighbor : bool ;
+    context       : MovementContext.t ;
   }
 
   let init_fileview filebuffer = {
@@ -2175,6 +2223,17 @@ end = struct
     mov_mode      = Movement.Chars ;
     show_token    = true ;
     show_neighbor = true ;
+    context = {
+    MovementContext.selection =  [|
+        (* TODO: implement selection *)
+        mk_v2 1 1 ;
+        mk_v2 2 2 ;
+        mk_v2 3 3 ;
+        mk_v2 4 4 ;
+        mk_v2 5 5 ;
+        mk_v2 6 6 ;
+      |]
+    } ;
   }
 
   let set_mov_mode m t =
@@ -2202,7 +2261,7 @@ end = struct
     else t
 
   let apply_movement mov view_height t =
-    let cursor' = Movement.compute_movement t.mov_mode mov t.filebuffer t.cursor in
+    let cursor' = Movement.compute_movement t.context t.mov_mode mov t.filebuffer t.cursor in
 
     if kDEBUG then (
       let msg =
@@ -2374,8 +2433,8 @@ end = struct
 
     (* Show token where cursor currently is *)
     if t.show_token then (
-      let token_s = Movement.compute_movement t.mov_mode Movement.Start t.filebuffer t.cursor in
-      let token_e = Movement.compute_movement t.mov_mode Movement.End t.filebuffer token_s in
+      let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor in
+      let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s in
       for i = token_s.y to token_e.y do
         let len = Filebuffer.line_length t.filebuffer i in
         let s = if i = token_s.y then token_s.x else 0 in
@@ -2389,21 +2448,20 @@ end = struct
           Config.default.colors.selection
           (mk_rect (s' + 6) y (e' + 6) y) ;
       done ;
-
     ) ;
 
     (* Show Left/Right/Up/Down tokens relatively to where current token is *)
     if t.show_neighbor then (
-      Movement.compute_movement t.mov_mode Movement.Left t.filebuffer t.cursor
+      Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
         |> lightup_pixel t textscreen Config.default.colors.leftright_neighbor ;
 
-      Movement.compute_movement t.mov_mode Movement.Right t.filebuffer t.cursor
+      Movement.compute_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
         |> lightup_pixel t textscreen Config.default.colors.leftright_neighbor ;
 
-      Movement.compute_movement t.mov_mode Movement.Up t.filebuffer t.cursor
+      Movement.compute_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
         |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
 
-      Movement.compute_movement t.mov_mode Movement.Down t.filebuffer t.cursor
+      Movement.compute_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
         |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
     )
 
@@ -2820,6 +2878,7 @@ module Ciseau = struct
     | Keys.Lower_b      -> MoveModeOp Movement.Lines
     | Keys.Upper_b      -> MoveModeOp Movement.Lines
     | Keys.Lower_c      -> MoveModeOp Movement.Chars
+    | Keys.Lower_s      -> MoveModeOp Movement.Selection
     | Keys.Lower_d      -> MoveModeOp Movement.Digits
     | Keys.Lower_z      -> MoveModeOp Movement.Paragraphs
     | Keys.Lower_x      -> MoveModeOp Movement.Parens
