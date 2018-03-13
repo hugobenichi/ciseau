@@ -11,7 +11,7 @@ builddir:
 	mkdir -p $(OUTDIR)
 
 $(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
-	ocamlopt -p -g -inline 0 $(OUTDIR)/ioctl.o unix.cmxa -o $@ $<
+	ocamlopt -p -g -inline 0 $(OUTDIR)/ioctl.o str.cmxa unix.cmxa -o $@ $<
 #	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
 
 $(OUTDIR)/ioctl.o: ioctl.c

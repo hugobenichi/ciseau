@@ -1439,6 +1439,28 @@ module Filebuffer = struct
 
   let char_at filebuffer x y =
     string_at (line_at filebuffer y) x
+
+  let search filebuffer target =
+    let rec loop_in_one_line width r s y xi acc =
+      match Str.search_forward r s xi with
+        | exception _ -> acc
+        | start ->
+            let next_start = start + width in
+      Printf.fprintf logs "found match: %d,[%d-%d]\n" y start width ;
+      flush logs ;
+            let found = mk_rect start y (next_start - 1) y in
+            loop_in_one_line width r s y next_start (found :: acc)
+    in
+    let rec loop_file filebuffer width r y acc =
+      if y < filebuffer.buflen
+        then
+          let acc' = loop_in_one_line width r (line_at filebuffer y) y 0 acc in
+          loop_file filebuffer width r (y + 1) acc'
+        else acc
+    in
+    loop_file filebuffer (slen target) (Str.regexp_string target) 0 []
+        |> List.rev
+        |> Array.of_list
 end
 
 
@@ -2034,6 +2056,7 @@ module SelectionMovement = struct
   let noop any cursor = cursor
 
   (* PERF: do binary search instead *)
+  (* BUG: this appears to be broken with the current hardcoded selection-from-search *)
   let selection_prev { selection } any v2 =
     let rec loop s c i =
       if i = alen s || is_v2_less_or_equal c (array_get s i).topleft
@@ -2050,13 +2073,21 @@ module SelectionMovement = struct
     in
     (array_get selection (loop selection v2 0)).topleft
 
+  let selection_start { selection } any v2 =
+    (* TODO *)
+    v2
+
+  let selection_end { selection } any v2 =
+    (* TODO *)
+    v2
+
   let movement movement_context =
     let open Move in
     function
-      | Start
-      | End
       | Up
       | Down    -> noop
+      | Start   -> selection_start movement_context
+      | End     -> selection_end movement_context
       | Left    -> selection_prev movement_context
       | Right   -> selection_next movement_context
 end
@@ -2208,38 +2239,31 @@ end = struct
   end
 
   type t = {
-    filebuffer    : filebuffer ;
-    cursor        : v2 ;       (* current position in file space: x = column index, y = row index *)
-    view_start    : int ;      (* index of first row in view *)
-    numbering     : numbering_mode ;
-    linebreaking  : linebreak ;
-    mov_mode      : Movement.mode ;
-    show_token    : bool ;
-    show_neighbor : bool ;
-    show_selection: bool ;
-    context       : MovementContext.t ;
+    filebuffer        : filebuffer ;
+    cursor            : v2 ;       (* current position in file space: x = column index, y = row index *)
+    view_start        : int ;      (* index of first row in view *)
+    numbering         : numbering_mode ;
+    linebreaking      : linebreak ;
+    mov_mode          : Movement.mode ;
+    show_token        : bool ;
+    show_neighbor     : bool ;
+    show_selection    : bool ;
+    context           : MovementContext.t ;
   }
 
   let init_fileview filebuffer = {
-    filebuffer    = filebuffer ;
-    cursor        = v2_zero ;
-    view_start    = 0 ;
-    numbering     = CursorRelative ;
-    linebreaking  = Clip ;
-    mov_mode      = Movement.Chars ;
-    show_token    = true ;
-    show_neighbor = true ;
-    show_selection= true ;
-    context = {
-    MovementContext.selection =  [|
-        (* TODO: implement selection *)
-        mk_rect 1 1 3 1 ;
-        mk_rect 2 2 6 2 ;
-        mk_rect 3 3 4 3 ;
-        mk_rect 4 4 4 4 ;
-        mk_rect 5 5 8 5 ;
-        mk_rect 6 6 7 6 ;
-      |]
+    filebuffer        = filebuffer ;
+    cursor            = v2_zero ;
+    view_start        = 0 ;
+    numbering         = CursorRelative ;
+    linebreaking      = Clip ;
+    mov_mode          = Movement.Chars ;
+    show_token        = true ;
+    show_neighbor     = true ;
+    show_selection    = true ;
+    context           = let open MovementContext in {
+      (* TODO: implement selection input *)
+      selection = Filebuffer.search filebuffer "cursor" ;
     } ;
   }
 
@@ -2321,11 +2345,6 @@ end = struct
 
   let frame_default_line      = Line.of_string "~  "
   let frame_continuation_line = Line.of_string "..."
-
-  let lightup_pixel t framebuffer colors pos =
-      let x = pos.x + 6 in
-      let y = pos.y  in
-      Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
   let fill_framebuffer t screen =
@@ -2411,13 +2430,28 @@ end = struct
 
     (* BUG: these show_* color rectangles cause weirdness in Overflow mode ! *)
     (* Show selection *)
-    if t.show_selection then
+    if t.show_selection then (
+      let translate_selection t { topleft ; bottomright } =
+          let tl_x = topleft.x + 6 in
+          let tl_y = topleft.y - t.view_start in
+          let br_x = bottomright.x + 7 in
+          let br_y = bottomright.y - t.view_start in
+          mk_rect tl_x tl_y br_x br_y
+      in
+
       t.context.selection
-        |> Array.map (fun { topleft ; bottomright } -> mk_rect (topleft.x + 6) topleft.y (bottomright.x + 7) bottomright.y)
+        |> Array.map (translate_selection t)
         |> Array.iter (Framebuffer.put_color_rect framebuffer Config.default.colors.selection) ;
+    ) ;
 
     (* Show Left/Right/Up/Down tokens relatively to where current token is *)
     if t.show_neighbor then (
+      let lightup_pixel t framebuffer colors pos =
+          let x = pos.x + 6 in
+          let y = pos.y - t.view_start  in
+          Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
+      in
+
       Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
         |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
       Movement.compute_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
