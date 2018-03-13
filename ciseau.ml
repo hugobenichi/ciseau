@@ -471,6 +471,7 @@ module Config = struct
     numbers       : color_cell ;
     default       : color_cell ;
     cursor_line   : color_cell ;
+    current_token : color_cell ;
     selection     : color_cell ;
     line_numbers  : color_cell ;
     focus_header  : color_cell ;
@@ -520,6 +521,10 @@ module Config = struct
       cursor_line = {
         fg    = white ;
         bg    = black ;
+      } ;
+      current_token = {
+        fg    = white ;
+        bg    = Color.Gray 4 ;
       } ;
       selection = {
         fg    = white ;
@@ -577,6 +582,7 @@ module Keys = struct
                   | Ctrl_u
                   | Ctrl_z
                   | Space
+                  | SingleQuote
                   | Colon
                   | SemiColon
                   | Equal
@@ -652,6 +658,7 @@ module Keys = struct
     mk_key Ctrl_u      "Ctrl_u"        21 ;
     mk_key Ctrl_z      "Ctrl_z"        26 ;
     mk_key Space       "Space"         32 ;
+    mk_key SingleQuote "'"             39 ;
     mk_key Colon       ":"             58 ;
     mk_key SemiColon   ";"             59 ;
     mk_key Equal       "Equal"         61 ;
@@ -2017,7 +2024,7 @@ end)
 
 module MovementContext = struct
   type t = {
-    selection : v2 array ;
+    selection : rect array ;
   }
 end
 
@@ -2032,19 +2039,19 @@ module SelectionMovement = struct
   (* PERF: do binary search instead *)
   let selection_prev { selection } any v2 =
     let rec loop s c i =
-      if i = alen s || is_v2_less_or_equal c (array_get s i)
+      if i = alen s || is_v2_less_or_equal c (array_get s i).topleft
         then (i - 1 + (alen s)) mod alen s (* mod == remainder *)
         else loop s c (i + 1)
     in
-    array_get selection (loop selection v2 0)
+    (array_get selection (loop selection v2 0)).topleft
 
   let selection_next { selection } any v2 =
     let rec loop s c i =
-      if i = alen s || is_v2_less c (array_get s i)
+      if i = alen s || is_v2_less c (array_get s i).topleft
         then i mod alen s
         else loop s c (i + 1)
     in
-    array_get selection (loop selection v2 0)
+    (array_get selection (loop selection v2 0)).topleft
 
   let movement movement_context =
     let open Move in
@@ -2170,6 +2177,7 @@ module Fileview : sig
   val swap_linebreaking_mode  : t -> t
   val toggle_show_token       : t -> t
   val toggle_show_neighbor    : t -> t
+  val toggle_show_selection   : t -> t
   val recenter_view           : int -> t -> t
   val draw                    : t -> Screen.t -> bool -> unit
 
@@ -2211,6 +2219,7 @@ end = struct
     mov_mode      : Movement.mode ;
     show_token    : bool ;
     show_neighbor : bool ;
+    show_selection: bool ;
     context       : MovementContext.t ;
   }
 
@@ -2223,15 +2232,16 @@ end = struct
     mov_mode      = Movement.Chars ;
     show_token    = true ;
     show_neighbor = true ;
+    show_selection= true ;
     context = {
     MovementContext.selection =  [|
         (* TODO: implement selection *)
-        mk_v2 1 1 ;
-        mk_v2 2 2 ;
-        mk_v2 3 3 ;
-        mk_v2 4 4 ;
-        mk_v2 5 5 ;
-        mk_v2 6 6 ;
+        mk_rect 1 1 3 1 ;
+        mk_rect 2 2 6 2 ;
+        mk_rect 3 3 4 3 ;
+        mk_rect 4 4 4 4 ;
+        mk_rect 5 5 8 5 ;
+        mk_rect 6 6 7 6 ;
       |]
     } ;
   }
@@ -2295,12 +2305,19 @@ end = struct
   let toggle_show_neighbor t =
     { t with show_neighbor = not t.show_neighbor }
 
+  let toggle_show_selection t =
+    { t with show_selection = not t.show_selection }
+
   (* TODO: this should also recenter the view horizontally in Clip mode *)
   let recenter_view view_height t =
     let new_start = t.cursor.y - view_height / 2 in
     { t with view_start = max new_start 0 }
 
   (* TODO: move drawing in separate module ? *)
+
+  (* CLEANUP: probably I should draw the line number separately from the main text: this would have a number
+   * of benefits in term of codeflow simplicity and not having to put +6 horizontal offsets everywhere and
+   * recreate the same objects. *)
 
   (* PERF: resize dynamically and fit to term size ! *)
   let framebuffer = Framebuffer.init_framebuffer (mk_v2 300 100)
@@ -2445,10 +2462,17 @@ end = struct
         (* BUG: this does not take into account the additional offset from Overflow mode *)
         Screen.put_color_rect
           textscreen
-          Config.default.colors.selection
+          Config.default.colors.current_token
           (mk_rect (s' + 6) y (e' + 6) y) ;
       done ;
     ) ;
+
+    (* BUG: move to fill_framebuffer otherwise linebreaking and scrolling will be incorrect *)
+    (* Show selection *)
+    if t.show_selection then
+      t.context.selection
+        |> Array.map (fun { topleft ; bottomright } -> mk_rect (topleft.x + 6) topleft.y (bottomright.x + 7) bottomright.y)
+        |> Array.iter (Screen.put_color_rect textscreen Config.default.colors.selection) ;
 
     (* Show Left/Right/Up/Down tokens relatively to where current token is *)
     if t.show_neighbor then (
@@ -2463,8 +2487,7 @@ end = struct
 
       Movement.compute_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
         |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
-    )
-
+    ) ;
 end
 
 
@@ -2859,6 +2882,7 @@ module Ciseau = struct
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
     | Keys.Colon        -> View Fileview.toggle_show_token
     | Keys.SemiColon    -> View Fileview.toggle_show_neighbor
+    | Keys.SingleQuote  -> View Fileview.toggle_show_selection
                            (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
     | Keys.ParenLeft    -> TilesetOp Tileset.RotateViewsLeft
     | Keys.ParenRight   -> TilesetOp Tileset.RotateViewsRight
