@@ -1,10 +1,6 @@
 let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
-(* bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux *)
-(* bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux *)
-(* bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux bla bla bla foo foo foo bar bar bar qux qux qux *)
-
 (* Debugging flags *)
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
@@ -1178,15 +1174,16 @@ end = struct
       array_set t.line_lengths y new_end
 
   let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
-    assert_v2_inside t.window topleft ;
-    assert_v2_inside t.window bottomright ;
-    for y = topleft.y to bottomright.y do
-      let offset = y * t.window.x + topleft.x in
-      let len = bottomright.x - topleft.x in
-      fill_fg_color t offset len fg ;
-      fill_bg_color t offset len bg ;
-      update_line_end t topleft.x y bottomright.x
-    done
+    (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
+    if not (is_v2_outside t.window topleft) then
+    if not (is_v2_outside t.window bottomright) then
+      for y = topleft.y to bottomright.y do
+        let offset = y * t.window.x + topleft.x in
+        let len = bottomright.x - topleft.x in
+        fill_fg_color t offset len fg ;
+        fill_bg_color t offset len bg ;
+        update_line_end t topleft.x y bottomright.x
+      done
 
   let put_cursor t cursor =
     t.cursor <- cursor
@@ -2325,15 +2322,15 @@ end = struct
   let frame_default_line      = Line.of_string "~  "
   let frame_continuation_line = Line.of_string "..."
 
-  let lightup_pixel t screen colors pos =
+  let lightup_pixel t framebuffer colors pos =
       let x = pos.x + 6 in
-      let y = pos.y - t.view_start in
-      Screen.put_color_rect screen colors (mk_rect x y (x + 1) y)
+      let y = pos.y  in
+      Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
   let fill_framebuffer t screen =
     let screen_size = Screen.get_size screen in
-    let text_width  = screen_size.x - 5 in
+    let text_width  = screen_size.x in
     let text_height = screen_size.y in
     let text_stop_y = min text_height (view_height t) in
 
@@ -2343,7 +2340,7 @@ end = struct
         | CursorRelative  -> -t.cursor.y
     in
 
-    let last_x_index = text_width - 1 in
+    let last_x_index = text_width - 6 in
     let base_scrolling_offset = last_x_index - 1 in
     let (cursor_x, scrolling_offset) =
       if t.linebreaking = Overflow || t.cursor.x < last_x_index
@@ -2383,6 +2380,54 @@ end = struct
       Config.default.colors.line_numbers
       (mk_rect 0 0 6 text_stop_y) ;
 
+    (* Show cursor lines *)
+    Framebuffer.put_color_rect
+      framebuffer
+      Config.default.colors.cursor_line
+      (mk_rect 6 t.cursor.y text_width t.cursor.y) ;
+    Framebuffer.put_color_rect
+      framebuffer
+      Config.default.colors.cursor_line
+      (mk_rect (t.cursor.x + 6) 0 (t.cursor.x + 7) text_height) ;
+
+    (* Show token where cursor currently is *)
+    if t.show_token then (
+      let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor in
+      let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s in
+      for i = token_s.y to token_e.y do
+        let len = Filebuffer.line_length t.filebuffer i in
+        let s = if i = token_s.y then token_s.x else 0 in
+        let e = if i = token_e.y then (token_e.x + 1) else len in
+        let s' = min s e in
+        let e' = max s e in
+        let y = i - t.view_start in
+        (* BUG: this does not take into account the additional offset from Overflow mode *)
+        Framebuffer.put_color_rect
+          framebuffer
+          Config.default.colors.current_token
+          (mk_rect (s' + 6) y (e' + 6) y) ;
+      done ;
+    ) ;
+
+    (* BUG: these show_* color rectangles cause weirdness in Overflow mode ! *)
+    (* Show selection *)
+    if t.show_selection then
+      t.context.selection
+        |> Array.map (fun { topleft ; bottomright } -> mk_rect (topleft.x + 6) topleft.y (bottomright.x + 7) bottomright.y)
+        |> Array.iter (Framebuffer.put_color_rect framebuffer Config.default.colors.selection) ;
+
+    (* Show Left/Right/Up/Down tokens relatively to where current token is *)
+    if t.show_neighbor then (
+      Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
+        |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
+      Movement.compute_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
+        |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
+      Movement.compute_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
+        |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
+      Movement.compute_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
+        |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
+    ) ;
+
     (* No-text area *)
     for y = text_stop_y to text_height do
       Framebuffer.put_line framebuffer 0 y 3 frame_default_line
@@ -2399,6 +2444,7 @@ end = struct
       framebuffer
       Config.default.colors.string
       (mk_rect 0 cursor.y 6 cursor.y)
+
 
   let put_border_frame t screen textsize is_focused =
     Screen.put_line screen 0 0 10000 (Line.of_string
@@ -2421,19 +2467,6 @@ end = struct
       Config.default.colors.border
       (mk_rect 0 1 1 textsize.y)
 
-  let put_cursor screen textsize is_focused cursor =
-    let size = Screen.get_size screen in
-    Screen.put_color_rect
-      screen
-      Config.default.colors.cursor_line
-      (mk_rect 6 cursor.y size.x cursor.y) ;
-    Screen.put_color_rect
-      screen
-      Config.default.colors.cursor_line
-      (mk_rect cursor.x 0 (cursor.x + 1) textsize.y) ;
-    if is_focused then (
-      Screen.put_cursor screen cursor
-    )
 
   let draw t screen is_focused =
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
@@ -2441,53 +2474,13 @@ end = struct
       topleft = mk_v2 1 1 ; (* 1 for border column, 1 for header space *)
       bottomright = Screen.get_size screen ;
     } in
-    let textsize = Screen.get_size textscreen in
-    put_border_frame t screen textsize is_focused ;
+    put_border_frame t screen (Screen.get_size textscreen) is_focused ;
     Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
     fill_framebuffer t textscreen ;
     let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-    put_cursor textscreen textsize is_focused final_cursor ;
+    if is_focused then
+      Screen.put_cursor textscreen final_cursor
 
-    (* Show token where cursor currently is *)
-    if t.show_token then (
-      let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor in
-      let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s in
-      for i = token_s.y to token_e.y do
-        let len = Filebuffer.line_length t.filebuffer i in
-        let s = if i = token_s.y then token_s.x else 0 in
-        let e = if i = token_e.y then (token_e.x + 1) else len in
-        let s' = min s e in
-        let e' = max s e in
-        let y = i - t.view_start in
-        (* BUG: this does not take into account the additional offset from Overflow mode *)
-        Screen.put_color_rect
-          textscreen
-          Config.default.colors.current_token
-          (mk_rect (s' + 6) y (e' + 6) y) ;
-      done ;
-    ) ;
-
-    (* BUG: move to fill_framebuffer otherwise linebreaking and scrolling will be incorrect *)
-    (* Show selection *)
-    if t.show_selection then
-      t.context.selection
-        |> Array.map (fun { topleft ; bottomright } -> mk_rect (topleft.x + 6) topleft.y (bottomright.x + 7) bottomright.y)
-        |> Array.iter (Screen.put_color_rect textscreen Config.default.colors.selection) ;
-
-    (* Show Left/Right/Up/Down tokens relatively to where current token is *)
-    if t.show_neighbor then (
-      Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
-        |> lightup_pixel t textscreen Config.default.colors.leftright_neighbor ;
-
-      Movement.compute_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
-        |> lightup_pixel t textscreen Config.default.colors.leftright_neighbor ;
-
-      Movement.compute_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
-        |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
-
-      Movement.compute_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
-        |> lightup_pixel t textscreen Config.default.colors.updown_neighbor ;
-    ) ;
 end
 
 
