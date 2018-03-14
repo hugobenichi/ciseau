@@ -2073,13 +2073,20 @@ module SelectionMovement = struct
     in
     (array_get selection (loop selection v2 0)).topleft
 
-  let selection_start { selection } any v2 =
-    (* TODO *)
-    v2
+  let select_current_rect fn { selection } any v2 =
+    let rec loop s c i =
+      if i = alen s
+        then c
+        else (
+          let r = array_get s i in
+          if is_v2_less_or_equal r.topleft c && is_v2_less_or_equal c r.bottomright
+            then fn r
+            else loop s c (i + 1))
+    in
+    loop selection v2 0
 
-  let selection_end { selection } any v2 =
-    (* TODO *)
-    v2
+  let selection_start = select_current_rect (fun { topleft }      -> topleft)
+  let selection_end   = select_current_rect (fun { bottomright }  -> bottomright)
 
   let movement movement_context =
     let open Move in
