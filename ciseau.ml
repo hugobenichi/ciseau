@@ -2050,8 +2050,8 @@ end
 module SelectionMovement = struct
   open MovementContext
 
-  let is_v2_less_or_equal va vb = (va.x < vb.x) || (va.x = vb.x) && (va.y <= vb.y)
-  let is_v2_less          va vb = (va.x < vb.x) || (va.x = vb.x) && (va.y < vb.y)
+  let is_v2_less_or_equal va vb = (va.y < vb.y) || (va.y = vb.y) && (va.x <= vb.x)
+  let is_v2_less          va vb = (va.y < vb.y) || (va.y = vb.y) && (va.x < vb.x)
 
   let noop any cursor = cursor
 
