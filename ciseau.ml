@@ -3,9 +3,9 @@ let logs = open_out "/tmp/ciseau.log"
 
 (* Debugging flags *)
 let kLOG_STATS    = true
-let kDRAW_SCREEN  = true
+let kDRAW_SCREEN  = false
 let kDEBUG        = false
-let kPERSISDRAW   = false
+let kPERSISTDRAW  = false
 
 module CommonCombinators = struct
   let id x          = x
@@ -37,46 +37,21 @@ module OptionCombinators = struct
 end
 
 
-(* Exceptions with *real* backtraces *)
 module Error = struct
-  open Printexc
 
-  let default_depth = 20
-
-  let format_loc =
-    function
-      | None      -> "unknown loc"
-      | Some loc  -> Printf.sprintf
-                      "  at %s:\t%5d\t%d - %d" loc.filename loc.line_number loc.start_char loc.end_char
-
-  let get_backtrace () =
-    get_callstack default_depth
-      |> backtrace_slots
-      |> function
-          | None        -> "no stacktrace info"
-          | Some slots  ->
-              slots
-                |> Array.map (Slot.location >> format_loc)
-                |> Array.to_list
-                |> String.concat "\n"
-
-
-  exception E of string * string
-
-  let e msg =
-    E (msg, get_backtrace ())
-
-  let wrap e =
-    E (to_string e, get_backtrace ())
+  exception E of string
 
   let _ =
-    record_backtrace true ;
-
+    Printexc.record_backtrace true ;
     Printexc.register_printer
       (function
-        | E (msg, stacktrace)   ->  Some (msg ^ "\n" ^ stacktrace)
-        | _                     ->  None)
+        | E msg ->  Some msg
+        | _     ->  None)
 end
+
+let fail msg = raise (Error.E msg)
+
+let assert_that ?msg:(m="failed assert") condition = if not condition then fail m
 
 
 let output_int f    = string_of_int >> output_string f
@@ -92,14 +67,10 @@ let is_digit      chr = ('0' <= chr) && (chr <= '9')
 let is_alphanum   chr = (is_digit chr) || (is_letter chr)
 let is_printable  chr = (' ' <= chr) && (chr <= '~')
 
-let assert_that ?msg:(m="failed assert") condition =
-  if not condition
-    then raise (Error.e m)
-
 let write fd buffer len =
   let n = Unix.write fd buffer 0 len in
   if n <> len
-    then raise (Error.e "fd write failed")
+    then fail "fd write failed"
 
 
 (* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
@@ -109,55 +80,44 @@ module ArrayOperations = struct
   let blen = Bytes.length
   let slen = String.length
 
+  let check_bounds src_offset src_len =
+    if src_offset < 0 || src_len <= src_offset
+      then fail (Printf.sprintf "set/get out of bounds: offset %d for range 0..%d" src_offset src_len)
+
+  let check_range range_len src_offset src_len =
+    if range_len < 0 || src_offset < 0 || src_len < src_offset + range_len
+      then fail (Printf.sprintf "invalid blit/fill for range %d..%d+%d on len=%d item" src_offset src_offset range_len src_len)
+
   let string_at s i =
-    if i < 0 || slen s <= i
-      then raise (Error.e (Printf.sprintf "String.get \"%s\" %d out of bound" s i)) ;
+    check_bounds i (slen s) ;
     String.get s i
 
   let array_get a i =
-    if i < 0 || alen a <= i
-      then raise (Error.e (Printf.sprintf "Array.get len=%d at %d out of bound" (alen a) i)) ;
+    check_bounds i (alen a) ;
     Array.get a i
 
   let array_set a i x =
-    if i < 0 || alen a <= i
-      then raise (Error.e (Printf.sprintf "Array.set len=%d at %d out of bound" (alen a) i)) ;
+    check_bounds i (alen a) ;
     Array.set a i x
 
   let array_fill dst dst_o len value =
-    try
-      Array.fill dst dst_o len value
-    with
-      e ->  Printf.sprintf "invalid fill: %d cells for [%d,%d]" len dst_o (alen dst)
-              |> Error.e
-              |> raise
+    check_range len dst_o (alen dst) ;
+    Array.fill dst dst_o len value
 
   let array_blit src src_o dst dst_o len =
-    try
-      Array.blit src src_o dst dst_o len
-    with
-      e ->  Printf.sprintf "invalid blit: %d cells from [%d,%d] to [%d,%d]"
-              len src_o (alen src) dst_o (alen dst)
-              |> Error.e
-              |> raise
+    check_range len src_o (alen src) ;
+    check_range len dst_o (alen dst) ;
+    Array.blit src src_o dst dst_o len
 
   let bytes_blit src src_o dst dst_o len =
-    try
-      Bytes.blit src src_o dst dst_o len
-    with
-      e ->  Printf.sprintf "invalid blit: %d bytes from [%d,%d] to [%d,%d]"
-              len src_o (blen src) dst_o (blen dst)
-              |> Error.e
-              |> raise
+    check_range len src_o (blen src) ;
+    check_range len dst_o (blen dst) ;
+    Bytes.blit src src_o dst dst_o len
 
   let bytes_blit_string src src_o dst dst_o len =
-    try
-      Bytes.blit_string src src_o dst dst_o len
-    with
-      e ->  Printf.sprintf "invalid blit_string: %d bytes from [%d,%d] to [%d,%d]"
-              len src_o (slen src) dst_o (blen dst)
-              |> Error.e
-              |> raise
+    check_range len src_o (slen src) ;
+    check_range len dst_o (blen dst) ;
+    Bytes.blit_string src src_o dst dst_o len
 end
 
 
@@ -178,11 +138,11 @@ module Slice = struct
 
   let check_range (s, e) l =
     if bound_checking && (s < 0 || l < e) then
-      raise (Error.e (Printf.sprintf "Bad slice range: cannot slice (%d,%d) from array of len %d" s e l))
+      fail (Printf.sprintf "Bad slice range: cannot slice (%d,%d) from array of len %d" s e l)
 
   let shift (s, e) i =
     if bound_checking && (i < 0 || (e - s) < i) then
-      raise (Error.e (Printf.sprintf "Slice index %d access is out of bounds (%d,%d)" i s e)) ;
+      fail (Printf.sprintf "Slice index %d access is out of bounds (%d,%d)" i s e) ;
     s + i
 
   let shift_range (s, e) (s', e') =
@@ -351,7 +311,7 @@ module Vec2 = struct
 
   let assert_v2_inside box_v2 v2 =
     if is_v2_outside box_v2 v2
-      then raise (Error.e (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y))
+      then fail (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y)
 end
 
 
@@ -712,7 +672,7 @@ module Keys = struct
       match Unix.read Unix.stdin buffer 0 1 with
       | 1   -> Bytes.get buffer 0 |> Char.code |> code_to_key
       | 0   -> one_byte_reader ()     (* timeout *)
-      | _   -> raise (Failure "next_char failed")
+      | _   -> fail "next_char failed"
       | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
           Printf.fprintf logs "Unix_error errmsg='%s' fn='%s'\n" (Unix.error_message errcode) fn_name ;
           match errcode with
@@ -980,7 +940,7 @@ module Term = struct
   let do_with_raw_mode action =
     let open Unix in
     let stdout_write_string s =
-      if (write_substring stdout s 0 (slen s)) <> slen s then raise (Failure "sdtout write failed")
+      if (write_substring stdout s 0 (slen s)) <> slen s then fail "sdtout write failed"
     in
     (* because terminal_io is a record of mutable fields, do tcgetattr twice:
        once for restoring later, once for setting the terminal to raw mode *)
@@ -2577,9 +2537,9 @@ end = struct
       topleft = mk_v2 1 1 ; (* 1 for border column, 1 for header space *)
       bottomright = Screen.get_size screen ;
     } in
-    if not kPERSISDRAW || t.redraw <> Nodraw then
+    if not kPERSISTDRAW || t.redraw <> Nodraw then
       put_border_frame t screen (Screen.get_size textscreen) is_focused ;
-    if not kPERSISDRAW || t.redraw = Redraw then (
+    if not kPERSISTDRAW || t.redraw = Redraw then (
       Screen.clear textscreen ;
       Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
       fill_framebuffer t textscreen ;
@@ -2968,7 +2928,7 @@ module Ciseau = struct
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
-    if not kPERSISDRAW then
+    if not kPERSISTDRAW then
       Framebuffer.clear editor.frame_buffer ;
     Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
     show_status editor ;
@@ -3123,8 +3083,8 @@ module Fuzzer = struct
     let i = ref 0 in
     let rec loop () =
       (*
-      *)
       Unix.sleepf 0.01 ;
+      *)
       incr i ;
       if !i > n
         then stop_key
@@ -3163,7 +3123,7 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Fuzzer.main 100 ;
+  Fuzzer.main 1000 ;
   (*
   Ciseau.main () ;
    *)
