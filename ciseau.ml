@@ -2085,14 +2085,15 @@ module SelectionMovement = struct
   let noop any cursor = cursor
 
   (* PERF: do binary search instead *)
-  (* BUG: this appears to be broken with the current hardcoded selection-from-search *)
   let selection_prev { selection } any v2 =
     let rec loop s c i =
       if i = alen s || is_v2_less_or_equal c (array_get s i).topleft
         then (i - 1 + (alen s)) mod alen s (* mod == remainder *)
         else loop s c (i + 1)
     in
-    (array_get selection (loop selection v2 0)).topleft
+    if alen selection = 0
+      then v2
+      else (array_get selection (loop selection v2 0)).topleft
 
   let selection_next { selection } any v2 =
     let rec loop s c i =
@@ -2100,7 +2101,9 @@ module SelectionMovement = struct
         then i mod alen s
         else loop s c (i + 1)
     in
-    (array_get selection (loop selection v2 0)).topleft
+    if alen selection = 0
+      then v2
+      else (array_get selection (loop selection v2 0)).topleft
 
   let select_current_rect fn { selection } any v2 =
     let rec loop s c i =
@@ -2112,7 +2115,9 @@ module SelectionMovement = struct
             then fn r
             else loop s c (i + 1))
     in
-    loop selection v2 0
+    if alen selection = 0
+      then v2
+      else loop selection v2 0
 
   let selection_start = select_current_rect (fun { topleft }      -> topleft)
   let selection_end   = select_current_rect (fun { bottomright }  -> bottomright)
