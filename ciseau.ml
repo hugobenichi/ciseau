@@ -60,6 +60,7 @@ module Error = struct
                 |> Array.to_list
                 |> String.concat "\n"
 
+
   exception E of string * string
 
   let e msg =
@@ -77,12 +78,6 @@ module Error = struct
         | _                     ->  None)
 end
 
-
-let try_finally action cleanup =
-  (try Ok (action ()) with e -> Error e)
-    |> function
-        | Ok success  -> cleanup () ; success
-        | Error error -> cleanup () ; raise error
 
 let output_int f    = string_of_int >> output_string f
 let output_float f  = string_of_float >> output_string f
@@ -1012,11 +1007,19 @@ module Term = struct
       stdout_write_string Control.cursor_save ;
       stdout_write_string Control.switch_offscreen ;
       tcsetattr stdin TCSAFLUSH want ;
-      try_finally action (fun () ->
+
+      let cleanup () =
         tcsetattr stdin TCSAFLUSH initial ;
         stdout_write_string Control.switch_mainscreen ;
         stdout_write_string Control.cursor_restore
-      )
+      in
+      try
+        action () ;
+        cleanup () ;
+      with
+        e ->
+          cleanup () ;
+          raise e ;
     )
 
 end
@@ -1421,9 +1424,14 @@ module Filebuffer = struct
       | exception End_of_file -> lines
     in
     let ch = open_in f in
-    let action () = loop (Slice.init_slice_with_capacity 0 32 "") ch in
-    let cleanup () = close_in ch in
-    try_finally action cleanup
+    try
+      let r = loop (Slice.init_slice_with_capacity 0 32 "") ch in
+      close_in ch ;
+      r
+    with
+      e ->
+        close_in ch ;
+        raise e
 
   let from_lines file lines =
     let filepath = (Sys.getcwd ()) ^ "/" ^ file in {
@@ -3109,7 +3117,9 @@ module Fuzzer = struct
     let l = alen fuzz_keys in
     let i = ref 0 in
     let rec loop () =
-      (* Unix.sleepf 0.1 ; *)
+      (*
+      *)
+      Unix.sleepf 0.01 ;
       incr i ;
       if !i > n
         then stop_key
@@ -3132,7 +3142,8 @@ module Fuzzer = struct
               |> Term.do_with_raw_mode
     with
       e ->
-          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n"
+        Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+        Printexc.print_backtrace stdout
 
 end
 
@@ -3147,9 +3158,9 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Ciseau.main () ;
+  Fuzzer.main 100 ;
   (*
-  Fuzzer.main 10000 ;
+  Ciseau.main () ;
    *)
   close_out logs
 
