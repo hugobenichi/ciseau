@@ -5,7 +5,7 @@ let logs = open_out "/tmp/ciseau.log"
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
 let kDEBUG        = false
-
+let kPERSISDRAW   = false
 
 module CommonCombinators = struct
   let id x          = x
@@ -169,6 +169,7 @@ end
 open ArrayOperations
 
 
+(* CLEANUP: remove slice *)
 module Slice = struct
 
   type range = int * int
@@ -1026,6 +1027,7 @@ module Framebuffer : sig
 
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
+  val clear_rect        : t -> rect -> unit
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_cursor        : t -> v2 -> unit
@@ -1156,6 +1158,17 @@ end = struct
     array_fill t.z_index 0 t.len Default.z ;
     *)
     array_blit default_line_length 0 t.line_lengths 0 t.window.y
+
+  let clear_rect t { topleft ; bottomright } =
+    assert_v2_inside t.window topleft ;
+    assert_v2_inside t.window bottomright ;
+    for y = topleft.y to bottomright.y do
+      let offset = y * t.window.x + topleft.x in
+      let len = bottomright.x - topleft.x in
+      Bytes.fill t.text offset len Default.text ;
+      array_blit default_fg_colors 0 t.fg_colors offset len ;
+      array_blit default_bg_colors 0 t.bg_colors offset len ;
+    done
 
   let render frame_buffer render_buffer =
     Bytevector.reset render_buffer ;
@@ -1294,6 +1307,7 @@ module Screen : sig
   val get_offset    : t -> v2
   val get_width     : t -> int
   val get_height    : t -> int
+  val clear         : t -> unit
   val mk_screen     : Framebuffer.t -> rect -> t
   val mk_subscreen  : t -> rect -> t
   val put_color_rect: t -> Color.color_cell -> rect -> unit
@@ -1307,6 +1321,7 @@ end = struct
   type t = {
     size            : v2 ;
     screen_offset   : v2 ;
+    (* CLEANUP: keep the underlying rectangle in that struct on top of size *)
     frame_buffer    : Framebuffer.t ;
   }
 
@@ -1322,6 +1337,12 @@ end = struct
   let get_height t =
     t.size.y
 
+  let clear t =
+    Framebuffer.clear_rect t.frame_buffer {
+      topleft     = t.screen_offset ;
+      bottomright = t.screen_offset <+> t.size ;
+    }
+
   (* Makes a screen with 'fb' as the backend framebuffer.
    * Passed in rectangle defines the screen absolute coordinates w.r.t the framebuffer *)
   let mk_screen fb { topleft ; bottomright } = {
@@ -1336,8 +1357,8 @@ end = struct
     assert_v2_inside size topleft ;
     assert_v2_inside size bottomright ;
     mk_screen frame_buffer {
-      topleft = (screen_offset <+> topleft) ;
-      bottomright = (screen_offset <+> bottomright) ;
+      topleft     = screen_offset <+> topleft ;
+      bottomright = screen_offset <+> bottomright ;
     }
 
   let put_color_rect screen colors { topleft ; bottomright } =
@@ -2225,6 +2246,8 @@ end = struct
 
   type numbering_mode = Absolute | CursorRelative
 
+  type redraw_level = Nodraw | FrameDirty | Redraw
+
   module LineNumberCache = struct
     let line_number_cache_t1 = Sys.time () ;;
     (* TODO: - dynmically populate cache as needed by resizing the cache array if needed *)
@@ -2255,6 +2278,7 @@ end = struct
     show_token        : bool ;
     show_neighbor     : bool ;
     show_selection    : bool ;
+    redraw            : redraw_level ;
     context           : MovementContext.t ;
   }
 
@@ -2268,14 +2292,17 @@ end = struct
     show_token        = true ;
     show_neighbor     = true ;
     show_selection    = true ;
+    redraw            = Redraw ;
     context           = let open MovementContext in {
-      (* TODO: implement selection input *)
       selection = Filebuffer.search filebuffer "cursor" ;
     } ;
   }
 
-  let set_mov_mode m t =
-    { t with mov_mode = m }
+  let set_mov_mode m t = {
+    t with
+      mov_mode  = m ;
+      redraw    = Redraw ;
+  }
 
   let cursor { cursor } =
     cursor
@@ -2290,11 +2317,13 @@ end = struct
     let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     if t.cursor.y < t.view_start then
       { t with
-        view_start  = t.cursor.y ;
+          view_start  = t.cursor.y ;
+          redraw      = Redraw ;
       }
     else if t.cursor.y > t.view_start + text_height then
       { t with
-        view_start  = t.cursor.y - text_height ;
+          view_start  = t.cursor.y - text_height ;
+          redraw      = Redraw ;
       }
     else t
 
@@ -2319,27 +2348,47 @@ end = struct
     let new_mode = match t.numbering with
     | Absolute        -> CursorRelative
     | CursorRelative  -> Absolute
-    in { t with numbering = new_mode }
+    in {
+      t with
+        numbering = new_mode ;
+        redraw    = FrameDirty ;
+    }
 
   let swap_linebreaking_mode t =
     let new_mode = match t.linebreaking with
     | Clip      -> Overflow
     | Overflow  -> Clip
-    in { t with linebreaking = new_mode }
+    in {
+      t with
+        linebreaking  = new_mode ;
+        redraw        = Redraw ;
+    }
 
-  let toggle_show_token t =
-    { t with show_token = not t.show_token }
+  let toggle_show_token t = {
+    t with
+      show_token  = not t.show_token ;
+      redraw      = Redraw ;
+    }
 
-  let toggle_show_neighbor t =
-    { t with show_neighbor = not t.show_neighbor }
+  let toggle_show_neighbor t = {
+    t with
+      show_neighbor = not t.show_neighbor ;
+      redraw        = Redraw ;
+  }
 
-  let toggle_show_selection t =
-    { t with show_selection = not t.show_selection }
+  let toggle_show_selection t = {
+    t with
+      show_selection  = not t.show_selection ;
+      redraw          = Redraw ;
+  }
 
   (* TODO: this should also recenter the view horizontally in Clip mode *)
   let recenter_view view_height t =
-    let new_start = t.cursor.y - view_height / 2 in
-    { t with view_start = max new_start 0 }
+    let new_start = t.cursor.y - view_height / 2 in {
+      t with
+        view_start  = max new_start 0 ;
+        redraw      = Redraw ;
+    }
 
   (* TODO: move drawing in separate module ? *)
 
@@ -2515,20 +2564,22 @@ end = struct
       topleft = mk_v2 1 1 ; (* 1 for border column, 1 for header space *)
       bottomright = Screen.get_size screen ;
     } in
-    put_border_frame t screen (Screen.get_size textscreen) is_focused ;
-    Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
-    fill_framebuffer t textscreen ;
-    let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-    if is_focused then
-      Screen.put_cursor textscreen final_cursor
+    if not kPERSISDRAW || t.redraw <> Nodraw then
+      put_border_frame t screen (Screen.get_size textscreen) is_focused ;
+    if not kPERSISDRAW || t.redraw = Redraw then (
+      Screen.clear textscreen ;
+      Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
+      fill_framebuffer t textscreen ;
+      let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
+      if is_focused then
+        Screen.put_cursor textscreen final_cursor ;
+    )
 
 end
 
 
 module Stats = struct
 
-  (* TODO: add every X a full stats collection for printing total current footprint *)
-  (* TODO: print all allocated word diff to logs to get quantiles by post processing *)
   type t = {
     gc_stats            : Gc.stat ;
     last_major_words    : float ;
@@ -2904,7 +2955,8 @@ module Ciseau = struct
 
   let refresh_screen editor =
     (* PERF: only clear rectangles per subscreen *)
-    Framebuffer.clear editor.frame_buffer ;
+    if not kPERSISDRAW then
+      Framebuffer.clear editor.frame_buffer ;
     Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
     show_status editor ;
     Framebuffer.render editor.frame_buffer editor.render_buffer ;
@@ -3105,12 +3157,17 @@ let () =
 (* next TODOs:
  *
  * rendering:
- *  - fix bugs with new methods
- *    - crash when resizing and the right edge goes over the cursor
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
- *  - general cleanup, renaming of variables, solidification
- *  - need to work on memory pressure with new put_framebuffer.
+ *  - bug: put_color_rect has some crashes
+ *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
+ *  - better management of screen dragging for horizontal scrolling
+ *
+ *  general cleanups:
+ *  - variable renaming
+ *  - solidification
+ *  - doc
+ *  - use named parameters and optional parameters
  *
  *  movements:
  *  - implement easymotion
@@ -3121,31 +3178,32 @@ let () =
  *  - Proper tree navigation
  *  - bind brackets and braces delim movement
  *
- *  highlightning
- *    - mode for show all tokens in current token movement mode
- *    - mode for showing next / prev / up / down landing locations
+ *  highlightning:
+ *  - static syntax coloring based on tokens
  *
  *  hud: put movement/command history per Fileview and show in user input bar
  *
  *  minimal edition features
- *    - starts to add token deletion bound to 'x'
+ *    - token deletion
+ *    - token swap
+ *    - token rotate
  *
  * perfs:
  *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - memory optimization for
  *      TokenMovement
  *      DelimMovement
+ *  - color_cell creation in Framebuffer.render
  *
  * others:
  *  - hammer the code with asserts and search for more bugs in the drawing
- *  - write function docs and comments
  *
  * next features:
  *  - finish file navigation
- *  - word selections ?
  *  - find
+ *    - free input search
  *    - add vim's incsearch feature
- *  - static keyword hightlightning
+ *    - from current token
  *)
 
 
