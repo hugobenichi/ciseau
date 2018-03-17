@@ -119,6 +119,14 @@ module ArrayOperations = struct
     check_range len src_o (slen src) ;
     check_range len dst_o (blen dst) ;
     Bytes.blit_string src src_o dst dst_o len
+
+  let array_rev a =
+    let l = alen a in
+    for i = 0 to (l - 1) / 2 do
+      let t = a.(i) in
+      a.(i)         <- a.(l - i - 1) ;
+      a.(l - i - 1) <- t
+    done
 end
 
 
@@ -166,9 +174,6 @@ module Slice = struct
       range = (s, e) ;
     }
 
-  let init_slice len zero =
-    mk_slice 0 len (Array.make len zero)
-
   let wrap_array data =
     mk_slice 0 (alen data) data
 
@@ -187,16 +192,8 @@ module Slice = struct
       range = shift_range range new_range ;
     }
 
-  let slice_left e slice =
-    reslice (0, e) slice
-
   let slice_right s slice =
     reslice (s, len slice) slice
-
-  let rev slice =
-    let l = len slice in
-    let rev_index i = l - i - 1 in
-    init_slice_fn l (rev_index >> get slice)
 
   let map fn slice =
     Array.init (len slice) (get slice >> fn) |> wrap_array
@@ -219,20 +216,6 @@ module Slice = struct
     in
       array_set data' e elem ;
       mk_slice s (e + 1) data'
-
-  let cat slice1 slice2 =
-    let l1 = len slice1 in
-    let l2 = len slice2 in
-    if l1 = 0
-      then slice2
-    else if l2 = 0
-      then slice1
-    else
-      (* TODO: see if slice2 fits in slice1 backing array *)
-      let output = init_slice (l1 + l2) (get slice1 0) in
-      copy output slice1 ;
-      copy (slice_right l1 output) slice2 ;
-      output
 end
 
 
@@ -791,7 +774,7 @@ module ScreenConfiguration = struct
       let l = min (i + 1) r in
       (k + i * a, l + (i + 1) * a)
     in
-    Slice.init_slice_fn n compute_segment
+    Array.init n compute_segment
 
   let flip_xy_rect { topleft ; bottomright } =
     mk_rect topleft.y topleft.x bottomright.y bottomright.x
@@ -799,29 +782,30 @@ module ScreenConfiguration = struct
   let rec mk_view_ports total_area n_screen =
     function
       | { layout = Single } ->
-          Slice.init_slice 1 total_area
+          Array.make 1 total_area
       | _ when n_screen = 1 ->
           mk_view_ports total_area 1 Configs.zero
       | { layout = Columns ; orientation = Normal } ->
           let { topleft = offset ; bottomright = size } = total_area in
           split size.x n_screen
-            |> Slice.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
+            |> Array.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
       | { layout = Columns ; orientation = Mirror } ->
-          mk_config Columns Normal
-            |> mk_view_ports total_area n_screen
-            |> Slice.rev
+          let views = mk_view_ports total_area n_screen (mk_config Columns Normal) in
+          array_rev views ;
+          views
       | { layout = Rows ; orientation } ->
           mk_config Columns orientation
             |> mk_view_ports (flip_xy_rect total_area) n_screen
-            |> Slice.map flip_xy_rect
+            |> Array.map flip_xy_rect
       | { layout = ColumnMajor ; orientation } ->
           let halves = mk_view_ports total_area 2 (mk_config Columns orientation) in
-          let minors = mk_view_ports (Slice.get halves 1) (n_screen - 1) Configs.rows in
-          Slice.cat (Slice.slice_left 1 halves) minors
+          let minors = mk_view_ports (array_get halves 1) (n_screen - 1) Configs.rows in
+          let bla = Array.append halves minors in
+          Array.sub bla 1 ((alen halves) + (alen minors) - 1)
       | { layout = RowMajor ; orientation } ->
           mk_config ColumnMajor orientation
             |> mk_view_ports (flip_xy_rect total_area) n_screen
-            |> Slice.map flip_xy_rect
+            |> Array.map flip_xy_rect
 end
 
 
@@ -2633,19 +2617,19 @@ module Tileset = struct
   type t = {
     screen_size   : rect ;
     screen_config : ScreenConfiguration.t ;
-    screen_tiles  : rect Slice.t ;
+    screen_tiles  : rect array ;
     focus_index   : int ;
     fileviews     : Fileview.t Slice.t ;
   }
 
   let adjust_fileviews screen_tiles fileviews =
-    let n_tiles = Slice.len screen_tiles in
+    let n_tiles = alen screen_tiles in
     let adjust_fileview i =
       let view = Slice.get fileviews i in
       (* In Single tile mode, len tiles < len fileviews *)
       if i < n_tiles
         then
-          let tile = Slice.get screen_tiles i in
+          let tile = array_get screen_tiles i in
           let height = tile.bottomright.y - tile.topleft.y in
           Fileview.adjust_view height view
         else
@@ -2667,10 +2651,10 @@ module Tileset = struct
   let draw_fileview t frame_buffer view_idx tile_idx =
       Fileview.draw
         (Slice.get t.fileviews view_idx)
-        (Slice.get t.screen_tiles tile_idx |> Screen.mk_screen frame_buffer)
+        (array_get t.screen_tiles tile_idx |> Screen.mk_screen frame_buffer)
 
   let draw_fileviews t frame_buffer =
-    let n_screens = Slice.len t.screen_tiles in
+    let n_screens = alen t.screen_tiles in
     if n_screens = 1
       then
         draw_fileview t frame_buffer t.focus_index 0 true
@@ -2680,9 +2664,9 @@ module Tileset = struct
         done
 
   let get_focused_tile t =
-    if Slice.len t.screen_tiles > 1
-      then Slice.get t.screen_tiles t.focus_index
-      else Slice.get t.screen_tiles 0
+    if alen t.screen_tiles > 1
+      then array_get t.screen_tiles t.focus_index
+      else array_get t.screen_tiles 0
 
   let apply_op t =
     (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
@@ -3121,10 +3105,10 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Fuzzer.main 2000 ;
   (*
-  Ciseau.main () ;
+  Fuzzer.main 2000 ;
    *)
+  Ciseau.main () ;
   close_out logs
 
 
