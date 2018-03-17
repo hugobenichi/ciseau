@@ -1,9 +1,10 @@
 let starttime = Sys.time ()
+
 let logs = open_out "/tmp/ciseau.log"
 
 (* Debugging flags *)
 let kLOG_STATS    = true
-let kDRAW_SCREEN  = false
+let kDRAW_SCREEN  = true
 let kDEBUG        = false
 let kPERSISTDRAW  = false
 
@@ -1146,38 +1147,32 @@ end = struct
     if kDRAW_SCREEN
       then Bytevector.write Unix.stdout render_buffer
 
-  let update_line_end t x y blitlen =
-    let current_end = array_get t.line_lengths y in
-    let new_end = x + blitlen in
-    if current_end < new_end then
-      array_set t.line_lengths y new_end
-
-  let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
-    (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
-    if is_v2_inside t.window topleft then
-    if is_v2_inside t.window bottomright then (
-      Printf.fprintf logs "put_color_rect rect:[%d,%d,%d,%d]\n" topleft.x topleft.y bottomright.x bottomright.y ;
-      flush logs ;
-      let len = bottomright.x - topleft.x in
-      for y = topleft.y to bottomright.y do
-        let offset = y * t.window.x + topleft.x in
-        Printf.fprintf logs "put_color_rect rect:[%d,%d,%d,%d] iter y:%d offset:%d\n"
-          topleft.x topleft.y bottomright.x bottomright.y y offset ;
-        flush logs ;
-        fill_fg_color t offset len fg ;
-        fill_bg_color t offset len bg ;
-        update_line_end t topleft.x y bottomright.x
-      done ;
-      Printf.fprintf logs "put_color_rect rect:[%d,%d,%d,%d] done\n" topleft.x topleft.y bottomright.x bottomright.y ;
-      flush logs )
-
-  let put_cursor t cursor =
-    t.cursor <- cursor
+  let update_line_end t x y =
+    if (array_get t.line_lengths y) < x then
+      array_set t.line_lengths y x
 
   let to_offset window x y =
     assert (x <= window.x) ;
     assert (y <= window.y) ;
     y * window.x + x
+
+  let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
+    (* Clip rectangle vertically to framebuffer's window *)
+    let x_start = max 0 topleft.x in
+    let y_start = max 0 topleft.y in
+    let x_end   = min t.window.x bottomright.x in
+    let y_end   = min (t.window.y - 1) bottomright.y in
+    let len     = x_end - x_start in
+    for y = y_start to y_end do
+      let offset = to_offset t.window x_start y in
+      fill_fg_color t offset len fg ;
+      fill_bg_color t offset len bg ;
+      update_line_end t x_end y
+    done
+
+  let put_cursor t cursor =
+    assert_that (is_v2_inside t.window cursor) ;
+    t.cursor <- cursor
 
   let put_string t len x y text =
     let offset = to_offset t.window x y in
@@ -1185,7 +1180,7 @@ end = struct
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - offset)) ;
     (* BUG: this should only set that array if it is a higher number *)
-    update_line_end t x y blitlen ;
+    update_line_end t (x + blitlen) y ;
     bytes_blit_string text 0 t.text offset blitlen
 
   let put_block
@@ -1195,7 +1190,7 @@ end = struct
     let blitlen = min len block_len in
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - bytes_offset)) ;
-    update_line_end t x y blitlen ;
+    update_line_end t (x + blitlen) y ;
     bytes_blit_string text block_offset t.text bytes_offset blitlen
 
   let rec put_line framebuffer x y len =
@@ -1336,8 +1331,8 @@ end = struct
 
   let put_color_rect screen colors { topleft ; bottomright } =
     (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
-    if not (is_v2_outside screen.size topleft) then
-    if not (is_v2_outside screen.size bottomright) then
+    if is_v2_inside screen.size topleft then
+    if is_v2_inside screen.size bottomright then (
       Framebuffer.put_color_rect
         screen.frame_buffer
         colors
@@ -1345,7 +1340,7 @@ end = struct
           (screen.screen_offset.x + topleft.x)
           (screen.screen_offset.y + topleft.y)
           (screen.screen_offset.x + bottomright.x)
-          (screen.screen_offset.y + bottomright.y))
+          (screen.screen_offset.y + bottomright.y)))
 
   let put_line screen x y maxlen line =
     if y < screen.size.y then
@@ -1445,8 +1440,6 @@ module Filebuffer = struct
         | exception _ -> acc
         | start ->
             let next_start = start + width in
-      Printf.fprintf logs "found match: %d,[%d-%d]\n" y start width ;
-      flush logs ;
             let found = mk_rect start y (next_start - 1) y in
             loop_in_one_line width r s y next_start (found :: acc)
     in
@@ -2452,18 +2445,20 @@ end = struct
     if t.show_token then (
       let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor in
       let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s in
-      for i = token_s.y to token_e.y do
-        let len = Filebuffer.line_length t.filebuffer i in
-        let s = if i = token_s.y then token_s.x else 0 in
-        let e = if i = token_e.y then (token_e.x + 1) else len in
-        let s' = min s e in
-        let e' = max s e in
-        let y = i - t.view_start in
-        (* BUG: this does not take into account the additional offset from Overflow mode *)
+      let y_start = token_s.y - t.view_start in
+      let y_end   = token_e.y - t.view_start in
+      (* The current token can leak out of the current screen: bound start and stop to the screen *)
+      for y = max 0 y_start to min y_end text_stop_y do
+        let len = Filebuffer.line_length t.filebuffer (y + t.view_start) in
+        let x0 =
+          if y = y_start then token_s.x else 0 in       (* start from x=0 for lines after the first *)
+        let x1 =
+          if y = y_end then (token_e.x + 1) else len in (* ends at end-of-line for lines before the last *)
+        let x0' = 6 + (min x0 x1) in
+        let x1' = 6 + (max x0 x1) in
+        (* TODO: this should use a put_color_line api to avoid making rect records *)
         Framebuffer.put_color_rect
-          framebuffer
-          Config.default.colors.current_token
-          (mk_rect (s' + 6) y (e' + 6) y) ;
+          framebuffer Config.default.colors.current_token (mk_rect x0' y x1' y)
       done ;
     ) ;
 
@@ -3133,7 +3128,7 @@ let sigwinch = 28 (* That's for OSX *)
 
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
-  Fuzzer.main 1000 ;
+  Fuzzer.main 2000 ;
   (*
   Ciseau.main () ;
    *)
@@ -3145,7 +3140,6 @@ let () =
  * rendering:
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
- *  - bug: put_color_rect has some crashes
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
  *  - better management of screen dragging for horizontal scrolling
  *
