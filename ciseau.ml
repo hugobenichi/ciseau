@@ -306,6 +306,9 @@ module Vec2 = struct
 
   (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
+  let is_v2_inside { x = xlim ; y = ylim } { x ; y } =
+    (0 <= x) && (0 <= y) && (x <= xlim) && (y <= ylim)
+
   let is_v2_outside { x = xlim ; y = ylim } { x ; y } =
     (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
 
@@ -1125,9 +1128,9 @@ end = struct
   let clear_rect t { topleft ; bottomright } =
     assert_v2_inside t.window topleft ;
     assert_v2_inside t.window bottomright ;
+    let len = bottomright.x - topleft.x in
     for y = topleft.y to bottomright.y do
       let offset = y * t.window.x + topleft.x in
-      let len = bottomright.x - topleft.x in
       Bytes.fill t.text offset len Default.text ;
       array_blit default_fg_colors 0 t.fg_colors offset len ;
       array_blit default_bg_colors 0 t.bg_colors offset len ;
@@ -1151,15 +1154,22 @@ end = struct
 
   let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
     (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
-    if not (is_v2_outside t.window topleft) then
-    if not (is_v2_outside t.window bottomright) then
+    if is_v2_inside t.window topleft then
+    if is_v2_inside t.window bottomright then (
+      Printf.fprintf logs "put_color_rect rect:[%d,%d,%d,%d]\n" topleft.x topleft.y bottomright.x bottomright.y ;
+      flush logs ;
+      let len = bottomright.x - topleft.x in
       for y = topleft.y to bottomright.y do
         let offset = y * t.window.x + topleft.x in
-        let len = bottomright.x - topleft.x in
+        Printf.fprintf logs "put_color_rect rect:[%d,%d,%d,%d] iter y:%d offset:%d\n"
+          topleft.x topleft.y bottomright.x bottomright.y y offset ;
+        flush logs ;
         fill_fg_color t offset len fg ;
         fill_bg_color t offset len bg ;
         update_line_end t topleft.x y bottomright.x
-      done
+      done ;
+      Printf.fprintf logs "put_color_rect rect:[%d,%d,%d,%d] done\n" topleft.x topleft.y bottomright.x bottomright.y ;
+      flush logs )
 
   let put_cursor t cursor =
     t.cursor <- cursor
