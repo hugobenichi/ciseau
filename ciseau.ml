@@ -156,12 +156,6 @@ module Slice = struct
   let get { data ; range } i =
     shift range i |> Array.get data
 
-  let first slice =
-    get slice 0
-
-  let last slice =
-    get slice ((len slice) - 1)
-
   let set { data ; range } i x =
     array_set data (shift range i) x (* memory opt: do not use partial application + |> or >> *)
 
@@ -172,17 +166,11 @@ module Slice = struct
       range = (s, e) ;
     }
 
-  let init_slice_with_capacity len capacity zero =
-    mk_slice 0 len (Array.make capacity zero)
-
   let init_slice len zero =
     mk_slice 0 len (Array.make len zero)
 
   let wrap_array data =
     mk_slice 0 (alen data) data
-
-  let of_list ls =
-    ls |> Array.of_list |> wrap_array
 
   let init_slice_fn len fn =
     Array.init len fn |> wrap_array
@@ -205,19 +193,6 @@ module Slice = struct
   let slice_right s slice =
     reslice (s, len slice) slice
 
-  let split slice pivot =
-    (slice_left slice pivot, slice_right slice pivot)
-
-  let iter fn slice =
-    for i = 0 to (len slice) - 1 do
-      fn (get slice i)
-    done
-
-  let iteri fn slice =
-    for i = 0 to (len slice) - 1 do
-      fn i (get slice i)
-    done
-
   let rev slice =
     let l = len slice in
     let rev_index i = l - i - 1 in
@@ -225,23 +200,6 @@ module Slice = struct
 
   let map fn slice =
     Array.init (len slice) (get slice >> fn) |> wrap_array
-
-  let fold fn zero slice =
-    let rec loop e acc i =
-      if i < e
-        then loop e (i |> get slice |> fn acc) (i + 1)
-        else acc
-    in
-      loop (len slice) zero 0
-
-  let filter fn slice =
-    let slice' = clone slice in
-    let fn out_idx elem =
-      if fn elem
-        then (set slice' out_idx elem ; out_idx + 1 )
-        else out_idx
-    in
-      slice_left (fold fn 0 slice) slice'
 
   let copy dst_slice src_slice =
     let len = min (len dst_slice) (len src_slice) in
@@ -275,13 +233,45 @@ module Slice = struct
       copy output slice1 ;
       copy (slice_right l1 output) slice2 ;
       output
+end
 
-  let sort_slice fn slice =
-    (* TODO: better sort_slice function !! *)
-    let ary = to_array slice
+
+module ArrayBuffer = struct
+  type 'a t = {
+    data : 'a array ;
+    next : int ;
+  }
+
+  let empty () = {
+    data = [||] ;
+    next = 0 ;
+  }
+
+  let reserve n zero_elem = {
+    data = Array.make n zero_elem ;
+    next = 0 ;
+  }
+
+  let to_array { data ; next } =
+    Array.sub data 0 next
+
+  let grow e data =
+    let len = alen data in
+    let len' = max 10 (2 * len) in
+    let data' = Array.make len' e in
+    array_blit data 0 data' 0 len ;
+    data'
+
+  let append { data ; next } elem =
+    let r = {
+      data  = if next < alen data
+                then data
+                else grow elem data ;
+      next  = next + 1 ;
+    }
     in
-      Array.fast_sort fn ary ;
-      wrap_array ary
+      array_set r.data next elem ;
+      r
 end
 
 
@@ -1385,14 +1375,17 @@ module Filebuffer = struct
   let read_file f =
     let rec loop lines ch =
       match input_line ch with
-      | s                     -> loop (Slice.append s lines) ch
+      | s                     -> loop (ArrayBuffer.append lines s) ch
       | exception End_of_file -> lines
     in
     let ch = open_in f in
     try
-      let r = loop (Slice.init_slice_with_capacity 0 32 "") ch in
-      close_in ch ;
-      r
+      let r = loop (ArrayBuffer.reserve 32 "") ch
+                |> ArrayBuffer.to_array
+                |> Slice.wrap_array
+      in
+        close_in ch ;
+        r
     with
       e ->
         close_in ch ;
@@ -3142,6 +3135,7 @@ let () =
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
  *  - better management of screen dragging for horizontal scrolling
+ *  - need to audit put_color_rect from bottom up
  *
  *  general cleanups:
  *  - variable renaming
@@ -3239,13 +3233,18 @@ module FileNavigator = struct
   let dir_ls path =
     let rec loop entries handle =
       match Unix.readdir handle with
-      | s                     -> loop (Slice.append s entries) handle
-      | exception End_of_file -> entries |> Slice.sort_slice String.compare
+      | s                     -> loop (s :: entries) handle
+      | exception End_of_file -> entries
     in
     let handle = Unix.opendir path in
-    let entries = loop (Slice.init_slice_with_capacity 0 16 "") handle in
+    let entries =
+      loop [] handle
+        |> List.rev
+        |> Array.of_list
+    in
+      Array.sort String.compare entries ;
       Unix.closedir handle ;
-      entries
+      Slice.wrap_array entries
 
   let dir_to_filebuffer path =
     path |> dir_ls |> Filebuffer.from_lines path
