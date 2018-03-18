@@ -127,96 +127,16 @@ module ArrayOperations = struct
       a.(i)         <- a.(l - i - 1) ;
       a.(l - i - 1) <- t
     done
+
+  let array_add a_in e =
+    let l = alen a_in in
+    let a_out = Array.make (l + 1) e in
+    array_blit a_in 0 a_out 0 l ;
+    a_out
 end
 
 
 open ArrayOperations
-
-
-(* CLEANUP: remove slice *)
-module Slice = struct
-
-  type range = int * int
-
-  type 'a t = {
-    data : 'a array ;
-    range : range ;
-  }
-
-  let bound_checking = true
-
-  let check_range (s, e) l =
-    if bound_checking && (s < 0 || l < e) then
-      fail (Printf.sprintf "Bad slice range: cannot slice (%d,%d) from array of len %d" s e l)
-
-  let shift (s, e) i =
-    if bound_checking && (i < 0 || (e - s) < i) then
-      fail (Printf.sprintf "Slice index %d access is out of bounds (%d,%d)" i s e) ;
-    s + i
-
-  let shift_range (s, e) (s', e') =
-    check_range (s', e') (e - s) ;
-    (s + s', s + e')
-
-  let len { range = (s, e) } =
-    e - s
-
-  let get { data ; range } i =
-    shift range i |> Array.get data
-
-  let set { data ; range } i x =
-    array_set data (shift range i) x (* memory opt: do not use partial application + |> or >> *)
-
-  let mk_slice s e data =
-    check_range (s, e) (alen data) ;
-    {
-      data = data ;
-      range = (s, e) ;
-    }
-
-  let wrap_array data =
-    mk_slice 0 (alen data) data
-
-  let init_slice_fn len fn =
-    Array.init len fn |> wrap_array
-
-  let to_array { data ; range = (s, e) } =
-    Array.sub data s (e - s)
-
-  let clone slice =
-    slice |> to_array |> wrap_array
-
-  let reslice new_range { data ; range } =
-    {
-      data = data ;
-      range = shift_range range new_range ;
-    }
-
-  let slice_right s slice =
-    reslice (s, len slice) slice
-
-  let map fn slice =
-    Array.init (len slice) (get slice >> fn) |> wrap_array
-
-  let copy dst_slice src_slice =
-    let len = min (len dst_slice) (len src_slice) in
-    let src_offset = shift src_slice.range 0 in
-    let dst_offset = shift dst_slice.range 0 in
-    array_blit src_slice.data src_offset dst_slice.data dst_offset len
-
-  let append elem { data ; range = (s, e) } =
-    let len = alen data in
-    let data' =
-      if e < len
-        then data
-        else
-          let new_data = Array.make (2 * len) data.(0) in
-          array_blit data 0 new_data 0 len ;
-          new_data
-    in
-      array_set data' e elem ;
-      mk_slice s (e + 1) data'
-end
 
 
 module ArrayBuffer = struct
@@ -1352,7 +1272,7 @@ module Filebuffer = struct
     filename    : string ;
     filepath    : string ;
     header      : string ;
-    buffer      : string Slice.t ;        (* the file data, line per line *)
+    buffer      : string array ;          (* the file data, line per line *)
     buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
   }
 
@@ -1366,7 +1286,6 @@ module Filebuffer = struct
     try
       let r = loop (ArrayBuffer.reserve 32 "") ch
                 |> ArrayBuffer.to_array
-                |> Slice.wrap_array
       in
         close_in ch ;
         r
@@ -1379,17 +1298,17 @@ module Filebuffer = struct
     let filepath = (Sys.getcwd ()) ^ "/" ^ file in {
       filename      = file ;
       filepath      = filepath ;
-      header        = filepath ^ "  " ^ (lines |> Slice.len |> string_of_int) ^ "L " ;
+      header        = filepath ^ "  " ^ (lines |> alen |> string_of_int) ^ "L " ;
       buffer        = lines ;
-      buflen        = Slice.len lines ;
+      buflen        = alen lines ;
     }
 
   let init_filebuffer file =
     file |> read_file |> from_lines file
 
-  let line_at { buffer } = Slice.get buffer
+  let line_at { buffer } = array_get buffer
 
-  let line_length { buffer } y = Slice.get buffer y |> slen (* TODO: take into account '\t' *)
+  let line_length { buffer } y = array_get buffer y |> slen (* TODO: take into account '\t' *)
 
   let file_length { buflen } = buflen
   let last_line_index { buflen } = buflen - 1
@@ -2388,7 +2307,7 @@ end = struct
     (* Text area *)
     for i = 0 to text_stop_y - 1 do
       let line_idx = i + t.view_start in
-      let l = Slice.get t.filebuffer.buffer line_idx in
+      let l = Filebuffer.line_at t.filebuffer line_idx in
       let x_len = (slen l) - x_scrolling_offset in
       let b =
         (* PERF: if x_scrolling_offset is zero, use Line.String instead *)
@@ -2619,13 +2538,13 @@ module Tileset = struct
     screen_config : ScreenConfiguration.t ;
     screen_tiles  : rect array ;
     focus_index   : int ;
-    fileviews     : Fileview.t Slice.t ;
+    fileviews     : Fileview.t array ;
   }
 
   let adjust_fileviews screen_tiles fileviews =
     let n_tiles = alen screen_tiles in
     let adjust_fileview i =
-      let view = Slice.get fileviews i in
+      let view = array_get fileviews i in
       (* In Single tile mode, len tiles < len fileviews *)
       if i < n_tiles
         then
@@ -2635,11 +2554,11 @@ module Tileset = struct
         else
           view
     in
-    Slice.init_slice_fn (Slice.len fileviews) adjust_fileview
+    Array.init (alen fileviews) adjust_fileview
 
   let mk_tileset focus_index size screenconfig fileviews =
-    assert (focus_index < Slice.len fileviews) ;
-    let screen_tiles  = ScreenConfiguration.mk_view_ports size (Slice.len fileviews) screenconfig
+    assert (focus_index < alen fileviews) ;
+    let screen_tiles  = ScreenConfiguration.mk_view_ports size (alen fileviews) screenconfig
     in {
       screen_size   = size ;
       screen_config = screenconfig ;
@@ -2648,9 +2567,15 @@ module Tileset = struct
       fileviews     = adjust_fileviews screen_tiles fileviews ;
     }
 
+  let next_focus_index t =
+    (t.focus_index + 1) mod alen t.fileviews
+
+  let prev_focus_index t =
+    (t.focus_index + (alen t.fileviews) - 1) mod alen t.fileviews
+
   let draw_fileview t frame_buffer view_idx tile_idx =
       Fileview.draw
-        (Slice.get t.fileviews view_idx)
+        (array_get t.fileviews view_idx)
         (array_get t.screen_tiles tile_idx |> Screen.mk_screen frame_buffer)
 
   let draw_fileviews t frame_buffer =
@@ -2676,13 +2601,13 @@ module Tileset = struct
           mk_tileset
             t.focus_index new_screen_size t.screen_config t.fileviews
       | FileviewOp fileview_op ->
-          let fileviews' = Slice.clone t.fileviews in
+          let fileviews' = Array.copy t.fileviews in
           let focused_tile = get_focused_tile t in
           let screen_height = focused_tile.bottomright.y - focused_tile.topleft.y in
           t.focus_index
-            |> Slice.get fileviews'
+            |> array_get fileviews'
             |> fileview_op screen_height
-            |> Slice.set fileviews' t.focus_index ;
+            |> array_set fileviews' t.focus_index ;
           { t with fileviews = fileviews' }
       | ScreenLayoutCycleNext ->
           let new_config = ScreenConfiguration.cycle_config_layout_next t.screen_config in
@@ -2697,34 +2622,31 @@ module Tileset = struct
           mk_tileset
             t.focus_index t.screen_size new_config t.fileviews
       | FocusNext ->
-          let new_focus = (t.focus_index + 1) mod Slice.len t.fileviews  in
-          { t with focus_index = new_focus }
+          { t with focus_index = next_focus_index t }
       | FocusPrev ->
-          let new_focus = (t.focus_index + (Slice.len t.fileviews) - 1) mod Slice.len t.fileviews in
-          { t with focus_index = new_focus }
+          { t with focus_index = prev_focus_index t }
       | FocusMain ->
           { t with focus_index = 0 }
       | BringFocusToMain ->
-          let fileviews' = Slice.clone t.fileviews in
-          Slice.get t.fileviews t.focus_index |> Slice.set fileviews' 0 ;
-          Slice.get t.fileviews 0             |> Slice.set fileviews' t.focus_index ;
+          let fileviews' = Array.copy t.fileviews in
+          array_get t.fileviews t.focus_index |> array_set fileviews' 0 ;
+          array_get t.fileviews 0             |> array_set fileviews' t.focus_index ;
           mk_tileset
             0 t.screen_size t.screen_config fileviews'
-      (* TODO: for RotateViews, consider also rotating the focus_index *)
-      | RotateViewsLeft ->
-          let last_index = (Slice.len t.fileviews) - 1 in
-          let fileviews' = Slice.clone t.fileviews in
-          Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
-          Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
-          mk_tileset
-            t.focus_index t.screen_size t.screen_config fileviews'
       | RotateViewsRight ->
-          let last_index = (Slice.len t.fileviews) - 1 in
-          let fileviews' = Slice.clone t.fileviews in
-          Slice.get t.fileviews last_index |> Slice.set fileviews' 0 ;
-          Slice.copy (Slice.slice_right 1 fileviews') t.fileviews ;
-          mk_tileset
-            t.focus_index t.screen_size t.screen_config fileviews'
+          let focus_index' = next_focus_index t in
+          let n_views = alen t.fileviews in
+          let last = array_get t.fileviews (n_views - 1) in
+          let fileviews' = Array.make n_views last in
+          array_blit t.fileviews 0 fileviews' 1 (n_views - 1) ;
+          mk_tileset focus_index' t.screen_size t.screen_config fileviews'
+      | RotateViewsLeft ->
+          let focus_index' = prev_focus_index t in
+          let n_views = alen t.fileviews in
+          let first = array_get t.fileviews 0 in
+          let fileviews' = Array.make n_views first in
+          array_blit t.fileviews 1 fileviews' 0 (n_views - 1) ;
+          mk_tileset focus_index' t.screen_size t.screen_config fileviews'
 end
 
 
@@ -2769,7 +2691,7 @@ module Ciseau = struct
     running         : bool ;
     status_screen   : Screen.t ;
     tileset         : Tileset.t ;
-    filebuffers     : Filebuffer.t Slice.t ; (* TODO: turn this into buffer management layer *)
+    filebuffers     : Filebuffer.t array ; (* TODO: turn this into buffer management layer *)
     user_input      : string ;
     pending_input   : pending_command ;
     stats           : Stats.t ;
@@ -2790,18 +2712,18 @@ module Ciseau = struct
 
   let test_mk_filebuffers file = [|
       Filebuffer.init_filebuffer file ;
-      Filebuffer.init_filebuffer "./ciseau.ml" ;
+      Filebuffer.init_filebuffer "./start_tmux.sh" ;
       Filebuffer.init_filebuffer "./ioctl.c" ;
       (* Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *) *)
       (* FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
-    |] |> Slice.wrap_array
+    |]
 
   let test_mk_fileviews term_dim =
-    Slice.map Fileview.init_fileview
+    Array.map Fileview.init_fileview
 
   let mk_tileset term_dim filebuffers =
     filebuffers
-      |> Slice.map Fileview.init_fileview
+      |> Array.map Fileview.init_fileview
       |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.zero
 
   let init_editor file =
@@ -3118,6 +3040,7 @@ let () =
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
+ *  - bug: the main focused view is not drawn in some Tiles configurations !
  *  - better management of screen dragging for horizontal scrolling
  *  - need to audit put_color_rect from bottom up
  *
@@ -3172,7 +3095,7 @@ module FilebufferSet : sig
   type t
 
   val buffers_menu  : t -> Filebuffer.t (* TODO: this should return a Menu object that wraps a filebuffer *)
-  val list_buffers  : t -> Filebuffer.t Slice.t
+  val list_buffers  : t -> Filebuffer.t array
   val open_buffers  : string -> t -> (t * Filebuffer.t)
   val get_buffer    : string -> t -> Filebuffer.t option
   val close_buffers : string -> t -> t
@@ -3180,11 +3103,11 @@ module FilebufferSet : sig
 end = struct
 
   type t = {
-    buffers : Filebuffer.t Slice.t
+    buffers : Filebuffer.t array
   }
 
   let buffers_menu t =
-    t.buffers |> Slice.map (fun fb -> fb.Filebuffer.filename)
+    t.buffers |> Array.map (fun fb -> fb.Filebuffer.filename)
               |> Filebuffer.from_lines "opened buffers"
 
   let list_buffers { buffers } =
@@ -3193,15 +3116,14 @@ end = struct
   let open_buffers filepath { buffers } =
     (* check if that buffer is not opened yet ! *)
     let fb = Filebuffer.init_filebuffer filepath in
-    let buffers' = buffers |> Slice.clone |> Slice.append fb in
-    ({ buffers = buffers' }, fb)
+    ({ buffers = array_add buffers fb }, fb)
 
   let get_buffer filepath { buffers } =
-    let e = Slice.len buffers in
+    let e = alen buffers in
     let rec loop i =
       if i < e
         then
-          let fb = Slice.get buffers i in
+          let fb = array_get buffers i in
           if fb.Filebuffer.filename = filepath
             then Some fb
             else loop (i + 1)
@@ -3228,7 +3150,7 @@ module FileNavigator = struct
     in
       Array.sort String.compare entries ;
       Unix.closedir handle ;
-      Slice.wrap_array entries
+      entries
 
   let dir_to_filebuffer path =
     path |> dir_ls |> Filebuffer.from_lines path
