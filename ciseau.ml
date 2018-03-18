@@ -216,6 +216,7 @@ open Vec2
 
 
 module Rect = struct
+  (* CLEANUP: change to x;y;w;h representation ? *)
   type rect = {
     topleft     : v2 ;
     bottomright : v2 ;
@@ -225,6 +226,16 @@ module Rect = struct
     topleft     = mk_v2 tl_x tl_y ;
     bottomright = mk_v2 br_x br_y ;
   }
+
+  let rect_size { topleft ; bottomright } =
+    bottomright <-> topleft
+
+  let rect_mv { x ; y } { topleft ; bottomright } =
+    mk_rect (x + topleft.x) (y + topleft.y) (x + bottomright.x) (y + bottomright.y)
+
+  let assert_rect_inside bounds { topleft ; bottomright } =
+    assert_v2_inside bounds topleft ;
+    assert_v2_inside bounds bottomright
 end
 
 
@@ -886,11 +897,14 @@ end
 module Framebuffer : sig
   type t
 
+  (* CLEANUP: use labeled parameters *)
+
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val clear_rect        : t -> rect -> unit
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
+  (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> v2 -> unit
   (* CLEANUP: consider alternative api to remove the need to have a Line.t
    * for instance:
@@ -1165,6 +1179,7 @@ end
 module Screen : sig
   type t
 
+  (* CLEANUP: use labeled parameters *)
   val get_size      : t -> v2
   val get_offset    : t -> v2
   val get_width     : t -> int
@@ -1174,7 +1189,6 @@ module Screen : sig
   val mk_subscreen  : t -> rect -> t
   val put_color_rect: t -> Color.color_cell -> rect -> unit
   val put_line      : t -> int -> int -> int -> Line.t -> unit
-  val put_line2     : t -> int -> Line.t -> unit
   val put_cursor    : t -> v2 -> unit
   val put_framebuffer : t -> Framebuffer.t -> linebreak -> v2
 
@@ -1182,7 +1196,7 @@ end = struct
 
   type t = {
     size            : v2 ;
-    screen_offset   : v2 ;
+    window          : rect ;
     (* CLEANUP: keep the underlying rectangle in that struct on top of size *)
     frame_buffer    : Framebuffer.t ;
   }
@@ -1191,7 +1205,7 @@ end = struct
     t.size
 
   let get_offset t =
-    t.screen_offset
+    t.window.topleft
 
   let get_width t =
     t.size.x
@@ -1199,29 +1213,22 @@ end = struct
   let get_height t =
     t.size.y
 
-  let clear t =
-    Framebuffer.clear_rect t.frame_buffer {
-      topleft     = t.screen_offset ;
-      bottomright = t.screen_offset <+> t.size ;
-    }
-
   (* Makes a screen with 'fb' as the backend framebuffer.
    * Passed in rectangle defines the screen absolute coordinates w.r.t the framebuffer *)
-  let mk_screen fb { topleft ; bottomright } = {
-    size                = bottomright <-> topleft ;
-    screen_offset       = topleft ;
-    frame_buffer        = fb ;
+  let mk_screen fb rect = {
+    size          = rect_size rect ;
+    window        = rect ;
+    frame_buffer  = fb ;
   }
+
+  let clear t =
+    Framebuffer.clear_rect t.frame_buffer t.window
 
   (* Makes a subscreen from this screen.
    * Passed in rectangle defines the subscreen absolut coordinates w.r.t the parent screen *)
-  let mk_subscreen { size ; screen_offset ; frame_buffer } { topleft ; bottomright } =
-    assert_v2_inside size topleft ;
-    assert_v2_inside size bottomright ;
-    mk_screen frame_buffer {
-      topleft     = screen_offset <+> topleft ;
-      bottomright = screen_offset <+> bottomright ;
-    }
+  let mk_subscreen { size ; window ; frame_buffer } rect =
+    assert_rect_inside size rect ;
+    mk_screen frame_buffer (rect_mv window.topleft rect)
 
   let put_color_rect screen colors { topleft ; bottomright } =
     (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
@@ -1231,38 +1238,31 @@ end = struct
         screen.frame_buffer
         colors
         (mk_rect
-          (screen.screen_offset.x + topleft.x)
-          (screen.screen_offset.y + topleft.y)
-          (screen.screen_offset.x + bottomright.x)
-          (screen.screen_offset.y + bottomright.y)))
+          (screen.window.topleft.x + topleft.x)
+          (screen.window.topleft.y + topleft.y)
+          (screen.window.topleft.x + bottomright.x)
+          (screen.window.topleft.y + bottomright.y)))
 
   let put_line screen x y maxlen line =
     if y < screen.size.y then
       Framebuffer.put_line
         screen.frame_buffer
-        (screen.screen_offset.x + x)
-        (screen.screen_offset.y + y)
+        (screen.window.topleft.x + x)
+        (screen.window.topleft.y + y)
         (min screen.size.x maxlen)
         line
 
-  (* Put 'line' on 'screen' at 'line_y_offset' row if 'line_y_offset' is valid. *)
-  let put_line2 screen y line =
-    put_line screen 0 y screen.size.x line
-
   let put_cursor screen pos =
-    Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.screen_offset)
-
-  let put_framebuffer_linebreaking_offset = 6 (* CLEANUP that hack *)
+    Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.window.topleft)
 
   let put_framebuffer screen src linebreaking =
-    let { x ; y } = Framebuffer.put_framebuffer screen.frame_buffer {
-      (* CLEANUP: screen and framebuffer should have compatible rectangle conventions ? *)
-      topleft     = screen.screen_offset ;
-      bottomright = screen.screen_offset <+> screen.size ;
-    } put_framebuffer_linebreaking_offset src linebreaking
+    let linebreak_offset = 6 in (* CLEANUP that hack *)
+    let { x ; y } =
+      Framebuffer.put_framebuffer
+        screen.frame_buffer screen.window linebreak_offset src linebreaking
     in {
-      x = x - screen.screen_offset.x ;
-      y = y - screen.screen_offset.y ;
+      x = x - screen.window.topleft.x ;
+      y = y - screen.window.topleft.y ;
     }
 end
 
@@ -2826,8 +2826,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-    Screen.put_line2 editor.status_screen 0 (Line.String status_text1) ;
-    Screen.put_line2 editor.status_screen 1 (Line.String status_text2) ;
+    Screen.put_line editor.status_screen 0 0 (slen status_text1) (Line.String status_text1) ;
+    Screen.put_line editor.status_screen 0 1 (slen status_text2) (Line.String status_text2) ;
     Screen.put_color_rect editor.status_screen Config.default.colors.status (mk_rect 0 0 editor.term_dim.x 0)
 
   let refresh_screen editor =
@@ -3037,6 +3037,7 @@ let () =
 (* next TODOs:
  *
  * rendering:
+ *  - bug: in paragraph mode when selecting the top most paragraph I get stuck there !
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
