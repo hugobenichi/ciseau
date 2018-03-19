@@ -217,21 +217,31 @@ open Vec2
 module Rect = struct
   (* CLEANUP: change to x;y;w;h representation ? *)
   type rect = {
+    x0 : int ;
+    y0 : int ;
+    w : int ;
+    h : int ;
     topleft     : v2 ;
     bottomright : v2 ;
   }
 
   let mk_rect tl_x tl_y br_x br_y = {
+    x0 = tl_x ;
+    y0 = tl_y ;
+    w = br_x - tl_x ;
+    h = br_y - tl_y ;
     topleft     = mk_v2 tl_x tl_y ;
     bottomright = mk_v2 br_x br_y ;
   }
 
-  let rect_size { topleft ; bottomright } = bottomright <-> topleft
+  let rect_size { w ; h}                  = mk_v2 w h
   let rect_offset { topleft }             = topleft
-  let rect_x { topleft }                  = topleft.x
-  let rect_y { topleft }                  = topleft.y
-  let rect_w { topleft ; bottomright }    = bottomright.x - topleft.x
-  let rect_h { topleft ; bottomright }    = bottomright.y - topleft.y
+  let rect_x { x0 }                        = x0
+  let rect_y { y0 }                        = y0
+  let rect_x_end { bottomright }          = bottomright.x
+  let rect_y_end { bottomright }          = bottomright.y
+  let rect_w { w }                        = w
+  let rect_h { h }                        = h
 
   let rect_mv { x ; y } { topleft ; bottomright } =
     mk_rect (x + topleft.x) (y + topleft.y) (x + bottomright.x) (y + bottomright.y)
@@ -710,8 +720,12 @@ module ScreenConfiguration = struct
     in
     Array.init n compute_segment
 
-  let flip_xy_rect { topleft ; bottomright } =
-    mk_rect topleft.y topleft.x bottomright.y bottomright.x
+  let flip_xy_rect r =
+    let x = rect_x r in
+    let y = rect_y r in
+    let w = rect_w r in
+    let h = rect_h r in
+    mk_rect y x (h + y) (w + x)
 
   let rec mk_view_ports total_area n_screen =
     function
@@ -802,8 +816,7 @@ module Term = struct
 
     (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
     let cursor_control_string vec2 =
-      let {x ; y } = cursor_offset <+> vec2 in
-      Printf.sprintf "%s%d;%dH" start y x
+      Printf.sprintf "%s%d;%dH" start (vec2.y + 1) (vec2.x + 1)
 
     let color_control_string_table : (Color.color_cell, string) Hashtbl.t = Hashtbl.create 1000
 
@@ -1037,12 +1050,11 @@ end = struct
     *)
     array_blit default_line_length 0 t.line_lengths 0 t.window.y
 
-  let clear_rect t { topleft ; bottomright } =
-    assert_v2_inside t.window topleft ;
-    assert_v2_inside t.window bottomright ;
-    let len = bottomright.x - topleft.x in
-    for y = topleft.y to bottomright.y do
-      let offset = y * t.window.x + topleft.x in
+  let clear_rect t rect =
+    assert_rect_inside t.window rect ;
+    let len = rect_w rect in
+    for y = (rect_y rect) to (rect_y_end rect) do
+      let offset = y * t.window.x + (rect_x rect) in
       Bytes.fill t.text offset len Default.text ;
       array_blit default_fg_colors 0 t.fg_colors offset len ;
       array_blit default_bg_colors 0 t.bg_colors offset len ;
@@ -1067,12 +1079,12 @@ end = struct
     assert (y <= window.y) ;
     y * window.x + x
 
-  let put_color_rect t { Color.fg ; Color.bg } { topleft ; bottomright } =
+  let put_color_rect t { Color.fg ; Color.bg } rect =
     (* Clip rectangle vertically to framebuffer's window *)
-    let x_start = max 0 topleft.x in
-    let y_start = max 0 topleft.y in
-    let x_end   = min t.window.x bottomright.x in
-    let y_end   = min (t.window.y - 1) bottomright.y in
+    let x_start = max 0 (rect_x rect) in
+    let y_start = max 0 (rect_y rect) in
+    let x_end   = min t.window.x (rect_x_end rect) in
+    let y_end   = min (t.window.y - 1) (rect_y_end rect) in
     let len     = x_end - x_start in
     for y = y_start to y_end do
       let offset = to_offset t.window x_start y in
@@ -1115,13 +1127,12 @@ end = struct
    * wrapped to the next line in 'dst'.
    * Copy cursor in 'dst' if 'copy_cursor' is true. *)
   let put_framebuffer dst dst_rect linebreaking_offset src linebreaking =
-    assert_v2_inside dst.window dst_rect.topleft ;
-    assert_v2_inside dst.window dst_rect.bottomright ;
-    assert_that (src.window.y >= dst_rect.bottomright.y - dst_rect.topleft.y) ;
+    assert_rect_inside dst.window dst_rect ;
+    assert_that (src.window.y >= rect_h dst_rect) ;
 
-    let w_dst = dst_rect.bottomright.x - dst_rect.topleft.x in
-    let x_dst = ref dst_rect.topleft.x in
-    let y_dst = ref dst_rect.topleft.y in
+    let w_dst = rect_w dst_rect in
+    let x_dst = ref (rect_x dst_rect) in
+    let y_dst = ref (rect_y dst_rect) in
 
     let x_src = ref 0 in
     let y_src = ref 0 in
@@ -1137,7 +1148,7 @@ end = struct
      *    3) make view_adjust, recenter, y scrolling, ... works with the final on frame position instead of the
      *       text position.
      *)
-    while !y_dst < dst_rect.bottomright.y do
+    while !y_dst < (rect_y_end dst_rect) do
       let o_dst = to_offset dst.window !x_dst !y_dst in
       let o_src = to_offset src.window !x_src !y_src in
 
@@ -1165,10 +1176,10 @@ end = struct
         )
         | Overflow -> (
           x_src += w_dst ;
-          x_dst := dst_rect.topleft.x + linebreaking_offset ;
+          x_dst := (rect_x dst_rect) + linebreaking_offset ;
           if !x_src_stop < !x_src then (
             x_src := 0 ;
-            x_dst := dst_rect.topleft.x ;
+            x_dst := (rect_x dst_rect) ;
             incr y_src
           )
         )
@@ -1184,6 +1195,7 @@ module Screen : sig
 
   (* CLEANUP: use labeled parameters *)
   val get_size      : t -> v2
+  val get_window    : t -> rect
   val get_offset    : t -> v2
   val get_width     : t -> int
   val get_height    : t -> int
@@ -1205,6 +1217,7 @@ end = struct
   }
 
   let get_size    { size }    = size
+  let get_window  { window }  = window
   let get_offset  { window }  = rect_offset window
   let get_width   { window }  = rect_w window
   let get_height  { window }  = rect_h window
@@ -2426,10 +2439,10 @@ end = struct
 
   let draw t screen is_focused =
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
-    let textscreen = Screen.mk_subscreen screen {
-      topleft = mk_v2 1 1 ; (* 1 for border column, 1 for header space *)
-      bottomright = Screen.get_size screen ;
-    } in
+    let textscreen = Screen.mk_subscreen screen
+      (* 1 for border column, 1 for header space *)
+      (mk_rect 1 1 (Screen.get_width screen) (Screen.get_height screen))
+    in
     if not kPERSISTDRAW || t.redraw <> Nodraw then
       put_border_frame t screen (Screen.get_size textscreen) is_focused ;
     if not kPERSISTDRAW || t.redraw = Redraw then (
@@ -2626,6 +2639,7 @@ module Tileset = struct
           array_get t.fileviews 0             |> array_set fileviews' t.focus_index ;
           mk_tileset
             0 t.screen_size t.screen_config fileviews'
+      (* TODO: this should only move the current vview ! *)
       | RotateViewsRight ->
           let focus_index' = next_focus_index t in
           let n_views = alen t.fileviews in
@@ -2959,8 +2973,8 @@ module Ciseau = struct
               |> run_editor_loop
               |> Term.do_with_raw_mode
     with
-      e ->
-          e |> Printexc.to_string |> Printf.printf "\nerror: %s\n"
+      e ->  Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+            Printexc.print_backtrace stdout
 
 end
 
@@ -3003,9 +3017,8 @@ module Fuzzer = struct
               |> run_editor_loop n
               |> Term.do_with_raw_mode
     with
-      e ->
-        Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
-        Printexc.print_backtrace stdout
+      e ->  Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+            Printexc.print_backtrace stdout
 
 end
 
