@@ -1199,18 +1199,18 @@ module Screen : sig
   type t
 
   (* CLEANUP: use labeled parameters *)
-  val get_size      : t -> v2
-  val get_window    : t -> rect
-  val get_offset    : t -> v2
-  val get_width     : t -> int
-  val get_height    : t -> int
-  val clear         : t -> unit
-  val mk_screen     : Framebuffer.t -> rect -> t
-  val mk_subscreen  : t -> rect -> t
-  val put_color_rect: t -> Color.color_cell -> rect -> unit
-  val put_line      : t -> int -> int -> int -> Line.t -> unit
-  val put_cursor    : t -> v2 -> unit
-  val put_framebuffer : t -> Framebuffer.t -> linebreak -> v2
+  val screen_size       : t -> v2
+  val screen_window     : t -> rect
+  val screen_offset     : t -> v2
+  val screen_width      : t -> int
+  val screen_height     : t -> int
+  val clear             : t -> unit
+  val mk_screen         : Framebuffer.t -> rect -> t
+  val mk_subscreen      : t -> rect -> t
+  val put_color_rect    : t -> Color.color_cell -> rect -> unit
+  val put_line          : t -> int -> int -> int -> Line.t -> unit
+  val put_cursor        : t -> v2 -> unit
+  val put_framebuffer   : t -> Framebuffer.t -> linebreak -> v2
 
 end = struct
 
@@ -1221,11 +1221,11 @@ end = struct
     frame_buffer    : Framebuffer.t ;
   }
 
-  let get_size    { size }    = size
-  let get_window  { window }  = window
-  let get_offset  { window }  = rect_offset window
-  let get_width   { window }  = rect_w window
-  let get_height  { window }  = rect_h window
+  let screen_size    { size }    = size
+  let screen_window  { window }  = window
+  let screen_offset  { window }  = rect_offset window
+  let screen_width   { window }  = rect_w window
+  let screen_height  { window }  = rect_h window
 
   (* Makes a screen with 'fb' as the backend framebuffer.
    * Passed in rectangle defines the screen absolute coordinates w.r.t the framebuffer *)
@@ -1244,7 +1244,7 @@ end = struct
     assert_rect_inside size rect ;
     mk_screen frame_buffer (rect_mv (rect_offset window) rect)
 
-  let put_color_rect screen colors rect =
+  let put_color_rect2 screen colors rect =
     let { topleft ; bottomright } = rect in
     (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
     if is_v2_inside screen.size topleft then
@@ -1253,6 +1253,19 @@ end = struct
         screen.frame_buffer
         colors
         (rect_mv (rect_offset screen.window) rect)
+
+  let put_color_rect screen colors rect =
+    let x_start   = min (rect_x rect) 0 in
+    let y_start   = min (rect_y rect) 0 in
+    let x_end     = min (screen_width screen) (rect_w rect) in
+    let y_end     = min (screen_height screen) (rect_h rect) in
+    let x_offset  = rect_x screen.window in
+    let y_offset  = rect_y screen.window in
+    let rect'     = mk_rect (x_offset + x_start) (y_offset + y_start) (x_offset + x_end) (y_offset + y_end) in
+    Framebuffer.put_color_rect
+      screen.frame_buffer
+      colors
+      rect'
 
   let put_line screen x y maxlen line =
     if y < screen.size.y then
@@ -2286,7 +2299,7 @@ end = struct
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
   let fill_framebuffer t screen =
-    let screen_size = Screen.get_size screen in
+    let screen_size = Screen.screen_size screen in
     let text_width  = screen_size.x in
     let text_height = screen_size.y in
     let text_stop_y = min text_height (view_height t) in
@@ -2428,7 +2441,7 @@ end = struct
         t.cursor.y t.cursor.x
         (Movement.mode_to_string t.mov_mode))) ;
     (* header *)
-    let size = Screen.get_size screen in
+    let size = Screen.screen_size screen in
     Screen.put_color_rect
       screen
       (if is_focused
@@ -2439,17 +2452,17 @@ end = struct
     Screen.put_color_rect
       screen
       Config.default.colors.border
-      (mk_rect 0 1 1 textsize.y)
+      (mk_rect 0 1 1 (Screen.screen_height screen))
 
 
   let draw t screen is_focused =
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let textscreen = Screen.mk_subscreen screen
       (* 1 for border column, 1 for header space *)
-      (mk_rect 1 1 (Screen.get_width screen) (Screen.get_height screen))
+      (mk_rect 1 1 (Screen.screen_width screen) (Screen.screen_height screen))
     in
     if not kPERSISTDRAW || t.redraw <> Nodraw then
-      put_border_frame t screen (Screen.get_size textscreen) is_focused ;
+      put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
     if not kPERSISTDRAW || t.redraw = Redraw then (
       Screen.clear textscreen ;
       Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
@@ -3050,8 +3063,10 @@ let () =
  *  - bug: the main focused view is not drawn in some Tiles configurations !
  *  - better management of screen dragging for horizontal scrolling
  *  - need to audit put_color_rect from bottom up
+ *  - bug: when using mirror mode with multiple views in Rows, the headers get overwritten !
  *
  *  general cleanups:
+ *  - finish cleaning rect
  *  - variable renaming
  *  - solidification
  *  - doc
