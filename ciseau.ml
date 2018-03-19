@@ -190,13 +190,12 @@ module Vec2 = struct
     y = y ;
   }
 
-  let v2_zero = mk_v2 0 0
+  let v2_zero       = mk_v2 0 0
+  let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
+  let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
 
-  let (<+>) t1 t2 =
-    mk_v2 (t1.x + t2.x) (t1.y + t2.y)
-
-  let (<->) t1 t2 =
-    mk_v2 (t1.x - t2.x) (t1.y - t2.y)
+  let (<+>) t1 t2 = v2_add t1 t2
+  let (<->) t1 t2 = v2_sub t1 t2
 
   (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
@@ -227,8 +226,12 @@ module Rect = struct
     bottomright = mk_v2 br_x br_y ;
   }
 
-  let rect_size { topleft ; bottomright } =
-    bottomright <-> topleft
+  let rect_size { topleft ; bottomright } = bottomright <-> topleft
+  let rect_offset { topleft }             = topleft
+  let rect_x { topleft }                  = topleft.x
+  let rect_y { topleft }                  = topleft.y
+  let rect_w { topleft ; bottomright }    = bottomright.x - topleft.x
+  let rect_h { topleft ; bottomright }    = bottomright.y - topleft.y
 
   let rect_mv { x ; y } { topleft ; bottomright } =
     mk_rect (x + topleft.x) (y + topleft.y) (x + bottomright.x) (y + bottomright.y)
@@ -1201,17 +1204,10 @@ end = struct
     frame_buffer    : Framebuffer.t ;
   }
 
-  let get_size t =
-    t.size
-
-  let get_offset t =
-    t.window.topleft
-
-  let get_width t =
-    t.size.x
-
-  let get_height t =
-    t.size.y
+  let get_size    { size }    = size
+  let get_offset  { window }  = rect_offset window
+  let get_width   { window }  = rect_w window
+  let get_height  { window }  = rect_h window
 
   (* Makes a screen with 'fb' as the backend framebuffer.
    * Passed in rectangle defines the screen absolute coordinates w.r.t the framebuffer *)
@@ -1228,42 +1224,38 @@ end = struct
    * Passed in rectangle defines the subscreen absolut coordinates w.r.t the parent screen *)
   let mk_subscreen { size ; window ; frame_buffer } rect =
     assert_rect_inside size rect ;
-    mk_screen frame_buffer (rect_mv window.topleft rect)
+    mk_screen frame_buffer (rect_mv (rect_offset window) rect)
 
-  let put_color_rect screen colors { topleft ; bottomright } =
+  let put_color_rect screen colors rect =
+    let { topleft ; bottomright } = rect in
     (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
     if is_v2_inside screen.size topleft then
-    if is_v2_inside screen.size bottomright then (
+    if is_v2_inside screen.size bottomright then
       Framebuffer.put_color_rect
         screen.frame_buffer
         colors
-        (mk_rect
-          (screen.window.topleft.x + topleft.x)
-          (screen.window.topleft.y + topleft.y)
-          (screen.window.topleft.x + bottomright.x)
-          (screen.window.topleft.y + bottomright.y)))
+        (rect_mv (rect_offset screen.window) rect)
 
   let put_line screen x y maxlen line =
     if y < screen.size.y then
       Framebuffer.put_line
         screen.frame_buffer
-        (screen.window.topleft.x + x)
-        (screen.window.topleft.y + y)
+        ((rect_x screen.window) + x)
+        ((rect_y screen.window) + y)
         (min screen.size.x maxlen)
         line
 
   let put_cursor screen pos =
-    Framebuffer.put_cursor screen.frame_buffer (pos <+> screen.window.topleft)
+    screen.window
+      |> rect_offset
+      |> v2_add pos
+      |> Framebuffer.put_cursor screen.frame_buffer
 
   let put_framebuffer screen src linebreaking =
-    let linebreak_offset = 6 in (* CLEANUP that hack *)
-    let { x ; y } =
-      Framebuffer.put_framebuffer
-        screen.frame_buffer screen.window linebreak_offset src linebreaking
-    in {
-      x = x - screen.window.topleft.x ;
-      y = y - screen.window.topleft.y ;
-    }
+    let cursor =
+      Framebuffer.put_framebuffer screen.frame_buffer screen.window 6 src linebreaking
+    in
+      v2_sub cursor (rect_offset screen.window)
 end
 
 
@@ -2444,6 +2436,7 @@ end = struct
       Screen.clear textscreen ;
       Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
       fill_framebuffer t textscreen ;
+      (* CLEANUP: pass the args in a struct and do the drawing of cursor there *)
       let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
       if is_focused then
         Screen.put_cursor textscreen final_cursor ;
