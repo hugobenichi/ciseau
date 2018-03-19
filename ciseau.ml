@@ -133,6 +133,11 @@ module ArrayOperations = struct
     let a_out = Array.make (l + 1) e in
     array_blit a_in 0 a_out 0 l ;
     a_out
+
+  let array_swap a i j =
+    let t = a.(i) in
+    a.(i) <- a.(j) ;
+    a.(j) <- t ;
 end
 
 
@@ -2639,20 +2644,15 @@ module Tileset = struct
           array_get t.fileviews 0             |> array_set fileviews' t.focus_index ;
           mk_tileset
             0 t.screen_size t.screen_config fileviews'
-      (* TODO: this should only move the current vview ! *)
       | RotateViewsRight ->
+          let fileviews' = Array.copy t.fileviews in
           let focus_index' = next_focus_index t in
-          let n_views = alen t.fileviews in
-          let last = array_get t.fileviews (n_views - 1) in
-          let fileviews' = Array.make n_views last in
-          array_blit t.fileviews 0 fileviews' 1 (n_views - 1) ;
+          array_swap fileviews' t.focus_index focus_index' ;
           mk_tileset focus_index' t.screen_size t.screen_config fileviews'
       | RotateViewsLeft ->
+          let fileviews' = Array.copy t.fileviews in
           let focus_index' = prev_focus_index t in
-          let n_views = alen t.fileviews in
-          let first = array_get t.fileviews 0 in
-          let fileviews' = Array.make n_views first in
-          array_blit t.fileviews 1 fileviews' 0 (n_views - 1) ;
+          array_swap fileviews' t.focus_index focus_index' ;
           mk_tileset focus_index' t.screen_size t.screen_config fileviews'
 end
 
