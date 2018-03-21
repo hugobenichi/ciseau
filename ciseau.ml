@@ -1050,19 +1050,16 @@ end = struct
       |> array_fill t.bg_colors offset len
 
   let clear t =
-    (* BUG: sometime crashes when resizing *)
     Bytes.fill t.text 0 t.len Default.text ;
     array_blit default_fg_colors 0 t.fg_colors 0 t.len ;
     array_blit default_bg_colors 0 t.bg_colors 0 t.len ;
-    (*
-    array_fill t.z_index 0 t.len Default.z ;
-    *)
+    (* TODO: clear z_index if I ever start using it *)
     array_blit default_line_length 0 t.line_lengths 0 t.window.y
 
   let clear_rect t rect =
     assert_rect_inside t.window rect ;
     let len = rect_w rect in
-    for y = (rect_y rect) to (rect_y_end rect) do
+    for y = (rect_y rect) to (rect_y_end rect) - 1 do
       let offset = y * t.window.x + (rect_x rect) in
       Bytes.fill t.text offset len Default.text ;
       array_blit default_fg_colors 0 t.fg_colors offset len ;
@@ -3064,7 +3061,6 @@ let () =
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
- *  - bug: when using mirror mode with multiple views in Rows, the headers get overwritten !
  *  - better management of screen dragging for horizontal scrolling
  *  - need to audit put_color_rect from bottom up
  *
