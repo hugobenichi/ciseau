@@ -202,7 +202,7 @@ module Vec2 = struct
   let (<+>) t1 t2 = v2_add t1 t2
   let (<->) t1 t2 = v2_sub t1 t2
 
-  (* Check if second v2 argument is inside the implicit rectanlge woth topleft (0,0)
+  (* Check if second v2 argument is inside the implicit rectangle woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
   let is_v2_inside { x = xlim ; y = ylim } { x ; y } =
     (0 <= x) && (0 <= y) && (x <= xlim) && (y <= ylim)
@@ -241,8 +241,9 @@ module Rect = struct
 
   let rect_size { w ; h}                  = mk_v2 w h
   let rect_offset { topleft }             = topleft
-  let rect_x { x0 }                        = x0
-  let rect_y { y0 }                        = y0
+  let rect_end { bottomright }            = bottomright
+  let rect_x { x0 }                       = x0
+  let rect_y { y0 }                       = y0
   let rect_x_end { bottomright }          = bottomright.x
   let rect_y_end { bottomright }          = bottomright.y
   let rect_w { w }                        = w
@@ -742,9 +743,10 @@ module ScreenConfiguration = struct
       | _ when n_screen = 1 ->
           mk_view_ports total_area 1 Configs.zero
       | { layout = Columns ; orientation = Normal } ->
-          let { topleft = offset ; bottomright = size } = total_area in
-          split size.x n_screen
-            |> Array.map (fun (xl, xr) -> mk_rect (offset.x + xl) offset.y (offset.x + xr) size.y)
+          let xo = rect_x total_area in
+          let yo = rect_y total_area in
+          split (rect_x_end total_area) n_screen
+            |> Array.map (fun (xl, xr) -> mk_rect (xo + xl) yo (xo + xr) (rect_y_end total_area))
       | { layout = Columns ; orientation = Mirror } ->
           let views = mk_view_ports total_area n_screen (mk_config Columns Normal) in
           array_rev views ;
@@ -1244,16 +1246,6 @@ end = struct
   let mk_subscreen { size ; window ; frame_buffer } rect =
     assert_rect_inside size rect ;
     mk_screen frame_buffer (rect_mv (rect_offset window) rect)
-
-  let put_color_rect2 screen colors rect =
-    let { topleft ; bottomright } = rect in
-    (* CLEANUP: this should either assert, or clip the recangles to the screen area *)
-    if is_v2_inside screen.size topleft then
-    if is_v2_inside screen.size bottomright then
-      Framebuffer.put_color_rect
-        screen.frame_buffer
-        colors
-        (rect_mv (rect_offset screen.window) rect)
 
   let put_color_rect screen colors rect =
     let x_start   = min (rect_x rect) 0 in
@@ -1970,23 +1962,27 @@ module SelectionMovement = struct
   (* PERF: do binary search instead *)
   let selection_prev { selection } any v2 =
     let rec loop s c i =
-      if i = alen s || is_v2_less_or_equal c (array_get s i).topleft
+      if i = alen s || is_v2_less_or_equal c (array_get s i |> rect_offset)
         then (i - 1 + (alen s)) mod alen s (* mod == remainder *)
         else loop s c (i + 1)
     in
     if alen selection = 0
       then v2
-      else (array_get selection (loop selection v2 0)).topleft
+      else loop selection v2 0
+            |> array_get selection
+            |> rect_offset
 
   let selection_next { selection } any v2 =
     let rec loop s c i =
-      if i = alen s || is_v2_less c (array_get s i).topleft
+      if i = alen s || is_v2_less c (array_get s i |> rect_offset)
         then i mod alen s
         else loop s c (i + 1)
     in
     if alen selection = 0
       then v2
-      else (array_get selection (loop selection v2 0)).topleft
+      else loop selection v2 0
+            |> array_get selection
+            |> rect_offset
 
   let select_current_rect fn { selection } any v2 =
     let rec loop s c i =
@@ -1994,7 +1990,7 @@ module SelectionMovement = struct
         then c
         else (
           let r = array_get s i in
-          if is_v2_less_or_equal r.topleft c && is_v2_less_or_equal c r.bottomright
+          if is_v2_less_or_equal (rect_offset r) c && is_v2_less_or_equal c (rect_end r)
             then fn r
             else loop s c (i + 1))
     in
@@ -2002,8 +1998,8 @@ module SelectionMovement = struct
       then v2
       else loop selection v2 0
 
-  let selection_start = select_current_rect (fun { topleft }      -> topleft)
-  let selection_end   = select_current_rect (fun { bottomright }  -> bottomright)
+  let selection_start = select_current_rect rect_offset
+  let selection_end   = select_current_rect rect_end
 
   let movement movement_context =
     let open Move in
@@ -2385,11 +2381,11 @@ end = struct
     (* BUG: these show_* color rectangles cause weirdness in Overflow mode ! *)
     (* Show selection *)
     if t.show_selection then (
-      let translate_selection t { topleft ; bottomright } =
-          let tl_x = topleft.x + 6 in
-          let tl_y = topleft.y - t.view_start in
-          let br_x = bottomright.x + 7 in
-          let br_y = bottomright.y - t.view_start in
+      let translate_selection t rect =
+          let tl_x = (rect_x rect) + 6 in
+          let tl_y = (rect_y rect) - t.view_start in
+          let br_x = (rect_x_end rect) + 7 in
+          let br_y = (rect_y_end rect) - t.view_start in
           mk_rect tl_x tl_y br_x br_y
       in
 
@@ -2572,12 +2568,8 @@ module Tileset = struct
       let view = array_get fileviews i in
       (* In Single tile mode, len tiles < len fileviews *)
       if i < n_tiles
-        then
-          let tile = array_get screen_tiles i in
-          let height = tile.bottomright.y - tile.topleft.y in
-          Fileview.adjust_view height view
-        else
-          view
+        then Fileview.adjust_view (array_get screen_tiles i |> rect_h) view
+        else view
     in
     Array.init (alen fileviews) adjust_fileview
 
@@ -2627,8 +2619,7 @@ module Tileset = struct
             t.focus_index new_screen_size t.screen_config t.fileviews
       | FileviewOp fileview_op ->
           let fileviews' = Array.copy t.fileviews in
-          let focused_tile = get_focused_tile t in
-          let screen_height = focused_tile.bottomright.y - focused_tile.topleft.y in
+          let screen_height = get_focused_tile t |> rect_h in
           t.focus_index
             |> array_get fileviews'
             |> fileview_op screen_height
