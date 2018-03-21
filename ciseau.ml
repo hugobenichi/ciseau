@@ -2426,7 +2426,7 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.no_text
-      (mk_rect 0 0 1 (text_height - text_stop_y)) ;
+      (mk_rect 0 text_stop_y 1 text_height) ;
 
     (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
     let cursor = mk_v2 cursor_x_screenspace (t.cursor.y - t.view_start) in
@@ -3064,10 +3064,9 @@ let () =
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
- *  - bug: the main focused view is not drawn in some Tiles configurations !
+ *  - bug: when using mirror mode with multiple views in Rows, the headers get overwritten !
  *  - better management of screen dragging for horizontal scrolling
  *  - need to audit put_color_rect from bottom up
- *  - bug: coloring for default '~' column is wrong
  *
  *  general cleanups:
  *  - finish cleaning rect
