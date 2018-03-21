@@ -254,6 +254,9 @@ module Rect = struct
   let assert_rect_inside bounds { topleft ; bottomright } =
     assert_v2_inside bounds topleft ;
     assert_v2_inside bounds bottomright
+
+  let rect_to_string { x0 ; y0 ; w ; h } =
+    Printf.sprintf "(%d,%d)x%dx%d" x0 y0 w h
 end
 
 
@@ -753,8 +756,9 @@ module ScreenConfiguration = struct
       | { layout = ColumnMajor ; orientation } ->
           let halves = mk_view_ports total_area 2 (mk_config Columns orientation) in
           let minors = mk_view_ports (array_get halves 1) (n_screen - 1) Configs.rows in
-          let bla = Array.append halves minors in
-          Array.sub bla 1 ((alen halves) + (alen minors) - 1)
+          let views = Array.make n_screen (array_get halves 0) in
+          array_blit minors 0 views 0 (alen minors) ;
+          views
       | { layout = RowMajor ; orientation } ->
           mk_config ColumnMajor orientation
             |> mk_view_ports (flip_xy_rect total_area) n_screen
@@ -3063,7 +3067,7 @@ let () =
  *  - bug: the main focused view is not drawn in some Tiles configurations !
  *  - better management of screen dragging for horizontal scrolling
  *  - need to audit put_color_rect from bottom up
- *  - bug: when using mirror mode with multiple views in Rows, the headers get overwritten !
+ *  - bug: coloring for default '~' column is wrong
  *
  *  general cleanups:
  *  - finish cleaning rect
