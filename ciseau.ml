@@ -220,41 +220,41 @@ open Vec2
 
 
 module Rect = struct
-  (* CLEANUP: change to x;y;w;h representation ? *)
+
   type rect = {
-    x0 : int ;
-    y0 : int ;
-    w : int ;
-    h : int ;
-    topleft     : v2 ;
-    bottomright : v2 ;
+    x0  : int ;
+    y0  : int ;
+    x1  : int ;
+    y1  : int ;
+    w   : int ;
+    h   : int ;
   }
 
   let mk_rect tl_x tl_y br_x br_y = {
-    x0 = tl_x ;
-    y0 = tl_y ;
-    w = br_x - tl_x ;
-    h = br_y - tl_y ;
-    topleft     = mk_v2 tl_x tl_y ;
-    bottomright = mk_v2 br_x br_y ;
+    x0  = tl_x ;
+    y0  = tl_y ;
+    x1  = br_x ;
+    y1  = br_y ;
+    w   = br_x - tl_x ;
+    h   = br_y - tl_y ;
   }
 
-  let rect_size { w ; h}                  = mk_v2 w h
-  let rect_offset { topleft }             = topleft
-  let rect_end { bottomright }            = bottomright
-  let rect_x { x0 }                       = x0
-  let rect_y { y0 }                       = y0
-  let rect_x_end { bottomright }          = bottomright.x
-  let rect_y_end { bottomright }          = bottomright.y
-  let rect_w { w }                        = w
-  let rect_h { h }                        = h
+  let rect_size   { w ; h}      = mk_v2 w h
+  let rect_offset { x0 ; y0 }   = mk_v2 x0 y0
+  let rect_end    { x1 ; y1 }   = mk_v2 x1 y1
+  let rect_x      { x0 }        = x0
+  let rect_y      { y0 }        = y0
+  let rect_x_end  { x1 }        = x1
+  let rect_y_end  { y1 }        = y1
+  let rect_w      { w }         = w
+  let rect_h      { h }         = h
 
-  let rect_mv { x ; y } { topleft ; bottomright } =
-    mk_rect (x + topleft.x) (y + topleft.y) (x + bottomright.x) (y + bottomright.y)
+  let rect_mv { x ; y } {x0 ; y0 ; x1 ; y1 } =
+    mk_rect (x + x0) (y + y0) (x + x1) (y + y1)
 
-  let assert_rect_inside bounds { topleft ; bottomright } =
-    assert_v2_inside bounds topleft ;
-    assert_v2_inside bounds bottomright
+  let assert_rect_inside bounds r =
+    r |> rect_offset  |> assert_v2_inside bounds ;
+    r |> rect_end     |> assert_v2_inside bounds
 
   let rect_to_string { x0 ; y0 ; w ; h } =
     Printf.sprintf "(%d,%d)x%dx%d" x0 y0 w h
@@ -3056,7 +3056,6 @@ let () =
  *  - need to audit put_color_rect from bottom up
  *
  *  general cleanups:
- *  - finish cleaning rect
  *  - variable renaming
  *  - solidification
  *  - doc
