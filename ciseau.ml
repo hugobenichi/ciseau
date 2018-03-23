@@ -280,6 +280,7 @@ module Token = struct
 end
 
 
+(* CLEANUP: rewrite Color module to directly work with color index *)
 module Color = struct
 
   type base = Black
@@ -328,14 +329,22 @@ module Color = struct
     bg : t ;
   }
 
-  let black   = Normal Black ;;
-  let red     = Normal Red ;;
-  let green   = Normal Green ;;
-  let yellow  = Normal Yellow ;;
-  let blue    = Normal Blue ;;
-  let magenta = Normal Magenta ;;
-  let cyan    = Normal Cyan ;;
-  let white   = Normal White ;;
+  let black     = Normal Black
+  let red       = Normal Red
+  let green     = Normal Green
+  let yellow    = Normal Yellow
+  let blue      = Normal Blue
+  let magenta   = Normal Magenta
+  let cyan      = Normal Cyan
+  let white     = Normal White
+  let darkgray  = Gray 2
+
+  let white_code      = color_control_code white
+  let darkgray_code   = color_control_code darkgray
+  let black_code      = color_control_code black
+
+  let fg_color_control_strings = Array.init 256 (Printf.sprintf "38;5;%d")
+  let bg_color_control_strings = Array.init 256 (Printf.sprintf ";48;5;%dm")
 
 end
 
@@ -370,8 +379,6 @@ module Config = struct
     colors    : colors ;
     page_size : int;
   }
-
-  let darkgray = Color.Gray 2
 
   let default : cfg = {
     colors = {
@@ -645,20 +652,6 @@ module Line = struct
 end
 
 
-(* TODO: delete or use ?? *)
-module Colorblock = struct
-  type t = {
-    rect    : rect ;
-    colors  : Color.color_cell ;
-  }
-
-  let mk_colorblock rect colors = {
-    rect    = rect ;
-    colors  = colors;
-  }
-end
-
-
 module ScreenConfiguration = struct
 
   type orientation = Normal | Mirror
@@ -828,33 +821,6 @@ module Term = struct
     let cursor_control_string vec2 =
       Printf.sprintf "%s%d;%dH" start (vec2.y + 1) (vec2.x + 1)
 
-    let fg_color_control_string_table = Array.init 256 (Printf.sprintf "38;5;%d")
-    let bg_color_control_string_table = Array.init 256 (Printf.sprintf ";48;5;%dm")
-
-    let color_index_table : (Color.t, int) Hashtbl.t = Hashtbl.create 1000
-
-    (* CLEANUP: not thread safe, add asserts ! *)
-    let color_table = Array.make 1000 Color.black
-    let color_table_index = ref 0
-
-    let color_to_index color =
-      match Hashtbl.find color_index_table color with
-      | idx -> idx
-      | exception Not_found ->
-          let idx = !color_table_index in
-          Hashtbl.add color_index_table color idx ;
-          incr color_table_index ;
-          array_set color_table idx color ;
-          idx
-
-    let index_to_color idx =
-      array_get color_table idx
-
-    (* CLEANUP these constants somewhere *)
-    let white_index     = color_to_index Color.white
-    let darkgray_index  = color_to_index Config.darkgray
-    let black_index     = color_to_index Color.black
-
   end
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
@@ -936,10 +902,10 @@ module Framebuffer : sig
 end = struct
 
   module Default = struct
-    let fg    = Color.white ;;
-    let bg    = Config.darkgray ;;
-    let z     = 0 ;;
-    let text  = ' ' ;;
+    let fg    = Color.white
+    let bg    = Color.darkgray
+    let z     = 0
+    let text  = ' '
   end
 
   type t = {
@@ -978,32 +944,25 @@ end = struct
         if is_end_of_line && is_not_end_of_buffer
           then Bytevector.append bvec Term.Control.newline
       in
-      let rec loop t start stop colorbuffer_index bvec =
+      let rec loop t start stop colorbuffer_idx bvec =
         (* memory opt: all arguments passed explicitly *)
         if start < stop
           then
-            (* CLEANUP: rewrite Color module to directly work with color index *)
-            let fg_color_index =
-              t.fg_colors.(colorbuffer_index)
-                |> Term.Control.index_to_color
-                |> Color.color_control_code
-            in
-            let bg_color_index =
-              t.bg_colors.(colorbuffer_index)
-                |> Term.Control.index_to_color
-                |> Color.color_control_code
-            in
             let len = next_line_len t start stop in
             Bytevector.append bvec Term.Control.start ;
-            Bytevector.append bvec
-              (array_get Term.Control.fg_color_control_string_table fg_color_index) ;
-            Bytevector.append bvec
-              (array_get Term.Control.bg_color_control_string_table bg_color_index) ;
+            colorbuffer_idx
+              |> array_get t.fg_colors
+              |> array_get Color.fg_color_control_strings
+              |> Bytevector.append bvec ;
+            colorbuffer_idx
+              |> array_get t.bg_colors
+              |> array_get Color.bg_color_control_strings
+              |> Bytevector.append bvec ;
             Bytevector.append_bytes bvec t.text start len ;
             Bytevector.append bvec Term.Control.finish ;
             (* Last newline need to be appened *after* the terminating control command for colors *)
             append_newline_if_needed bvec t (start + len) ;
-            loop t (start + len) stop colorbuffer_index bvec
+            loop t (start + len) stop colorbuffer_idx bvec
       in
         loop t start stop start bvec
 
@@ -1023,26 +982,26 @@ end = struct
     in {
       text        = Bytes.make len Default.text ;
       line_lengths = Array.make vec2.x 0 ; (* CLEANUP: rename me *)
-      fg_colors   = Array.make len Term.Control.white_index ;
-      bg_colors   = Array.make len Term.Control.darkgray_index ;
+      fg_colors   = Array.make len Color.white_code ;
+      bg_colors   = Array.make len Color.darkgray_code ;
       z_index     = Array.make len Default.z ;
       len         = len ;
       window      = vec2 ;
       cursor      = v2_zero ;
     }
 
-  let default_fg_colors   = Array.make 1000000 Term.Control.white_index
-  let default_bg_colors   = Array.make 1000000 Term.Control.darkgray_index
+  let default_fg_colors   = Array.make 1000000 Color.white_code
+  let default_bg_colors   = Array.make 1000000 Color.darkgray_code
   let default_line_length = Array.make 1000 0
 
   let fill_fg_color t offset len color =
     color
-      |> Term.Control.color_to_index
+      |> Color.color_control_code
       |> array_fill t.fg_colors offset len
 
   let fill_bg_color t offset len color =
     color
-      |> Term.Control.color_to_index
+      |> Color.color_control_code
       |> array_fill t.bg_colors offset len
 
   let clear t =
