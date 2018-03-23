@@ -828,7 +828,8 @@ module Term = struct
     let cursor_control_string vec2 =
       Printf.sprintf "%s%d;%dH" start (vec2.y + 1) (vec2.x + 1)
 
-    let color_control_string_table : (Color.color_cell, string) Hashtbl.t = Hashtbl.create 1000
+    let fg_color_control_string_table = Array.init 256 (Printf.sprintf "38;5;%d")
+    let bg_color_control_string_table = Array.init 256 (Printf.sprintf ";48;5;%dm")
 
     let color_index_table : (Color.t, int) Hashtbl.t = Hashtbl.create 1000
 
@@ -853,16 +854,6 @@ module Term = struct
     let white_index     = color_to_index Color.white
     let darkgray_index  = color_to_index Config.darkgray
     let black_index     = color_to_index Color.black
-
-    let color_control_string colors =
-      match Hashtbl.find color_control_string_table colors with
-      | control_string -> control_string
-      | exception Not_found ->
-          let fg_code = Color.color_control_code colors.Color.fg in
-          let bg_code = Color.color_control_code colors.Color.bg in
-          let control_string = Printf.sprintf "38;5;%d;48;5;%dm" fg_code bg_code in
-          Hashtbl.add color_control_string_table colors control_string ;
-          control_string
 
   end
 
@@ -964,12 +955,6 @@ end = struct
   }
 
   module Rendering = struct
-    let colors_at t offset =
-      let open Color in {
-        fg = t.fg_colors.(offset) |> Term.Control.index_to_color ;
-        bg = t.bg_colors.(offset) |> Term.Control.index_to_color ;
-      }
-
     let colors_equal t i j =
       let open Color in
       (t.fg_colors.(i) = t.fg_colors.(j)) && (t.bg_colors.(i) = t.bg_colors.(j))
@@ -982,11 +967,6 @@ end = struct
         else stop
       in loop t start (start + 1)
 
-    let get_color_string t color_idx =
-      (* MEMORY OPT: remove colors_at, for instance by cutting the color
-       * control string in two parts and apprending both separately. *)
-      Term.Control.color_control_string (colors_at t color_idx)
-
     let next_line_len t start stop =
       min (t.window.x - (start mod t.window.x)) (stop - start)
 
@@ -998,20 +978,34 @@ end = struct
         if is_end_of_line && is_not_end_of_buffer
           then Bytevector.append bvec Term.Control.newline
       in
-      let rec loop t start stop color_control_string bvec =
+      let rec loop t start stop colorbuffer_index bvec =
         (* memory opt: all arguments passed explicitly *)
         if start < stop
           then
+            (* CLEANUP: rewrite Color module to directly work with color index *)
+            let fg_color_index =
+              t.fg_colors.(colorbuffer_index)
+                |> Term.Control.index_to_color
+                |> Color.color_control_code
+            in
+            let bg_color_index =
+              t.bg_colors.(colorbuffer_index)
+                |> Term.Control.index_to_color
+                |> Color.color_control_code
+            in
             let len = next_line_len t start stop in
             Bytevector.append bvec Term.Control.start ;
-            Bytevector.append bvec color_control_string ;
+            Bytevector.append bvec
+              (array_get Term.Control.fg_color_control_string_table fg_color_index) ;
+            Bytevector.append bvec
+              (array_get Term.Control.bg_color_control_string_table bg_color_index) ;
             Bytevector.append_bytes bvec t.text start len ;
             Bytevector.append bvec Term.Control.finish ;
             (* Last newline need to be appened *after* the terminating control command for colors *)
             append_newline_if_needed bvec t (start + len) ;
-            loop t (start + len) stop color_control_string bvec
+            loop t (start + len) stop colorbuffer_index bvec
       in
-        loop t start stop (get_color_string t start) bvec
+        loop t start stop start bvec
 
     let render_all_sections t bvec =
       let rec loop start bvec =
@@ -3125,7 +3119,6 @@ let () =
  *  - memory optimization for
  *      TokenMovement
  *      DelimMovement
- *  - color_cell creation in Framebuffer.render
  *
  * others:
  *  - hammer the code with asserts and search for more bugs in the drawing
