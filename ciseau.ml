@@ -1259,6 +1259,7 @@ end = struct
       colors
       rect'
 
+  (* BUG: because of adding caching to the immediate rendering, put_line should clear until end of line ! *)
   let put_line screen x y maxlen line =
     if y < screen.size.y then
       Framebuffer.put_line
@@ -2574,7 +2575,7 @@ module Tileset = struct
     in
     Array.init (alen fileviews) adjust_fileview
 
-  let mk_tileset focus_index size screenconfig fileviews =
+  let mk_tileset ?draw:(redraw=Redraw) focus_index size screenconfig fileviews =
     assert (focus_index < alen fileviews) ;
     let screen_tiles  = ScreenConfiguration.mk_view_ports size (alen fileviews) screenconfig
     in {
@@ -2583,7 +2584,7 @@ module Tileset = struct
       screen_tiles  = screen_tiles ;
       focus_index   = focus_index ;
       fileviews     = adjust_fileviews screen_tiles fileviews ;
-      redrawing     = Array.make (alen fileviews) Redraw ;
+      redrawing     = Array.make (alen fileviews) redraw ;
     }
 
   let next_focus_index t =
@@ -2615,9 +2616,13 @@ module Tileset = struct
       else array_get t.screen_tiles 0
 
   let adjust_redrawing idx redraw t =
-      array_fill t.redrawing 0 (alen t.redrawing) Nodraw ;
-      array_set t.redrawing idx redraw ;
-      t
+    array_fill t.redrawing 0 (alen t.redrawing) Nodraw ;
+    array_set t.redrawing idx redraw ;
+    t
+
+  let adjust_redrawing2 t =
+    array_fill t.redrawing 0 (alen t.redrawing) FrameDirty ;
+    t
 
   let apply_op t =
     (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
@@ -2634,7 +2639,7 @@ module Tileset = struct
             |> fileview_op screen_height
             |> array_set fileviews' t.focus_index ;
           { t with fileviews = fileviews' }
-            |> adjust_redrawing t.focus_index Redraw
+            |> adjust_redrawing t.focus_index Redraw (* BUG: need to copy the redrawing ! *)
       | ScreenLayoutCycleNext ->
           let new_config = ScreenConfiguration.cycle_config_layout_next t.screen_config in
           mk_tileset
@@ -2649,26 +2654,43 @@ module Tileset = struct
             t.focus_index t.screen_size new_config t.fileviews
       | FocusNext ->
           { t with focus_index = next_focus_index t }
+            |> adjust_redrawing2
       | FocusPrev ->
           { t with focus_index = prev_focus_index t }
+            |> adjust_redrawing2
       | FocusMain ->
           { t with focus_index = 0 }
+            |> adjust_redrawing2
       | BringFocusToMain ->
           let fileviews' = Array.copy t.fileviews in
           array_get t.fileviews t.focus_index |> array_set fileviews' 0 ;
           array_get t.fileviews 0             |> array_set fileviews' t.focus_index ;
-          mk_tileset
-            0 t.screen_size t.screen_config fileviews'
+          let t' =
+            mk_tileset ~draw:Nodraw 0 t.screen_size t.screen_config fileviews'
+          in
+            array_set t'.redrawing 0 Redraw ;
+            array_set t'.redrawing t.focus_index Redraw ;
+            t'
       | RotateViewsRight ->
           let fileviews' = Array.copy t.fileviews in
           let focus_index' = next_focus_index t in
           array_swap fileviews' t.focus_index focus_index' ;
-          mk_tileset focus_index' t.screen_size t.screen_config fileviews'
+          let t' =
+            mk_tileset ~draw:Nodraw focus_index' t.screen_size t.screen_config fileviews'
+          in
+            array_set t'.redrawing t.focus_index Redraw ;
+            array_set t'.redrawing focus_index' Redraw ;
+            t'
       | RotateViewsLeft ->
           let fileviews' = Array.copy t.fileviews in
           let focus_index' = prev_focus_index t in
           array_swap fileviews' t.focus_index focus_index' ;
-          mk_tileset focus_index' t.screen_size t.screen_config fileviews'
+          let t' =
+            mk_tileset ~draw:Nodraw focus_index' t.screen_size t.screen_config fileviews'
+          in
+            array_set t'.redrawing t.focus_index Redraw ;
+            array_set t'.redrawing focus_index' Redraw ;
+            t'
 end
 
 
