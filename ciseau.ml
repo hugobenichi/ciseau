@@ -6,7 +6,6 @@ let logs = open_out "/tmp/ciseau.log"
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
 let kDEBUG        = false
-let kPERSISTDRAW  = false
 
 module CommonCombinators = struct
   let id x          = x
@@ -2112,6 +2111,9 @@ module Movement (* TODO: formalize module signature *) = struct
 end
 
 
+type redraw_level = Nodraw | FrameDirty | Redraw
+
+
 module Fileview : sig
   type t
 
@@ -2127,7 +2129,7 @@ module Fileview : sig
   val toggle_show_neighbor    : t -> t
   val toggle_show_selection   : t -> t
   val recenter_view           : int -> t -> t
-  val draw                    : t -> Screen.t -> bool -> unit
+  val draw                    : t -> Screen.t -> redraw_level -> bool -> unit
 
 end = struct
 
@@ -2137,8 +2139,6 @@ end = struct
   type screen     = Screen.t
 
   type numbering_mode = Absolute | CursorRelative
-
-  type redraw_level = Nodraw | FrameDirty | Redraw
 
   module LineNumberCache = struct
     let line_number_cache_t1 = Sys.time () ;;
@@ -2170,7 +2170,6 @@ end = struct
     show_token        : bool ;
     show_neighbor     : bool ;
     show_selection    : bool ;
-    redraw            : redraw_level ;
     context           : MovementContext.t ;
   }
 
@@ -2184,7 +2183,6 @@ end = struct
     show_token        = true ;
     show_neighbor     = true ;
     show_selection    = true ;
-    redraw            = Redraw ;
     context           = let open MovementContext in {
       selection = Filebuffer.search filebuffer "cursor" ;
     } ;
@@ -2193,7 +2191,6 @@ end = struct
   let set_mov_mode m t = {
     t with
       mov_mode  = m ;
-      redraw    = Redraw ;
   }
 
   let cursor { cursor } =
@@ -2207,17 +2204,17 @@ end = struct
 
   let adjust_view screen_height t =
     let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
-    if t.cursor.y < t.view_start then
+    let view_start =
+      if t.cursor.y < t.view_start then
+        t.cursor.y
+      else if t.cursor.y > t.view_start + text_height then
+        t.cursor.y - text_height
+      else
+        t.view_start
+    in
       { t with
-          view_start  = t.cursor.y ;
-          redraw      = Redraw ;
+          view_start  = view_start ;
       }
-    else if t.cursor.y > t.view_start + text_height then
-      { t with
-          view_start  = t.cursor.y - text_height ;
-          redraw      = Redraw ;
-      }
-    else t
 
   let apply_movement mov view_height t =
     let cursor' = Movement.compute_movement t.context t.mov_mode mov t.filebuffer t.cursor in
@@ -2243,7 +2240,6 @@ end = struct
     in {
       t with
         numbering = new_mode ;
-        redraw    = FrameDirty ;
     }
 
   let swap_linebreaking_mode t =
@@ -2253,25 +2249,21 @@ end = struct
     in {
       t with
         linebreaking  = new_mode ;
-        redraw        = Redraw ;
     }
 
   let toggle_show_token t = {
     t with
       show_token  = not t.show_token ;
-      redraw      = Redraw ;
     }
 
   let toggle_show_neighbor t = {
     t with
       show_neighbor = not t.show_neighbor ;
-      redraw        = Redraw ;
   }
 
   let toggle_show_selection t = {
     t with
       show_selection  = not t.show_selection ;
-      redraw          = Redraw ;
   }
 
   (* TODO: this should also recenter the view horizontally in Clip mode *)
@@ -2279,7 +2271,6 @@ end = struct
     let new_start = t.cursor.y - view_height / 2 in {
       t with
         view_start  = max new_start 0 ;
-        redraw      = Redraw ;
     }
 
   (* TODO: move drawing in separate module ? *)
@@ -2452,23 +2443,32 @@ end = struct
       (mk_rect 0 1 1 (Screen.screen_height screen))
 
 
-  let draw t screen is_focused =
+  let draw t screen redraw is_focused =
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let textscreen = Screen.mk_subscreen screen
       (* 1 for border column, 1 for header space *)
       (mk_rect 1 1 (Screen.screen_width screen) (Screen.screen_height screen))
     in
-    if not kPERSISTDRAW || t.redraw <> Nodraw then
-      put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
-    if not kPERSISTDRAW || t.redraw = Redraw then (
-      Screen.clear textscreen ;
-      Framebuffer.clear framebuffer ; (* PERF: this should take a clearing rectangle ! *)
-      fill_framebuffer t textscreen ;
-      (* CLEANUP: pass the args in a struct and do the drawing of cursor there *)
-      let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-      if is_focused then
-        Screen.put_cursor textscreen final_cursor ;
-    )
+    match redraw with
+    | Nodraw ->
+        Printf.fprintf logs "draw: NoDraw for %s\n" (textscreen |> Screen.screen_window |> rect_to_string) ;
+        flush logs ;
+    | FrameDirty ->
+        put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
+        Printf.fprintf logs "draw: FrameDirty for %s\n" (textscreen |> Screen.screen_window |> rect_to_string) ;
+        flush logs ;
+    | Redraw -> (
+        put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
+        Screen.clear textscreen ;
+        Framebuffer.clear framebuffer ;
+        fill_framebuffer t textscreen ;
+        (* CLEANUP: pass the args in a struct and do the drawing of cursor there *)
+        let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
+        if is_focused then
+          Screen.put_cursor textscreen final_cursor ;
+        Printf.fprintf logs "draw: Redraw for %s\n" (textscreen |> Screen.screen_window |> rect_to_string) ;
+        flush logs ;
+      )
 
 end
 
@@ -2560,6 +2560,7 @@ module Tileset = struct
     screen_tiles  : rect array ;
     focus_index   : int ;
     fileviews     : Fileview.t array ;
+    redrawing     : redraw_level array ;
   }
 
   let adjust_fileviews screen_tiles fileviews =
@@ -2582,6 +2583,7 @@ module Tileset = struct
       screen_tiles  = screen_tiles ;
       focus_index   = focus_index ;
       fileviews     = adjust_fileviews screen_tiles fileviews ;
+      redrawing     = Array.make (alen fileviews) Redraw ;
     }
 
   let next_focus_index t =
@@ -2590,10 +2592,12 @@ module Tileset = struct
   let prev_focus_index t =
     (t.focus_index + (alen t.fileviews) - 1) mod alen t.fileviews
 
-  let draw_fileview t frame_buffer view_idx tile_idx =
-      Fileview.draw
+  let draw_fileview t frame_buffer view_idx tile_idx is_focused =
+    Fileview.draw
         (array_get t.fileviews view_idx)
         (array_get t.screen_tiles tile_idx |> Screen.mk_screen frame_buffer)
+        (array_get t.redrawing view_idx)
+        is_focused
 
   let draw_fileviews t frame_buffer =
     let n_screens = alen t.screen_tiles in
@@ -2610,6 +2614,11 @@ module Tileset = struct
       then array_get t.screen_tiles t.focus_index
       else array_get t.screen_tiles 0
 
+  let adjust_redrawing idx redraw t =
+      array_fill t.redrawing 0 (alen t.redrawing) Nodraw ;
+      array_set t.redrawing idx redraw ;
+      t
+
   let apply_op t =
     (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
      * Any operation that remaps tiles and fileviews has to use mk_tileset for adusting fileview height *)
@@ -2625,6 +2634,7 @@ module Tileset = struct
             |> fileview_op screen_height
             |> array_set fileviews' t.focus_index ;
           { t with fileviews = fileviews' }
+            |> adjust_redrawing t.focus_index Redraw
       | ScreenLayoutCycleNext ->
           let new_config = ScreenConfiguration.cycle_config_layout_next t.screen_config in
           mk_tileset
@@ -2843,9 +2853,6 @@ module Ciseau = struct
     Screen.put_color_rect editor.status_screen Config.default.colors.status (mk_rect 0 0 editor.term_dim.x 0)
 
   let refresh_screen editor =
-    (* PERF: only clear rectangles per subscreen *)
-    if not kPERSISTDRAW then
-      Framebuffer.clear editor.frame_buffer ;
     Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
     show_status editor ;
     Framebuffer.render editor.frame_buffer editor.render_buffer ;
@@ -3081,7 +3088,6 @@ let () =
  *    - token rotate
  *
  * perfs:
- *  - Framebuffer should be cleared selectively by subrectangles that need to be redrawn.
  *  - memory optimization for
  *      TokenMovement
  *      DelimMovement
