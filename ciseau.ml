@@ -928,6 +928,7 @@ module Framebuffer : sig
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val clear_rect        : t -> rect -> unit
+  val clear_line        : t -> int -> int -> int -> unit
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   (* TODO: add a put_color_segment function *)
@@ -1067,6 +1068,14 @@ end = struct
       array_blit default_bg_colors 0 t.bg_colors offset len ;
     done
 
+  let clear_line t x y len =
+    assert_that (0 <= y) ;
+    assert_that (y < t.window.y) ;
+    let offset = y * t.window.x + x in
+    Bytes.fill t.text offset len Default.text ;
+    array_blit default_fg_colors 0 t.fg_colors offset len ;
+    array_blit default_bg_colors 0 t.bg_colors offset len
+
   let render frame_buffer render_buffer =
     Bytevector.reset render_buffer ;
     Bytevector.append render_buffer Term.Control.cursor_hide ;
@@ -1109,7 +1118,6 @@ end = struct
     let blitlen = min len (slen text) in
     assert (blitlen <= t.window.x) ;
     assert (blitlen <= (t.len - offset)) ;
-    (* BUG: this should only set that array if it is a higher number *)
     update_line_end t (x + blitlen) y ;
     bytes_blit_string text 0 t.text offset blitlen
 
@@ -1259,15 +1267,20 @@ end = struct
       colors
       rect'
 
-  (* BUG: because of adding caching to the immediate rendering, put_line should clear until end of line ! *)
   let put_line screen x y maxlen line =
-    if y < screen.size.y then
+    if y < screen.size.y then (
+      Framebuffer.clear_line
+        screen.frame_buffer
+        (rect_x screen.window)
+        ((rect_y screen.window) + y)
+        (rect_w screen.window) ;
       Framebuffer.put_line
         screen.frame_buffer
         ((rect_x screen.window) + x)
         ((rect_y screen.window) + y)
         (min screen.size.x maxlen)
         line
+    )
 
   let put_cursor screen pos =
     screen.window
@@ -2587,6 +2600,12 @@ module Tileset = struct
       redrawing     = Array.make (alen fileviews) redraw ;
     }
 
+  let set_focus t focus_index = {
+      t with
+        focus_index = focus_index ;
+        redrawing   = Array.make (alen t.fileviews) FrameDirty ;
+    }
+
   let next_focus_index t =
     (t.focus_index + 1) mod alen t.fileviews
 
@@ -2615,15 +2634,6 @@ module Tileset = struct
       then array_get t.screen_tiles t.focus_index
       else array_get t.screen_tiles 0
 
-  let adjust_redrawing idx redraw t =
-    array_fill t.redrawing 0 (alen t.redrawing) Nodraw ;
-    array_set t.redrawing idx redraw ;
-    t
-
-  let adjust_redrawing2 t =
-    array_fill t.redrawing 0 (alen t.redrawing) FrameDirty ;
-    t
-
   let apply_op t =
     (* Any operation that changes the terminal size has to use mk_tileset for recomputing the tiles
      * Any operation that remaps tiles and fileviews has to use mk_tileset for adusting fileview height *)
@@ -2638,8 +2648,13 @@ module Tileset = struct
             |> array_get fileviews'
             |> fileview_op screen_height
             |> array_set fileviews' t.focus_index ;
-          { t with fileviews = fileviews' }
-            |> adjust_redrawing t.focus_index Redraw (* BUG: need to copy the redrawing ! *)
+          let t' = {
+            t with
+              fileviews = fileviews' ;
+              redrawing = Array.make (alen fileviews') Nodraw ;
+          } in
+            array_set t'.redrawing t'.focus_index Redraw ;
+            t'
       | ScreenLayoutCycleNext ->
           let new_config = ScreenConfiguration.cycle_config_layout_next t.screen_config in
           mk_tileset
@@ -2653,14 +2668,11 @@ module Tileset = struct
           mk_tileset
             t.focus_index t.screen_size new_config t.fileviews
       | FocusNext ->
-          { t with focus_index = next_focus_index t }
-            |> adjust_redrawing2
+          set_focus t (next_focus_index t)
       | FocusPrev ->
-          { t with focus_index = prev_focus_index t }
-            |> adjust_redrawing2
+          set_focus t (prev_focus_index t)
       | FocusMain ->
-          { t with focus_index = 0 }
-            |> adjust_redrawing2
+          set_focus t 0
       | BringFocusToMain ->
           let fileviews' = Array.copy t.fileviews in
           array_get t.fileviews t.focus_index |> array_set fileviews' 0 ;
