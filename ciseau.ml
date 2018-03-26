@@ -2260,7 +2260,7 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
-      (mk_rect 6 t.cursor.y text_width t.cursor.y) ;
+      (mk_rect 6 (t.cursor.y - t.view_start) text_width (t.cursor.y - t.view_start)) ;
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
