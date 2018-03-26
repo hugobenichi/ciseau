@@ -618,35 +618,7 @@ module Keys = struct
 end
 
 
-module Block = struct
-  type t = {
-    text    : string ;
-    offset  : int ;
-    len     : int ;
-  }
-
-  let mk_block t = {
-    text    = t ;
-    offset  = 0 ;
-    len     = slen t ;
-  }
-
-  let zero_block =
-    mk_block ""
-end
-
-
 type linebreak = Clip | Overflow (* TODO: consider putting the linebreaking offset here ? *)
-
-
-module Line = struct
-  type t = String of string | Block of Block.t
-
-  let zero_line = String ""
-
-  let of_string s   = String s
-  let of_block b    = Block b
-end
 
 
 module ScreenConfiguration = struct
@@ -882,18 +854,13 @@ module Framebuffer : sig
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val clear_rect        : t -> rect -> unit
-  val clear_line        : t -> int -> int -> int -> unit
+  val clear_line        : t -> x:int -> y:int -> len:int -> unit
   val render            : t -> Bytevector.t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> v2 -> unit
-  (* CLEANUP: consider alternative api to remove the need to have a Line.t
-   * for instance:
-      val put_line : t -> int (* dst_x *) -> int (* dst_y *)
-                    -> string -> int (* src_offset *) -> int (* len *)
-                    -> unit
-   *)
-  val put_line          : t -> int -> int -> int -> Line.t -> unit
+  (* TODO: make len optional *)
+  val put_line          : t -> x:int -> y:int -> ?offset:int -> len:int -> string -> unit
   val put_framebuffer   : t -> rect -> int -> t -> linebreak -> v2
 
 end = struct
@@ -1018,7 +985,7 @@ end = struct
       array_blit default_bg_colors 0 t.bg_colors offset len ;
     done
 
-  let clear_line t x y len =
+  let clear_line t ~x:x ~y:y ~len:len =
     assert_that (0 <= y) ;
     assert_that (y < t.window.y) ;
     let offset = y * t.window.x + x in
@@ -1063,29 +1030,13 @@ end = struct
     assert_that (is_v2_inside t.window cursor) ;
     t.cursor <- cursor
 
-  let put_string t len x y text =
-    let offset = to_offset t.window x y in
-    let blitlen = min len (slen text) in
-    assert (blitlen <= t.window.x) ;
-    assert (blitlen <= (t.len - offset)) ;
-    update_line_end t (x + blitlen) y ;
-    bytes_blit_string text 0 t.text offset blitlen
-
-  let put_block
-      t len x y
-      { Block.text ; Block.offset = block_offset ; Block.len = block_len } =
-    let bytes_offset = to_offset t.window x y in
-    let blitlen = min len block_len in
-    assert (blitlen <= t.window.x) ;
-    assert (blitlen <= (t.len - bytes_offset)) ;
-    update_line_end t (x + blitlen) y ;
-    bytes_blit_string text block_offset t.text bytes_offset blitlen
-
-  let rec put_line framebuffer x y len =
-    let open Line in
-    function
-      | String s  -> put_string framebuffer len x y s
-      | Block b   -> put_block framebuffer len x y b
+  let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ~len:len s =
+    let bytes_offset = to_offset framebuffer.window x y in
+    let blitlen = min len (slen s) in
+    assert (blitlen <= framebuffer.window.x) ;
+    assert (blitlen <= (framebuffer.len - bytes_offset)) ;
+    update_line_end framebuffer (x + blitlen) y ;
+    bytes_blit_string s offset framebuffer.text bytes_offset blitlen
 
   (* Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
    * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
@@ -1168,7 +1119,8 @@ module Screen : sig
   val mk_screen         : Framebuffer.t -> rect -> t
   val mk_subscreen      : t -> rect -> t
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
-  val put_line          : t -> int -> int -> int -> Line.t -> unit
+  (* TODO: make len optional *)
+  val put_line          : t -> x:int -> y:int -> ?offset:int -> len:int -> string -> unit
   val put_cursor        : t -> v2 -> unit
   val put_framebuffer   : t -> Framebuffer.t -> linebreak -> v2
 
@@ -1217,18 +1169,19 @@ end = struct
       colors
       rect'
 
-  let put_line screen x y maxlen line =
-    if y < screen.size.y then (
+  let put_line screen ~x:x ~y:y ?offset:(offset=0) ~len:len line =
+    if 0 <= y && y < screen.size.y then (
       Framebuffer.clear_line
         screen.frame_buffer
-        (rect_x screen.window)
-        ((rect_y screen.window) + y)
-        (rect_w screen.window) ;
+        ~x:(rect_x screen.window)
+        ~y:((rect_y screen.window) + y)
+        ~len:(rect_w screen.window) ;
       Framebuffer.put_line
         screen.frame_buffer
-        ((rect_x screen.window) + x)
-        ((rect_y screen.window) + y)
-        (min screen.size.x maxlen)
+        ~x:((rect_x screen.window) + x)
+        ~y:((rect_y screen.window) + y)
+        ~offset:offset
+        ~len:(min screen.size.x len)
         line
     )
 
@@ -2115,7 +2068,7 @@ end = struct
       Printf.sprintf "%5d " (n - negative_offset)
 
     let cache =
-      Array.init hardcoded_size (format_n >> Line.of_string)
+      Array.init hardcoded_size format_n
 
     let get base_offset n =
       array_get cache (base_offset + n + negative_offset)
@@ -2246,8 +2199,8 @@ end = struct
   (* PERF: resize dynamically and fit to term size ! *)
   let framebuffer = Framebuffer.init_framebuffer (mk_v2 300 100)
 
-  let frame_default_line      = Line.of_string "~  "
-  let frame_continuation_line = Line.of_string "..."
+  let frame_default_line      = "~  "
+  let frame_continuation_line = "..."
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
   let fill_framebuffer t screen =
@@ -2276,7 +2229,7 @@ end = struct
     (* Continuation dots for overflow mode *)
     if t.linebreaking = Overflow then
       for y = 0 to text_height do
-        Screen.put_line screen 0 y 3 frame_continuation_line
+        Screen.put_line screen ~x:0 ~y:y ~len:3 frame_continuation_line
       done ;
 
     (* Text area *)
@@ -2284,16 +2237,9 @@ end = struct
       let line_idx = i + t.view_start in
       let l = Filebuffer.line_at t.filebuffer line_idx in
       let x_len = (slen l) - x_scrolling_offset in
-      let b =
-        (* PERF: if x_scrolling_offset is zero, use Line.String instead *)
-        if x_len < 1 then Line.zero_line else {
-          Block.text    = l ;
-          Block.offset  = x_scrolling_offset ;
-          Block.len     = x_len ;
-        } |> Line.of_block
-      in
-      Framebuffer.put_line framebuffer 0 i 6 (LineNumberCache.get line_number_offset line_idx) ;
-      Framebuffer.put_line framebuffer 6 i 1000 b ;
+      (* BUG: crashes when scrolling on the right *)
+      Framebuffer.put_line framebuffer ~x:0 ~y:i ~len:6 (LineNumberCache.get line_number_offset line_idx) ;
+      Framebuffer.put_line framebuffer ~x:6 ~y:i ~offset:x_scrolling_offset ~len:x_len l ;
     done ;
 
     (* Text area color blocks *)
@@ -2369,7 +2315,7 @@ end = struct
 
     (* No-text area *)
     for y = text_stop_y to text_height do
-      Framebuffer.put_line framebuffer 0 y 3 frame_default_line
+      Framebuffer.put_line framebuffer ~x:0 ~y:y ~len:3 frame_default_line
     done ;
     Framebuffer.put_color_rect
       framebuffer
@@ -2386,12 +2332,12 @@ end = struct
 
 
   let put_border_frame t screen textsize is_focused =
-    Screen.put_line screen 0 0 10000 (Line.of_string
+    Screen.put_line screen ~x:0 ~y:0 ~len:10000
       (Printf.sprintf
         "%s %d,%d  mode=%s"
         t.filebuffer.Filebuffer.header
         t.cursor.y t.cursor.x
-        (Movement.mode_to_string t.mov_mode))) ;
+        (Movement.mode_to_string t.mov_mode)) ;
     (* header *)
     let size = Screen.screen_size screen in
     Screen.put_color_rect
@@ -2832,8 +2778,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-    Screen.put_line editor.status_screen 0 0 (slen status_text1) (Line.String status_text1) ;
-    Screen.put_line editor.status_screen 0 1 (slen status_text2) (Line.String status_text2) ;
+    Screen.put_line editor.status_screen ~x:0 ~y:0 ~len:(slen status_text1) status_text1 ;
+    Screen.put_line editor.status_screen ~x:0 ~y:1 ~len:(slen status_text2) status_text2 ;
     Screen.put_color_rect editor.status_screen Config.default.colors.status (mk_rect 0 0 editor.term_dim.x 0)
 
   let refresh_screen editor =
