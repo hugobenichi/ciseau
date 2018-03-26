@@ -954,9 +954,10 @@ end = struct
       cursor      = v2_zero ;
     }
 
-  let default_fg_colors   = Array.make 1000000 Color.white_code
-  let default_bg_colors   = Array.make 1000000 Color.darkgray_code
-  let default_line_length = Array.make 1000 0
+  (* TODO: put in a global together with fb and recreate at every term resize event *)
+  let default_fg_colors   = Array.make (256 * 512) Color.white_code
+  let default_bg_colors   = Array.make (256 * 512) Color.darkgray_code
+  let default_line_length = Array.make 256 0
 
   let fill_fg_color t offset len color =
     color
@@ -968,6 +969,7 @@ end = struct
       |> Color.color_control_code
       |> array_fill t.bg_colors offset len
 
+  (* TODO: if ever the size of the default arrays are not sufficient, add loop to do multiple fills *)
   let clear t =
     Bytes.fill t.text 0 t.len Default.text ;
     array_blit default_fg_colors 0 t.fg_colors 0 t.len ;
@@ -1106,6 +1108,11 @@ end = struct
 end
 
 
+(* A common buffer for filling Fileview content just before bliting into a backend rendering framebuffer *)
+(* TODO: Not threadsafe !! find better place to put that *)
+let fb = ref (Framebuffer.init_framebuffer v2_zero)
+
+
 module Screen : sig
   type t
 
@@ -1238,7 +1245,7 @@ module Filebuffer = struct
   let init_filebuffer file =
     file |> read_file |> from_lines file
 
-  let line_at { buffer } = array_get buffer
+  let line_at { buffer } y = array_get buffer y  (* fully apply function to avoid closure creation *)
 
   let line_length { buffer } y = array_get buffer y |> slen (* TODO: take into account '\t' *)
 
@@ -1863,6 +1870,7 @@ end)
 
 module MovementContext = struct
   type t = {
+    (* TODO: a selected area cannot be a rect all the time when it covers multiple lines *)
     selection : rect array ;
   }
 end
@@ -2203,7 +2211,7 @@ end = struct
   let frame_continuation_line = "..."
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
-  let fill_framebuffer t screen =
+  let fill_framebuffer t screen framebuffer =
     let screen_size = Screen.screen_size screen in
     let text_width  = screen_size.x in
     let text_height = screen_size.y in
@@ -2291,6 +2299,7 @@ end = struct
       in
 
       t.context.selection
+        (* PERF: only keep rectangles that might be in the view *)
         |> Array.map (translate_selection t)
         |> Array.iter (Framebuffer.put_color_rect framebuffer Config.default.colors.selection) ;
     ) ;
@@ -2352,32 +2361,27 @@ end = struct
       Config.default.colors.border
       (mk_rect 0 1 1 (Screen.screen_height screen))
 
-
   let draw t screen redraw is_focused =
     (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let textscreen = Screen.mk_subscreen screen
       (* 1 for border column, 1 for header space *)
       (mk_rect 1 1 (Screen.screen_width screen) (Screen.screen_height screen))
     in
+    let framebuffer = !fb in
     match redraw with
     | Nodraw ->
-        Printf.fprintf logs "draw: NoDraw for %s\n" (textscreen |> Screen.screen_window |> rect_to_string) ;
-        flush logs ;
+        ()
     | FrameDirty ->
-        put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
-        Printf.fprintf logs "draw: FrameDirty for %s\n" (textscreen |> Screen.screen_window |> rect_to_string) ;
-        flush logs ;
+        put_border_frame t screen (Screen.screen_size textscreen) is_focused
     | Redraw -> (
         put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
         Screen.clear textscreen ;
         Framebuffer.clear framebuffer ;
-        fill_framebuffer t textscreen ;
+        fill_framebuffer t textscreen framebuffer ;
         (* CLEANUP: pass the args in a struct and do the drawing of cursor there *)
         let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
         if is_focused then
-          Screen.put_cursor textscreen final_cursor ;
-        Printf.fprintf logs "draw: Redraw for %s\n" (textscreen |> Screen.screen_window |> rect_to_string) ;
-        flush logs ;
+          Screen.put_cursor textscreen final_cursor
       )
 
 end
@@ -2681,8 +2685,9 @@ module Ciseau = struct
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
-    let filebuffers = test_mk_filebuffers file
-    in {
+    let filebuffers = test_mk_filebuffers file in
+    fb := Framebuffer.init_framebuffer term_dim ;
+    {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
       render_buffer   = Bytevector.init_bytevector 0x100000 ;
@@ -2701,8 +2706,9 @@ module Ciseau = struct
 
   let resize_editor editor =
     let term_dim = Term.get_terminal_dimensions () in
-    let frame_buffer = Framebuffer.init_framebuffer term_dim
-    in {
+    let frame_buffer = Framebuffer.init_framebuffer term_dim in
+    fb := Framebuffer.init_framebuffer term_dim ;
+    {
       editor with
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
@@ -2976,7 +2982,7 @@ let sigwinch = 28 (* That's for OSX *)
 let () =
   Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
   (*
-  Fuzzer.main 2000 ;
+  Fuzzer.main 5000 ;
    *)
   Ciseau.main () ;
   close_out logs
