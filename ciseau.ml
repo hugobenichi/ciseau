@@ -280,68 +280,65 @@ module Token = struct
 end
 
 
-(* CLEANUP: rewrite Color module to directly work with color index *)
 module Color = struct
 
-  type base = Black
-            | Red
-            | Green
-            | Yellow
-            | Blue
-            | Magenta
-            | Cyan
-            | White
+  type color  = (* First 8 ansi colors *)
+                Black
+              | Red
+              | Green
+              | Yellow
+              | Blue
+              | Magenta
+              | Cyan
+              | White
+                (* High contract 8 ansi colors *)
+              | Bold_Black
+              | Bold_Red
+              | Bold_Green
+              | Bold_Yellow
+              | Bold_Blue
+              | Bold_Magenta
+              | Bold_Cyan
+              | Bold_White
+                (* Remaining colors from extended 256 colors mode *)
+              | RGB216 of int * int * int
+              | Gray of int
 
-  let base_code = function
-    | Black   -> 0
-    | Red     -> 1
-    | Green   -> 2
-    | Yellow  -> 3
-    | Blue    -> 4
-    | Magenta -> 5
-    | Cyan    -> 6
-    | White   -> 7
-
-  let bold_code = function
-    | Black   -> 8
-    | Red     -> 9
-    | Green   -> 10
-    | Yellow  -> 11
-    | Blue    -> 12
-    | Magenta -> 13
-    | Cyan    -> 14
-    | White   -> 15
-
-  type t = Normal of base
-         | Bold of base
-         | Gray of int
-         | RGB216 of int * int * int
-         (* | RGB24b of int * int * int *) (* TODO: support 24b colors, support rgb hex string *)
-
-  let color_control_code = function
-    | Normal c        -> base_code c
-    | Bold c          -> bold_code c
-    | Gray g          -> 232 + g                  (* TODO: clamp to [0,23] *)
-    | RGB216 (r,g,b)  -> 16 + 36 * r + 6 * g + b  (* TODO: clamp to [0, 5] ^ 3 *)
+  let color_control_code =
+    function
+      | Black           -> 0
+      | Red             -> 1
+      | Green           -> 2
+      | Yellow          -> 3
+      | Blue            -> 4
+      | Magenta         -> 5
+      | Cyan            -> 6
+      | White           -> 7
+      | Bold_Black      -> 8
+      | Bold_Red        -> 9
+      | Bold_Green      -> 10
+      | Bold_Yellow     -> 11
+      | Bold_Blue       -> 12
+      | Bold_Magenta    -> 13
+      | Bold_Cyan       -> 14
+      | Bold_White      -> 15
+      | Gray g          -> assert_that (0 <= g && g < 24) ;
+                           232 + g
+      | RGB216 (r,g,b)  -> assert_that (0 <= r && r < 6) ;
+                           assert_that (0 <= g && g < 6) ;
+                           assert_that (0 <= b && b < 6) ;
+                           16 + 36 * r + 6 * g + b
 
   type color_cell = {
-    fg : t ;
-    bg : t ;
+    fg : color ;
+    bg : color ;
   }
 
-  let black     = Normal Black
-  let red       = Normal Red
-  let green     = Normal Green
-  let yellow    = Normal Yellow
-  let blue      = Normal Blue
-  let magenta   = Normal Magenta
-  let cyan      = Normal Cyan
-  let white     = Normal White
   let darkgray  = Gray 2
 
-  let white_code      = color_control_code white
-  let darkgray_code   = color_control_code darkgray
-  let black_code      = color_control_code black
+  let white_code      = color_control_code White
+  let darkgray_code   = color_control_code (Gray 2)
+  let black_code      = color_control_code Black
 
   let fg_color_control_strings = Array.init 256 (Printf.sprintf "38;5;%d")
   let bg_color_control_strings = Array.init 256 (Printf.sprintf ";48;5;%dm")
@@ -383,15 +380,15 @@ module Config = struct
   let default : cfg = {
     colors = {
       operator = {
-        fg    = green ;
+        fg    = Green ;
         bg    = darkgray ;
       } ;
       structure = {
-        fg    = red ;
+        fg    = Red ;
         bg    = darkgray ;
       } ;
       string  = {
-        fg    = yellow ;
+        fg    = Yellow ;
         bg    = darkgray ;
       } ;
       spacing = {
@@ -399,59 +396,59 @@ module Config = struct
         bg    = darkgray ;
       } ;
       numbers = {
-        fg    = magenta ;
+        fg    = Magenta ;
         bg    = darkgray ;
       } ;
       default = {
-        fg    = white ;
+        fg    = White ;
         bg    = darkgray ;
       } ;
       cursor_line = {
-        fg    = white ;
-        bg    = black ;
+        fg    = White ;
+        bg    = Black ;
       } ;
       current_token = {
-        fg    = white ;
+        fg    = White ;
         bg    = Color.Gray 4 ;
       } ;
       selection = {
-        fg    = white ;
-        bg    = blue ;
+        fg    = White ;
+        bg    = Blue ;
       } ;
       leftright_neighbor = {
-        fg    = white ;
-        bg    = red ;
+        fg    = White ;
+        bg    = Red ;
       } ;
       updown_neighbor = {
-        fg    = white ;
-        bg    = green ;
+        fg    = White ;
+        bg    = Green ;
       } ;
       line_numbers = {
-        fg    = green ;
+        fg    = Green ;
         bg    = darkgray ;
       } ;
       focus_header = {
         fg    = darkgray ;
-        bg    = yellow ;
+        bg    = Yellow ;
       } ;
       header = {
         fg    = darkgray ;
-        bg    = cyan ;
+        bg    = Cyan ;
       } ;
       status = {
         fg    = darkgray ;
-        bg    = white ;
+        bg    = White ;
       } ;
       user_input = {
-        fg    = white ;
+        fg    = White ;
         bg    = darkgray ;
       } ;
       border = {
-        fg    = white ;
-        bg    = white ;
+        fg    = White ;
+        bg    = White ;
       } ;
       no_text = {
-        fg    = Bold Magenta ;
+        fg    = Bold_Magenta ;
         bg    = darkgray ;
       }
     } ;
@@ -902,7 +899,7 @@ module Framebuffer : sig
 end = struct
 
   module Default = struct
-    let fg    = Color.white
+    let fg    = Color.White
     let bg    = Color.darkgray
     let z     = 0
     let text  = ' '
