@@ -849,8 +849,6 @@ end
 module Framebuffer : sig
   type t
 
-  (* CLEANUP: use labeled parameters *)
-
   val init_framebuffer  : v2 -> t
   val clear             : t -> unit
   val clear_rect        : t -> rect -> unit
@@ -859,8 +857,7 @@ module Framebuffer : sig
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> v2 -> unit
-  (* TODO: make len optional *)
-  val put_line          : t -> x:int -> y:int -> ?offset:int -> len:int -> string -> unit
+  val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
   val put_framebuffer   : t -> rect -> int -> t -> linebreak -> v2
 
 end = struct
@@ -1032,11 +1029,10 @@ end = struct
     assert_that (is_v2_inside t.window cursor) ;
     t.cursor <- cursor
 
-  let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ~len:len s =
+  let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
     let bytes_offset = to_offset framebuffer.window x y in
-    let blitlen = min len (slen s) in
-    assert (blitlen <= framebuffer.window.x) ;
-    assert (blitlen <= (framebuffer.len - bytes_offset)) ;
+    let blitlen = if len < 0 then slen s else len in
+    assert (x + blitlen <= framebuffer.window.x) ;
     update_line_end framebuffer (x + blitlen) y ;
     bytes_blit_string s offset framebuffer.text bytes_offset blitlen
 
@@ -1116,7 +1112,6 @@ let fb = ref (Framebuffer.init_framebuffer v2_zero)
 module Screen : sig
   type t
 
-  (* CLEANUP: use labeled parameters *)
   val screen_size       : t -> v2
   val screen_window     : t -> rect
   val screen_offset     : t -> v2
@@ -1126,8 +1121,7 @@ module Screen : sig
   val mk_screen         : Framebuffer.t -> rect -> t
   val mk_subscreen      : t -> rect -> t
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
-  (* TODO: make len optional *)
-  val put_line          : t -> x:int -> y:int -> ?offset:int -> len:int -> string -> unit
+  val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
   val put_cursor        : t -> v2 -> unit
   val put_framebuffer   : t -> Framebuffer.t -> linebreak -> v2
 
@@ -1136,7 +1130,6 @@ end = struct
   type t = {
     size            : v2 ;
     window          : rect ;
-    (* CLEANUP: keep the underlying rectangle in that struct on top of size *)
     frame_buffer    : Framebuffer.t ;
   }
 
@@ -1176,7 +1169,10 @@ end = struct
       colors
       rect'
 
-  let put_line screen ~x:x ~y:y ?offset:(offset=0) ~len:len line =
+  let put_line screen ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) line =
+    let len' = if len < 0 then slen line else len in
+    let blitend = min screen.size.x (offset + len') in
+    let blitlen = blitend - offset in
     if 0 <= y && y < screen.size.y then (
       Framebuffer.clear_line
         screen.frame_buffer
@@ -1188,7 +1184,7 @@ end = struct
         ~x:((rect_x screen.window) + x)
         ~y:((rect_y screen.window) + y)
         ~offset:offset
-        ~len:(min screen.size.x len)
+        ~len:blitlen
         line
     )
 
@@ -2237,7 +2233,7 @@ end = struct
     (* Continuation dots for overflow mode *)
     if t.linebreaking = Overflow then
       for y = 0 to text_height do
-        Screen.put_line screen ~x:0 ~y:y ~len:3 frame_continuation_line
+        Screen.put_line screen ~x:0 ~y:y frame_continuation_line
       done ;
 
     (* Text area *)
@@ -2245,9 +2241,9 @@ end = struct
       let line_idx = i + t.view_start in
       let l = Filebuffer.line_at t.filebuffer line_idx in
       let x_len = (slen l) - x_scrolling_offset in
-      (* BUG: crashes when scrolling on the right *)
       Framebuffer.put_line framebuffer ~x:0 ~y:i ~len:6 (LineNumberCache.get line_number_offset line_idx) ;
-      Framebuffer.put_line framebuffer ~x:6 ~y:i ~offset:x_scrolling_offset ~len:x_len l ;
+      if x_len > 0 then
+        Framebuffer.put_line framebuffer ~x:6 ~y:i ~offset:x_scrolling_offset ~len:x_len l
     done ;
 
     (* Text area color blocks *)
@@ -2255,6 +2251,8 @@ end = struct
       framebuffer
       Config.default.colors.line_numbers
       (mk_rect 0 0 6 text_stop_y) ;
+
+    (* BUG: with horizontal scrolling > 0, most of the color blocks below are wrong *)
 
     (* Show cursor lines *)
     Framebuffer.put_color_rect
@@ -2324,7 +2322,7 @@ end = struct
 
     (* No-text area *)
     for y = text_stop_y to text_height do
-      Framebuffer.put_line framebuffer ~x:0 ~y:y ~len:3 frame_default_line
+      Framebuffer.put_line framebuffer ~x:0 ~y:y frame_default_line
     done ;
     Framebuffer.put_color_rect
       framebuffer
@@ -2341,7 +2339,7 @@ end = struct
 
 
   let put_border_frame t screen textsize is_focused =
-    Screen.put_line screen ~x:0 ~y:0 ~len:10000
+    Screen.put_line screen ~x:0 ~y:0
       (Printf.sprintf
         "%s %d,%d  mode=%s"
         t.filebuffer.Filebuffer.header
@@ -2784,8 +2782,8 @@ module Ciseau = struct
     in
     let status_text2 = editor.user_input
     in
-    Screen.put_line editor.status_screen ~x:0 ~y:0 ~len:(slen status_text1) status_text1 ;
-    Screen.put_line editor.status_screen ~x:0 ~y:1 ~len:(slen status_text2) status_text2 ;
+    Screen.put_line editor.status_screen ~x:0 ~y:0 status_text1 ;
+    Screen.put_line editor.status_screen ~x:0 ~y:1 status_text2 ;
     Screen.put_color_rect editor.status_screen Config.default.colors.status (mk_rect 0 0 editor.term_dim.x 0)
 
   let refresh_screen editor =
@@ -2995,6 +2993,7 @@ let () =
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
+ *  - bug: text color blocks with non zero horizontal scrolling are wrong
  *  - better management of screen dragging for horizontal scrolling
  *  - need to audit put_color_rect from bottom up
  *
