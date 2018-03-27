@@ -1157,8 +1157,8 @@ end = struct
     mk_screen frame_buffer (rect_mv (rect_offset window) rect)
 
   let put_color_rect screen colors rect =
-    let x_start   = min (rect_x rect) 0 in
-    let y_start   = min (rect_y rect) 0 in
+    let x_start   = max (rect_x rect) 0 in
+    let y_start   = max (rect_y rect) 0 in
     let x_end     = min (screen_width screen) (rect_w rect) in
     let y_end     = min (screen_height screen) (rect_h rect) in
     let x_offset  = rect_x screen.window in
@@ -2105,7 +2105,7 @@ end = struct
     show_neighbor     = true ;
     show_selection    = true ;
     context           = let open MovementContext in {
-      selection = Filebuffer.search filebuffer "cursor" ;
+      selection = Filebuffer.search filebuffer "end" ;
     } ;
   }
 
@@ -2252,8 +2252,6 @@ end = struct
       Config.default.colors.line_numbers
       (mk_rect 0 0 6 text_stop_y) ;
 
-    (* BUG: with horizontal scrolling > 0, most of the color blocks below are wrong *)
-
     (* Show cursor lines *)
     Framebuffer.put_color_rect
       framebuffer
@@ -2262,7 +2260,7 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
-      (mk_rect (t.cursor.x + 6) 0 (t.cursor.x + 7) text_height) ;
+      (mk_rect (t.cursor.x + 6 - x_scrolling_offset) 0 (t.cursor.x + 7 - x_scrolling_offset) text_height) ;
 
     (* Show token where cursor currently is *)
     if t.show_token then (
@@ -2277,37 +2275,39 @@ end = struct
           if y = y_start then token_s.x else 0 in       (* start from x=0 for lines after the first *)
         let x1 =
           if y = y_end then (token_e.x + 1) else len in (* ends at end-of-line for lines before the last *)
-        let x0' = 6 + (min x0 x1) in
-        let x1' = 6 + (max x0 x1) in
+        let x0' = 6 + (max 0 ((min x0 x1) - x_scrolling_offset)) in
+        let x1' = 6 + (max x0 x1) - x_scrolling_offset in
         (* TODO: this should use a put_color_line api to avoid making rect records *)
-        Framebuffer.put_color_rect
-          framebuffer Config.default.colors.current_token (mk_rect x0' y x1' y)
+        (* BUG: add horizontal_scrolling correction ?? *)
+        if 6 <= x0' && x0' < x1' then
+          Framebuffer.put_color_rect
+            framebuffer Config.default.colors.current_token (mk_rect x0' y x1' y)
       done ;
     ) ;
 
     (* BUG: these show_* color rectangles cause weirdness in Overflow mode ! *)
     (* Show selection *)
     if t.show_selection then (
-      let translate_selection t rect =
-          let tl_x = (rect_x rect) + 6 in
-          let tl_y = (rect_y rect) - t.view_start in
-          let br_x = (rect_x_end rect) + 7 in
-          let br_y = (rect_y_end rect) - t.view_start in
-          mk_rect tl_x tl_y br_x br_y
+      let show_selection selection_rect =
+          let tl_x = 6 + (max 0 ((rect_x selection_rect) - x_scrolling_offset)) in
+          let tl_y = (rect_y selection_rect) - t.view_start in
+          let br_x = (rect_x_end selection_rect) + 7 - x_scrolling_offset in
+          let br_y = (rect_y_end selection_rect) - t.view_start in
+          if 0 <= br_y && tl_y < text_height && tl_x < br_x then (
+            let r = mk_rect tl_x tl_y br_x br_y in
+            Framebuffer.put_color_rect framebuffer Config.default.colors.selection r
+          )
       in
-
-      t.context.selection
-        (* PERF: only keep rectangles that might be in the view *)
-        |> Array.map (translate_selection t)
-        |> Array.iter (Framebuffer.put_color_rect framebuffer Config.default.colors.selection) ;
+      Array.iter show_selection t.context.selection ;
     ) ;
 
     (* Show Left/Right/Up/Down tokens relatively to where current token is *)
     if t.show_neighbor then (
       let lightup_pixel t framebuffer colors pos =
-          let x = pos.x + 6 in
+          let x = pos.x + 6 - x_scrolling_offset in
           let y = pos.y - t.view_start  in
-          Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
+          if 6 <= x then
+            Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
       in
 
       Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
@@ -2338,7 +2338,7 @@ end = struct
       (mk_rect 0 cursor.y 6 cursor.y)
 
 
-  let put_border_frame t screen textsize is_focused =
+  let put_border_frame t screen header_color =
     Screen.put_line screen ~x:0 ~y:0
       (Printf.sprintf
         "%s %d,%d  mode=%s"
@@ -2346,33 +2346,35 @@ end = struct
         t.cursor.y t.cursor.x
         (Movement.mode_to_string t.mov_mode)) ;
     (* header *)
-    let size = Screen.screen_size screen in
     Screen.put_color_rect
       screen
-      (if is_focused
-        then Config.default.colors.focus_header
-        else Config.default.colors.header)
-      (mk_rect 0 0 size.x 0) ;
+      header_color
+      (mk_rect 0 0 (Screen.screen_width screen) 0) ;
     (* border *)
     Screen.put_color_rect
       screen
       Config.default.colors.border
+      (* BUG: this overlap with first char of top header ! *)
       (mk_rect 0 1 1 (Screen.screen_height screen))
 
   let draw t screen redraw is_focused =
-    (* PERF: many rectangles for colors could be hoisted into the screen record and not allocated *)
     let textscreen = Screen.mk_subscreen screen
       (* 1 for border column, 1 for header space *)
       (mk_rect 1 1 (Screen.screen_width screen) (Screen.screen_height screen))
+    in
+    let header_color =
+      if is_focused
+        then Config.default.colors.focus_header
+        else Config.default.colors.header
     in
     let framebuffer = !fb in
     match redraw with
     | Nodraw ->
         ()
     | FrameDirty ->
-        put_border_frame t screen (Screen.screen_size textscreen) is_focused
+        put_border_frame t screen header_color
     | Redraw -> (
-        put_border_frame t screen (Screen.screen_size textscreen) is_focused ;
+        put_border_frame t screen header_color ;
         Screen.clear textscreen ;
         Framebuffer.clear framebuffer ;
         fill_framebuffer t textscreen framebuffer ;
@@ -2993,9 +2995,7 @@ let () =
  *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
  *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
- *  - bug: text color blocks with non zero horizontal scrolling are wrong
  *  - better management of screen dragging for horizontal scrolling
- *  - need to audit put_color_rect from bottom up
  *
  *  general cleanups:
  *  - variable renaming
@@ -3018,19 +3018,17 @@ let () =
  *  hud: put movement/command history per Fileview and show in user input bar
  *
  *  minimal edition features
- *    - token deletion
- *    - token swap
- *    - token rotate
+ *  - token deletion
+ *  - token swap
+ *  - token rotate
  *
- * perfs:
+ *  perfs:
  *  - memory optimization for
  *      TokenMovement
  *      DelimMovement
+ *  - add put_color_segment to avoid many rect creation
  *
- * others:
- *  - hammer the code with asserts and search for more bugs in the drawing
- *
- * next features:
+ *  next features:
  *  - finish file navigation
  *  - find
  *    - free input search
