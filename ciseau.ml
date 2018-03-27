@@ -363,7 +363,8 @@ module Config = struct
     line_numbers  : color_cell ;
     focus_header  : color_cell ;
     header        : color_cell ;
-    status        : color_cell ;
+    status_normal : color_cell ;
+    status_input  : color_cell ;
     user_input    : color_cell ;
     border        : color_cell ;
     no_text       : color_cell ;
@@ -435,9 +436,13 @@ module Config = struct
         fg    = darkgray ;
         bg    = Cyan ;
       } ;
-      status = {
+      status_normal = {
         fg    = darkgray ;
         bg    = White ;
+      } ;
+      status_input = {
+        fg    = darkgray ;
+        bg    = Red ;
       } ;
       user_input = {
         fg    = White ;
@@ -460,6 +465,7 @@ end
 module Keys = struct
 
   type key_symbol = Unknown
+                  | Tab
                   | Ctrl_c
                   | Ctrl_d
                   | Ctrl_j
@@ -536,6 +542,7 @@ module Keys = struct
   let code_to_key_table = Array.init (256 + 32) mk_unknown_key
 
   let defined_keys = [
+    mk_key Tab         "Tab"           9 ;
     mk_key Ctrl_c      "Ctrl_c"        3 ;
     mk_key Ctrl_d      "Ctrl_d"        4 ;
     mk_key Ctrl_j      "Ctrl_j"        10 ;
@@ -2111,7 +2118,7 @@ end = struct
 
   let set_mov_mode m t = {
     t with
-      mov_mode  = m ;
+      mov_mode = m ;
   }
 
   let cursor { cursor } =
@@ -2608,6 +2615,19 @@ end
 
 module Ciseau = struct
 
+  type mode = Normal
+            | RawInput
+
+  let mode_to_string =
+    function
+      | Normal      ->  "Normal"
+      | RawInput    ->  "RawInput"
+
+  let mode_to_color =
+    function
+      | Normal      ->  Config.default.colors.status_normal
+      | RawInput    ->  Config.default.colors.status_input
+
   type pending_command_atom = Digit of int
 
   type pending_command = None
@@ -2622,6 +2642,7 @@ module Ciseau = struct
                | MoveModeOp of Movement.mode
                | View of (Fileview.t -> Fileview.t) (* View ops should probably be moved to Tileset *)
                | Pending of pending_command_atom
+               | Mode of mode
 
   let max_repetition = 10000
 
@@ -2652,6 +2673,7 @@ module Ciseau = struct
     pending_input   : pending_command ;
     stats           : Stats.t ;
     log_stats       : bool ;
+    mode            : mode ;
   }
 
   let main_screen_dimensions term_dim =
@@ -2702,6 +2724,7 @@ module Ciseau = struct
       pending_input   = None;
       stats           = Stats.init_stats () ;
       log_stats       = kLOG_STATS ;
+      mode            = Normal ;
     }
 
   let resize_editor editor =
@@ -2735,6 +2758,16 @@ module Ciseau = struct
         pending_input = enqueue_digit n editor.pending_input
     }
 
+  let initial_rawinput_token = "134wfoj7wef6150f817q3sdWOPR465"
+
+  let change_mode mode editor = {
+      (* TODO: needs to apply necessary cleanups from outgoing mode *)
+      editor
+        with
+        mode        = mode ;
+        user_input  = initial_rawinput_token ;
+    }
+
   let rec apply_command =
     function
       | Noop    -> (fun x -> x)
@@ -2757,6 +2790,8 @@ module Ciseau = struct
       | Pending (Digit n) ->
           (* cannot happen ?? *)
           queue_pending_command n
+      | Mode mode ->
+          change_mode mode
 
   let apply_command_with_repetition n command editor =
     match command with
@@ -2786,7 +2821,7 @@ module Ciseau = struct
     in
     Screen.put_line editor.status_screen ~x:0 ~y:0 status_text1 ;
     Screen.put_line editor.status_screen ~x:0 ~y:1 status_text2 ;
-    Screen.put_color_rect editor.status_screen Config.default.colors.status (mk_rect 0 0 editor.term_dim.x 0)
+    Screen.put_color_rect editor.status_screen (mode_to_color editor.mode) (mk_rect 0 0 editor.term_dim.x 0)
 
   let refresh_screen editor =
     Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
@@ -2795,6 +2830,7 @@ module Ciseau = struct
     editor
 
   let key_to_command = function
+    | Keys.Tab          -> Mode RawInput
     | Keys.Ctrl_c       -> Stop
     | Keys.Backslash    -> View Fileview.swap_line_number_mode
     | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
@@ -2864,10 +2900,14 @@ module Ciseau = struct
     | Number digits -> apply_command_with_repetition (max 1 (dequeue_digits digits))
 
   let process_key editor =
-    key_to_command >> (process_command editor)
+    match editor.mode with
+      | Normal ->
+          key_to_command >> (process_command editor)
+      | RawInput ->
+          key_to_command >> (process_command editor)
 
   (* TODO: replace by a proper history of previous inputs *)
-  let make_user_input key editor =
+  let update_normal_mode_command key editor =
     let user_input = (pending_command_to_string editor.pending_input)
                    ^  key.Keys.repr
                    ^ " "
@@ -2881,6 +2921,27 @@ module Ciseau = struct
       editor with
       user_input = user_input' ;
     }
+
+  (* TODO: try to support:
+   *        Delete for erasing chars
+   *        ctrl + ? for navigation
+   *        Return for finishing input
+   *)
+  let update_rawinput key editor = {
+      editor with
+      user_input =
+        (* CLEANUP: find better way to skip the initial '\t' character.
+         *          Should go away by fusing update_user_input with process_key *)
+        if editor.user_input = initial_rawinput_token
+          then ""
+          else editor.user_input ^ (key.Keys.code |> Char.chr |> Char.escaped)
+    }
+
+  (* CLEANUP Probably this should be fused with the process_key function to save some boilerplate *)
+  let update_user_input key editor =
+    match editor.mode with
+      | Normal    -> update_normal_mode_command key editor
+      | RawInput  -> update_rawinput key editor
 
   let update_stats key input_duration editor =
     let now = Sys.time () in
@@ -2898,7 +2959,7 @@ module Ciseau = struct
     let t2 = Sys.time () in
       editor
         |> process_key editor key.Keys.symbol
-        |> make_user_input key
+        |> update_user_input key
         |> update_stats key (t2 -. t1)
 
   let rec loop (next_key_fn : unit -> Keys.key) (editor : editor) : unit =
