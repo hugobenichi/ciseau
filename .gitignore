@@ -2,6 +2,7 @@
 *.cmo
 *.cmx
 *.o
+*.xml
 spacetime*
 gmon.out
 build/*

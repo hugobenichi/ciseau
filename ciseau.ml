@@ -1095,9 +1095,9 @@ end = struct
       cursor      = v2_zero ;
     }
 
-  (* TODO: put in a global together with fb and recreate at every term resize event *)
-  let default_fg_colors   = Array.make (256 * 512) Color.white_code
-  let default_bg_colors   = Array.make (256 * 512) Color.darkgray_code
+  let default_fill_len    = 8192
+  let default_fg_colors   = Array.make default_fill_len Color.white_code
+  let default_bg_colors   = Array.make default_fill_len Color.darkgray_code
   let default_line_length = Array.make 256 0
 
   let fill_fg_color t offset len color =
@@ -1110,13 +1110,19 @@ end = struct
       |> Color.color_control_code
       |> array_fill t.bg_colors offset len
 
-  (* TODO: if ever the size of the default arrays are not sufficient, add loop to do multiple fills *)
   let clear t =
-    Bytes.fill t.text 0 t.len Default.text ;
-    array_blit default_fg_colors 0 t.fg_colors 0 t.len ;
-    array_blit default_bg_colors 0 t.bg_colors 0 t.len ;
-    (* TODO: clear z_index if I ever start using it *)
-    array_blit default_line_length 0 t.line_lengths 0 t.window.y
+    let rec loop t offset remaining =
+      if remaining > 0 then (
+        let len = min remaining default_fill_len in
+        array_blit default_fg_colors 0 t.fg_colors offset len ;
+        array_blit default_bg_colors 0 t.bg_colors offset len ;
+        (* TODO: also clear z_index if I ever start using it *)
+        loop t (offset + len) (remaining - len)
+      )
+    in
+      loop t 0 t.len ;
+      Bytes.fill t.text 0 t.len Default.text ;
+      array_blit default_line_length 0 t.line_lengths 0 t.window.y
 
   let clear_rect t rect =
     assert_rect_inside t.window rect ;
@@ -1176,7 +1182,8 @@ end = struct
   let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
     let bytes_offset = to_offset framebuffer.window x y in
     let blitlen = if len < 0 then slen s else len in
-    assert (x + blitlen <= framebuffer.window.x) ;
+    if not (x + blitlen <= framebuffer.window.x) then
+      fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
     update_line_end framebuffer (x + blitlen) y ;
     bytes_blit_string s offset framebuffer.text bytes_offset blitlen
 
@@ -1250,7 +1257,8 @@ end
 
 (* A common buffer for filling Fileview content just before bliting into a backend rendering framebuffer *)
 (* TODO: Not threadsafe !! find better place to put that *)
-let fb = ref (Framebuffer.init_framebuffer v2_zero)
+let fb = ref (Framebuffer.init_framebuffer (mk_v2 300 80))
+(* let fb = ref (Framebuffer.init_framebuffer (mk_v2 4000 100)) *)
 
 
 module Screen : sig
@@ -2344,9 +2352,6 @@ end = struct
    * of benefits in term of codeflow simplicity and not having to put +6 horizontal offsets everywhere and
    * recreate the same objects. *)
 
-  (* PERF: resize dynamically and fit to term size ! *)
-  let framebuffer = Framebuffer.init_framebuffer (mk_v2 300 100)
-
   let frame_default_line      = "~  "
   let frame_continuation_line = "..."
 
@@ -2972,7 +2977,6 @@ module Ciseau = struct
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
     let filebuffers = test_mk_filebuffers file in
-    fb := Framebuffer.init_framebuffer term_dim ;
     {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
@@ -2994,7 +2998,6 @@ module Ciseau = struct
   let resize_editor editor =
     let term_dim = Term.get_terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
-    fb := Framebuffer.init_framebuffer term_dim ;
     {
       editor with
       term_dim        = term_dim ;
