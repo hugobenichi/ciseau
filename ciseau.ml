@@ -536,6 +536,9 @@ module Keys = struct
     code    = c ;
   }
 
+  let symbol_of { symbol }  = symbol
+  let code_of   { code }    = code
+
   let mk_unknown_key c =
     mk_key Unknown ("unknown(" ^ string_of_int c ^ ")") c
 
@@ -2758,14 +2761,12 @@ module Ciseau = struct
         pending_input = enqueue_digit n editor.pending_input
     }
 
-  let initial_rawinput_token = "134wfoj7wef6150f817q3sdWOPR465"
-
   let change_mode mode editor = {
       (* TODO: needs to apply necessary cleanups from outgoing mode *)
       editor
         with
         mode        = mode ;
-        user_input  = initial_rawinput_token ;
+        user_input  = "" ;
     }
 
   let rec apply_command =
@@ -2899,13 +2900,6 @@ module Ciseau = struct
     | None          -> apply_command
     | Number digits -> apply_command_with_repetition (max 1 (dequeue_digits digits))
 
-  let process_key editor =
-    match editor.mode with
-      | Normal ->
-          key_to_command >> (process_command editor)
-      | RawInput ->
-          key_to_command >> (process_command editor)
-
   (* TODO: replace by a proper history of previous inputs *)
   let update_normal_mode_command key editor =
     let user_input = (pending_command_to_string editor.pending_input)
@@ -2922,28 +2916,47 @@ module Ciseau = struct
       user_input = user_input' ;
     }
 
-  (* TODO: try to support:
-   *        Delete for erasing chars
-   *        ctrl + ? for navigation
-   *        Return for finishing input
-   *)
-  let update_rawinput key editor = {
-      editor with
-      user_input =
-        (* CLEANUP: find better way to skip the initial '\t' character.
-         *          Should go away by fusing update_user_input with process_key *)
-        if editor.user_input = initial_rawinput_token
-          then ""
-          else editor.user_input ^ (key.Keys.code |> Char.chr |> Char.escaped)
-    }
-
-  (* CLEANUP Probably this should be fused with the process_key function to save some boilerplate *)
-  let update_user_input key editor =
+  let update_userinput key editor =
     match editor.mode with
       | Normal    -> update_normal_mode_command key editor
-      | RawInput  -> update_rawinput key editor
+      | RawInput  -> editor
+
+  let rawinput_append s editor = {
+      editor with
+        user_input = editor.user_input ^ s ;
+    }
+
+  let rawinput_delete editor =
+    let newlen = max 0 ((slen editor.user_input) - 1)
+    in {
+      editor with
+        user_input = String.sub editor.user_input 0 newlen
+    }
+
+  let rawinput_update =
+    Keys.code_of
+      >> Char.chr
+      >> function
+          | '\003'  -> stop_editor
+          | '\013'  -> change_mode Normal
+          | '\127'  -> rawinput_delete
+          | c       -> c |> Char.escaped |> rawinput_append
+
+  (* TODO: introduce state_machine for decoupling editor struct from input processing *)
+  let process_key key editor =
+    match editor.mode with
+      | Normal ->
+          let fn =
+            key |> Keys.symbol_of
+                |> key_to_command
+                |> process_command editor
+          in
+          editor |> fn |> update_userinput key
+      | RawInput ->
+          rawinput_update key editor
 
   let update_stats key input_duration editor =
+    (* CLEANUP remove 'key' and instead get last action from editor *)
     let now = Sys.time () in
     let stats' = Stats.update_stats key now input_duration editor.stats in
     if editor.log_stats then
@@ -2958,8 +2971,7 @@ module Ciseau = struct
     let key = next_key_fn () in
     let t2 = Sys.time () in
       editor
-        |> process_key editor key.Keys.symbol
-        |> update_user_input key
+        |> process_key key
         |> update_stats key (t2 -. t1)
 
   let rec loop (next_key_fn : unit -> Keys.key) (editor : editor) : unit =
