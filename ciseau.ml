@@ -464,6 +464,8 @@ end
 
 module Keys = struct
 
+  type escape_code = Z (* xterm: shift + tab *)
+
   type key_symbol = Unknown
                   | Tab
                   | Ctrl_c
@@ -499,6 +501,7 @@ module Keys = struct
                   | Upper_j
                   | Upper_k
                   | Upper_l
+                  | Upper_z
                   | Digit_0
                   | Digit_1
                   | Digit_2
@@ -523,7 +526,9 @@ module Keys = struct
 
                   (* Other events returned by next char *)
                   | EINTR (* usually happen when terminal is resized *)
+                  | Escape of escape_code
 
+  (* Remove this type: all Keys user should only use the symbols !! *)
   type key = {
     symbol  : key_symbol ;
     repr    : string ;
@@ -568,6 +573,7 @@ module Keys = struct
     mk_key Upper_j     "J"             74 ;
     mk_key Upper_k     "K"             75 ;
     mk_key Upper_l     "L"             76 ;
+    mk_key Upper_z     "Z"             90 ;
     mk_key Lower_b     "w"             98 ;
     mk_key Lower_c     "c"             99 ;
     mk_key Lower_s     "s"             115 ;
@@ -600,30 +606,49 @@ module Keys = struct
     mk_key Pipe        "|"             124 ;
     mk_key BraceLeft   "{"             123 ;
     mk_key BraceRight  "}"             125 ;
+
+    mk_key (Escape Z)  "esc[Z"         255 ;
     mk_key EINTR       "EINTR"         256 ;
   ]
 
   let _ = defined_keys |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
 
-  let code_to_key = Array.get code_to_key_table
+  let code_to_key = array_get code_to_key_table
 
-  (* replacement for input_char which considers 0 as Enf_of_file *)
-  let next_key =
-    (* WARN not thread safe *)
+  let key_to_escape =
+    symbol_of
+      >> function
+          | Upper_z   -> code_to_key 255 (* Escape Z *)
+          | other     -> code_to_key 254 (* Unknown *)
+
+  let code_timeout    = -1  (* when read() returns 0 *)
+  let code_interrupt  = -2  (* when read() is interrupted: assume SIGWINCH *)
+
+  (* input_char equivalent with enhancements for terminal stuff. Not thread safe *)
+  let read_char =
     let buffer = Bytes.make 1 'z' in
-    let rec one_byte_reader () =
+    let reader () =
       match Unix.read Unix.stdin buffer 0 1 with
-      | 1   -> Bytes.get buffer 0 |> Char.code |> code_to_key
-      | 0   -> one_byte_reader ()     (* timeout *)
-      | _   -> fail "next_char failed"
-      | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
-          Printf.fprintf logs "Unix_error errmsg='%s' fn='%s'\n" (Unix.error_message errcode) fn_name ;
-          match errcode with
-          | Unix.EINTR ->
-            (* read interrupted, usually caused SIGWINCH signal handler for terminal resize: retry read *)
-            code_to_key 256
-          | _ -> raise (Unix.Unix_error (errcode, fn_name, fn_param))
-    in one_byte_reader
+        | 0   ->  code_timeout
+        | 1   ->  Bytes.get buffer 0 |> Char.code
+        | _   -> fail "next_char failed"
+        | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
+          (match errcode with
+          | Unix.EINTR  -> code_interrupt
+          | _           -> raise (Unix.Unix_error (errcode, fn_name, fn_param)))
+    in
+      reader
+
+  (* Replacement for input_char which considers 0 as Enf_of_file *)
+  let rec next_key () : key =
+    read_char ()
+      |> function
+          | -1    ->  next_key ()     (* timeout: retry *)
+          | -2    ->  code_to_key 256  (* interrupt: resize *)
+          | 27    ->  (* Escape sequence *)
+              assert_that (next_key () = code_to_key 91) ;
+              next_key () |> key_to_escape
+          | key   ->  code_to_key key
 
 end
 
@@ -2938,7 +2963,9 @@ module Ciseau = struct
     | Keys.Ctrl_j       -> Noop
     | Keys.Ctrl_k       -> Noop
     | Keys.Upper_g      -> Noop
+    | Keys.Upper_z      -> Noop
     | Keys.Unknown      -> Noop (* ignore for now *)
+    | Keys.Escape Keys.Z-> Noop
 
     | Keys.EINTR        -> Resize
 
