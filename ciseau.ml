@@ -806,18 +806,22 @@ end
 module Term = struct
 
   module Control = struct
-    let escape                = "\027"
-    let start                 = escape ^ "["
-    let finish                = escape ^ "[0m"
-    let clear                 = escape ^ "c"
-    let newline               = "\r\n"
-    let cursor_hide           = start ^ "?25l"
-    let cursor_show           = start ^ "?25h"
-    let cursor_save           = start ^ "s"
-    let cursor_restore        = start ^ "u"
-    let switch_offscreen      = start ^ "?47h"
-    let switch_mainscreen     = start ^ "?47l"
-    let gohome                = start ^ "H"
+    let escape                      = "\027"
+    let start                       = escape ^ "["
+    let finish                      = escape ^ "[0m"
+    let clear                       = escape ^ "c"
+    let newline                     = "\r\n"
+    let cursor_hide                 = start ^ "?25l"
+    let cursor_show                 = start ^ "?25h"
+    let cursor_save                 = start ^ "s"
+    let cursor_restore              = start ^ "u"
+    let switch_offscreen            = start ^ "?47h"
+    let switch_mainscreen           = start ^ "?47l"
+    let switch_mouse_event_on       = start ^ "?1000h"
+    let switch_mouse_event_off      = start ^ "?1000l"
+    let switch_focus_event_on       = start ^ "?1004h"
+    let switch_focus_event_off      = start ^ "?1004l"
+    let gohome                      = start ^ "H"
 
     let cursor_offset = mk_v2 1 1
 
@@ -862,6 +866,8 @@ module Term = struct
 
       stdout_write_string Control.cursor_save ;
       stdout_write_string Control.switch_offscreen ;
+      stdout_write_string Control.switch_mouse_event_on ;
+      stdout_write_string Control.switch_focus_event_off ;
       tcsetattr stdin TCSAFLUSH want ;
 
       let cleanup () =
