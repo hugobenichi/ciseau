@@ -781,18 +781,18 @@ end
 module Term = struct
 
   module Control = struct
-    let escape                = 27 |> Char.chr |> string_of_char ;;
-    let start                 = escape ^ "[" ;;
-    let finish                = escape ^ "[0m" ;;
-    let clear                 = escape ^ "c" ;;
-    let newline               = "\r\n"  ;;
-    let cursor_hide           = start ^ "?25l" ;;
-    let cursor_show           = start ^ "?25h" ;;
-    let cursor_save           = start ^ "s" ;;
-    let cursor_restore        = start ^ "u" ;;
-    let switch_offscreen      = start ^ "?47h" ;;
-    let switch_mainscreen     = start ^ "?47l" ;;
-    let gohome                = start ^ "H" ;;
+    let escape                = "\027"
+    let start                 = escape ^ "["
+    let finish                = escape ^ "[0m"
+    let clear                 = escape ^ "c"
+    let newline               = "\r\n"
+    let cursor_hide           = start ^ "?25l"
+    let cursor_show           = start ^ "?25h"
+    let cursor_save           = start ^ "s"
+    let cursor_restore        = start ^ "u"
+    let switch_offscreen      = start ^ "?47h"
+    let switch_mainscreen     = start ^ "?47l"
+    let gohome                = start ^ "H"
 
     let cursor_offset = mk_v2 1 1
 
@@ -2510,11 +2510,15 @@ module Tileset = struct
       redrawing     = Array.make (alen fileviews) redraw ;
     }
 
-  let set_focus t focus_index = {
+  let set_focus t focus_index =
+    let t' = {
       t with
         focus_index = focus_index ;
         redrawing   = Array.make (alen t.fileviews) FrameDirty ;
-    }
+    } in
+    if t.screen_config.layout = ScreenConfiguration.Single then
+      array_set t'.redrawing focus_index Redraw ;
+    t'
 
   let next_focus_index t =
     (t.focus_index + 1) mod alen t.fileviews
@@ -2613,6 +2617,49 @@ module Tileset = struct
             array_set t'.redrawing t.focus_index Redraw ;
             array_set t'.redrawing focus_index' Redraw ;
             t'
+end
+
+
+(* Experimenting with parametrizing raw input capture for reusability:
+ *   - insert mode
+ *   - commands
+ *   - search
+ * TODO: consider plumbing in token movements ?
+ *)
+module InputCapture = struct
+
+  type 'a t = {
+    cursor:   int ;
+    content:  string ;
+    endvalue: 'a ;
+  }
+
+  type 'a input_parser = {
+    next_char : unit -> char ;
+    escape    : char -> 'a option ;
+  }
+
+  (* Pass in an escape hatch *)
+  let capture_input { next_char ; escape } =
+    let rec loop cursor content =
+      let c = () |> next_char in
+      match escape c with
+        | Some a  -> {
+          cursor    = cursor ;
+          content   = content ;
+          endvalue  = a ;
+        }
+        | None    ->
+            (match c with
+              (* BUG: do inserts and deletes at cursor position *)
+              | '\127'  ->
+                let content' = String.sub content 0 (max 0 ((slen content) - 1)) in
+                let cursor' = max 0 (cursor - 1) in
+                loop cursor' content'
+              | c       ->
+                loop (cursor + 1) (content ^ (Char.escaped c)))
+    in
+      loop 0 ""
 end
 
 
