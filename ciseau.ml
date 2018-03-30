@@ -464,165 +464,211 @@ end
 
 module Keys = struct
 
-  type escape_code = Z (* xterm: shift + tab *)
+  type key  = Unknown
+            | Tab
+            | Ctrl_c
+            | Ctrl_d
+            | Ctrl_j
+            | Ctrl_k
+            | Ctrl_u
+            | Ctrl_z
+            | Space
+            | SingleQuote
+            | Colon
+            | SemiColon
+            | Equal
+            | ArrowUp
+            | ArrowDown
+            | ArrowRight
+            | ArrowLeft
+            | Lower_h
+            | Lower_j
+            | Lower_k
+            | Lower_l
+            | Lower_b
+            | Lower_c
+            | Lower_s
+            | Lower_d
+            | Lower_w
+            | Lower_x
+            | Lower_z
+            | Upper_b
+            | Upper_w
+            | Upper_g
+            | Upper_h
+            | Upper_j
+            | Upper_k
+            | Upper_l
+            | Upper_z
+            | Digit_0
+            | Digit_1
+            | Digit_2
+            | Digit_3
+            | Digit_4
+            | Digit_5
+            | Digit_6
+            | Digit_7
+            | Digit_8
+            | Digit_9
+            | Backslash
+            | ParenLeft
+            | ParenRight
+            | BracketLeft
+            | BracketRight
+            | BraceLeft
+            | BraceRight
+            | Pipe
+            | Plus
+            | Minus
+            | Underscore
+            (* Non-key events *)
+            | Escape_Z      (* esc[Z: shift + tab *)
+            | EINTR         (* usually happen when terminal is resized *)
 
-  type key_symbol = Unknown
-                  | Tab
-                  | Ctrl_c
-                  | Ctrl_d
-                  | Ctrl_j
-                  | Ctrl_k
-                  | Ctrl_u
-                  | Ctrl_z
-                  | Space
-                  | SingleQuote
-                  | Colon
-                  | SemiColon
-                  | Equal
-                  | ArrowUp
-                  | ArrowDown
-                  | ArrowRight
-                  | ArrowLeft
-                  | Lower_h
-                  | Lower_j
-                  | Lower_k
-                  | Lower_l
-                  | Lower_b
-                  | Lower_c
-                  | Lower_s
-                  | Lower_d
-                  | Lower_w
-                  | Lower_x
-                  | Lower_z
-                  | Upper_b
-                  | Upper_w
-                  | Upper_g
-                  | Upper_h
-                  | Upper_j
-                  | Upper_k
-                  | Upper_l
-                  | Upper_z
-                  | Digit_0
-                  | Digit_1
-                  | Digit_2
-                  | Digit_3
-                  | Digit_4
-                  | Digit_5
-                  | Digit_6
-                  | Digit_7
-                  | Digit_8
-                  | Digit_9
-                  | Backslash
-                  | ParenLeft
-                  | ParenRight
-                  | BracketLeft
-                  | BracketRight
-                  | BraceLeft
-                  | BraceRight
-                  | Pipe
-                  | Plus
-                  | Minus
-                  | Underscore
+  let code_to_key_table   = Array.make (256 + 32) Unknown
+  let code_to_descr_table = Array.make (256 + 32) "unknown"
 
-                  (* Other events returned by next char *)
-                  | EINTR (* usually happen when terminal is resized *)
-                  | Escape of escape_code
-
-  (* Remove this type: all Keys user should only use the symbols !! *)
-  type key = {
-    symbol  : key_symbol ;
-    repr    : string ;
-    code    : int ;
-  }
-
-  let mk_key s r c = {
-    symbol  = s ;
-    repr    = r ;
-    code    = c ;
-  }
-
-  let symbol_of { symbol }  = symbol
-  let code_of   { code }    = code
-
-  let mk_unknown_key c =
-    mk_key Unknown ("unknown(" ^ string_of_int c ^ ")") c
-
-  let code_to_key_table = Array.init (256 + 32) mk_unknown_key
+  let add_key (sym, descr, code) =
+    array_set code_to_key_table code sym ;
+    array_set code_to_descr_table code descr
 
   let defined_keys = [
-    mk_key Tab         "Tab"           9 ;
-    mk_key Ctrl_c      "Ctrl_c"        3 ;
-    mk_key Ctrl_d      "Ctrl_d"        4 ;
-    mk_key Ctrl_j      "Ctrl_j"        10 ;
-    mk_key Ctrl_k      "Ctrl_k"        11 ;
-    mk_key Ctrl_u      "Ctrl_u"        21 ;
-    mk_key Ctrl_z      "Ctrl_z"        26 ;
-    mk_key Space       "Space"         32 ;
-    mk_key SingleQuote "'"             39 ;
-    mk_key Colon       ":"             58 ;
-    mk_key SemiColon   ";"             59 ;
-    mk_key Equal       "Equal"         61 ;
-    mk_key ArrowUp     "ArrowUp"       65 ;
-    mk_key ArrowDown   "ArrowDown"     66 ;
-    mk_key ArrowRight  "ArrowRight"    67 ;
-    mk_key ArrowLeft   "ArrowLeft"     68 ;
-    mk_key Upper_b     "W"             66 ;
-    mk_key Upper_w     "B"             87 ;
-    mk_key Upper_g     "G"             71 ;
-    mk_key Upper_h     "H"             72 ;
-    mk_key Upper_j     "J"             74 ;
-    mk_key Upper_k     "K"             75 ;
-    mk_key Upper_l     "L"             76 ;
-    mk_key Upper_z     "Z"             90 ;
-    mk_key Lower_b     "w"             98 ;
-    mk_key Lower_c     "c"             99 ;
-    mk_key Lower_s     "s"             115 ;
-    mk_key Lower_d     "d"             100 ;
-    mk_key Lower_z     "z"             122 ;
-    mk_key Lower_x     "x"             120 ;
-    mk_key Lower_h     "h"             104 ;
-    mk_key Lower_j     "j"             106 ;
-    mk_key Lower_k     "k"             107 ;
-    mk_key Lower_l     "l"             108 ;
-    mk_key Lower_w     "w"             119 ;
-    mk_key Digit_0     "0"             48 ;
-    mk_key Digit_1     "1"             49 ;
-    mk_key Digit_2     "2"             50 ;
-    mk_key Digit_3     "3"             51 ;
-    mk_key Digit_4     "4"             52 ;
-    mk_key Digit_5     "5"             53 ;
-    mk_key Digit_6     "6"             54 ;
-    mk_key Digit_7     "7"             55 ;
-    mk_key Digit_8     "8"             56 ;
-    mk_key Digit_9     "9"             57 ;
-    mk_key Backslash   "\\"            92 ;
-    mk_key ParenLeft   "("             40 ;
-    mk_key ParenRight  ")"             41 ;
-    mk_key Plus        "+"             43 ;
-    mk_key Minus       "-"             45 ;
-    mk_key BracketLeft "["             91 ;
-    mk_key BracketRight "]"            93 ;
-    mk_key Underscore  "_"             95 ;
-    mk_key Pipe        "|"             124 ;
-    mk_key BraceLeft   "{"             123 ;
-    mk_key BraceRight  "}"             125 ;
-
-    mk_key (Escape Z)  "esc[Z"         255 ;
-    mk_key EINTR       "EINTR"         256 ;
+    (Tab,             "Tab",          9) ;
+    (Ctrl_c,          "Ctrl_c",       3) ;
+    (Ctrl_d,          "Ctrl_d",       4) ;
+    (Ctrl_j,          "Ctrl_j",       10) ;
+    (Ctrl_k,          "Ctrl_k",       11) ;
+    (Ctrl_u,          "Ctrl_u",       21) ;
+    (Ctrl_z,          "Ctrl_z",       26) ;
+    (Space,           "Space",        32) ;
+    (SingleQuote,     "'",            39) ;
+    (Colon,           ":",            58) ;
+    (SemiColon,       ";",            59) ;
+    (Equal,           "Equal",        61) ;
+    (ArrowUp,         "ArrowUp",      65) ;
+    (ArrowDown,       "ArrowDown",    66) ;
+    (ArrowRight,      "ArrowRight",   67) ;
+    (ArrowLeft,       "ArrowLeft",    68) ;
+    (Upper_b,         "W",            66) ;
+    (Upper_w,         "B",            87) ;
+    (Upper_g,         "G",            71) ;
+    (Upper_h,         "H",            72) ;
+    (Upper_j,         "J",            74) ;
+    (Upper_k,         "K",            75) ;
+    (Upper_l,         "L",            76) ;
+    (Upper_z,         "Z",            90) ;
+    (Lower_b,         "w",            98) ;
+    (Lower_c,         "c",            99) ;
+    (Lower_s,         "s",            115) ;
+    (Lower_d,         "d",            100) ;
+    (Lower_z,         "z",            122) ;
+    (Lower_x,         "x",            120) ;
+    (Lower_h,         "h",            104) ;
+    (Lower_j,         "j",            106) ;
+    (Lower_k,         "k",            107) ;
+    (Lower_l,         "l",            108) ;
+    (Lower_w,         "w",            119) ;
+    (Digit_0,         "0",            48) ;
+    (Digit_1,         "1",            49) ;
+    (Digit_2,         "2",            50) ;
+    (Digit_3,         "3",            51) ;
+    (Digit_4,         "4",            52) ;
+    (Digit_5,         "5",            53) ;
+    (Digit_6,         "6",            54) ;
+    (Digit_7,         "7",            55) ;
+    (Digit_8,         "8",            56) ;
+    (Digit_9,         "9",            57) ;
+    (Backslash,       "\\",           92) ;
+    (ParenLeft,       "(",            40) ;
+    (ParenRight,      ")",            41) ;
+    (Plus,            "+",            43) ;
+    (Minus,           "-",            45) ;
+    (BracketLeft,     "[",            91) ;
+    (BracketRight,    "]",            93) ;
+    (Underscore,      "_",            95) ;
+    (Pipe,            "|",            124) ;
+    (BraceLeft,       "{",            123) ;
+    (BraceRight,      "}",            125) ;
+    (Escape_Z,        "esc[Z",        255) ;
+    (EINTR,           "EINTR",        256) ;
   ]
 
-  let _ = defined_keys |> List.iter (fun k -> code_to_key_table.(k.code) <- k)
+  let _ = List.iter add_key defined_keys
 
-  let code_to_key = array_get code_to_key_table
+  let code_to_descr = array_get code_to_descr_table
+
+  let code_of =
+    function
+      | Tab               -> 9
+      | Ctrl_c            -> 3
+      | Ctrl_d            -> 4
+      | Ctrl_j            -> 10
+      | Ctrl_k            -> 11
+      | Ctrl_u            -> 21
+      | Ctrl_z            -> 26
+      | Space             -> 32
+      | SingleQuote       -> 39
+      | Colon             -> 58
+      | SemiColon         -> 59
+      | Equal             -> 61
+      | ArrowUp           -> 65
+      | ArrowDown         -> 66
+      | ArrowRight        -> 67
+      | ArrowLeft         -> 68
+      | Upper_b           -> 66
+      | Upper_w           -> 87
+      | Upper_g           -> 71
+      | Upper_h           -> 72
+      | Upper_j           -> 74
+      | Upper_k           -> 75
+      | Upper_l           -> 76
+      | Upper_z           -> 90
+      | Lower_b           -> 98
+      | Lower_c           -> 99
+      | Lower_s           -> 115
+      | Lower_d           -> 100
+      | Lower_z           -> 122
+      | Lower_x           -> 120
+      | Lower_h           -> 104
+      | Lower_j           -> 106
+      | Lower_k           -> 107
+      | Lower_l           -> 108
+      | Lower_w           -> 119
+      | Digit_0           -> 48
+      | Digit_1           -> 49
+      | Digit_2           -> 50
+      | Digit_3           -> 51
+      | Digit_4           -> 52
+      | Digit_5           -> 53
+      | Digit_6           -> 54
+      | Digit_7           -> 55
+      | Digit_8           -> 56
+      | Digit_9           -> 57
+      | Backslash         -> 92
+      | ParenLeft         -> 40
+      | ParenRight        -> 41
+      | Plus              -> 43
+      | Minus             -> 45
+      | BracketLeft       -> 91
+      | BracketRight      -> 93
+      | Underscore        -> 95
+      | Pipe              -> 124
+      | BraceLeft         -> 123
+      | BraceRight        -> 125
+      | Escape_Z          -> 255
+      | EINTR             -> 256
+      | Unknown           -> 257
+
+  let descr_of = code_of >> code_to_descr
 
   let key_to_escape =
-    symbol_of
-      >> function
-          | Upper_z   -> code_to_key 255 (* Escape Z *)
-          | other     -> code_to_key 254 (* Unknown *)
+    function
+      | Upper_z   -> Escape_Z
+      | other     -> Unknown
 
   let code_timeout    = -1  (* when read() returns 0 *)
   let code_interrupt  = -2  (* when read() is interrupted: assume SIGWINCH *)
+  let code_escape     = 27  (* starts an escape sequence *)
 
   (* input_char equivalent with enhancements for terminal stuff. Not thread safe *)
   let read_char =
@@ -643,12 +689,12 @@ module Keys = struct
   let rec next_key () : key =
     read_char ()
       |> function
-          | -1    ->  next_key ()     (* timeout: retry *)
-          | -2    ->  code_to_key 256  (* interrupt: resize *)
-          | 27    ->  (* Escape sequence *)
-              assert_that (next_key () = code_to_key 91) ;
-              next_key () |> key_to_escape
-          | key   ->  code_to_key key
+          | c when c = code_timeout   ->  next_key ()     (* timeout: retry *)
+          | c when c = code_interrupt ->  EINTR
+          | c when c = code_escape    ->  (* Escape sequence *)
+                                          assert_that (next_key () = BracketLeft) ;
+                                          next_key () |> key_to_escape
+          | key   ->  array_get code_to_key_table key
 
 end
 
@@ -2447,7 +2493,7 @@ module Stats = struct
     timestamp           = Sys.time () ;
     last_input_duration = 0. ;
     last_cycle_duration = 0. ;
-    last_key_input      = Keys.mk_unknown_key 0 ;
+    last_key_input      = Keys.Unknown ;
   }
 
   let update_stats key now input_duration stats = {
@@ -2488,9 +2534,9 @@ module Stats = struct
     output_float f (stats.gc_stats.Gc.minor_words -. stats.last_minor_words) ;
     output_string logs "\n" ;
     output_string f "key " ;
-    output_string f stats.last_key_input.repr ;
+    output_string f (Keys.descr_of stats.last_key_input) ;
     output_string f " " ;
-    output_int f stats.last_key_input.code ;
+    output_int f (Keys.code_of stats.last_key_input) ;
     output_string logs "\n"
 end
 
@@ -2971,7 +3017,7 @@ module Ciseau = struct
     | Keys.Upper_g      -> Noop
     | Keys.Upper_z      -> Noop
     | Keys.Unknown      -> Noop (* ignore for now *)
-    | Keys.Escape Keys.Z-> Noop
+    | Keys.Escape_Z     -> Noop
 
     | Keys.EINTR        -> Resize
 
@@ -2983,7 +3029,7 @@ module Ciseau = struct
   (* TODO: replace by a proper history of previous inputs *)
   let update_normal_mode_command key editor =
     let user_input = (pending_command_to_string editor.pending_input)
-                   ^  key.Keys.repr
+                   ^  Keys.descr_of key
                    ^ " "
                    ^ editor.user_input
     in
@@ -3027,8 +3073,7 @@ module Ciseau = struct
     match editor.mode with
       | Normal ->
           let fn =
-            key |> Keys.symbol_of
-                |> key_to_command
+            key |> key_to_command
                 |> process_command editor
           in
           editor |> fn |> update_userinput key
@@ -3084,11 +3129,10 @@ module Fuzzer = struct
 
   let fuzz_keys =
     Keys.defined_keys
-      |> List.filter (fun k -> k.Keys.symbol <> Keys.Ctrl_c)
+      |> List.map (fun (k, _, _) -> k)
+      |> List.filter ((<>) Keys.Ctrl_c)
+      |> List.filter ((<>) Keys.EINTR)
       |> Array.of_list
-
-  let stop_key =
-    Keys.code_to_key 3 (* Ctrl_c *)
 
   let next_key_fuzzer r n =
     let l = alen fuzz_keys in
@@ -3099,7 +3143,7 @@ module Fuzzer = struct
       *)
       incr i ;
       if !i > n
-        then stop_key
+        then Keys.Ctrl_c
         else
           Random.State.int r l |> array_get fuzz_keys
     in loop
