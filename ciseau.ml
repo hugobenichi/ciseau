@@ -521,6 +521,7 @@ module Keys = struct
             | Plus
             | Minus
             | Underscore
+            | Backspace
             (* Non-key events *)
             | Escape_Z      (* esc[Z: shift + tab *)
             | EINTR         (* usually happen when terminal is resized *)
@@ -589,6 +590,7 @@ module Keys = struct
     (Pipe,            "|",            124) ;
     (BraceLeft,       "{",            123) ;
     (BraceRight,      "}",            125) ;
+    (Backspace,       "del",          127) ;
     (Escape_Z,        "esc[Z",        255) ;
     (EINTR,           "EINTR",        256) ;
   ]
@@ -655,6 +657,7 @@ module Keys = struct
       | Pipe              -> 124
       | BraceLeft         -> 123
       | BraceRight        -> 125
+      | Backspace         -> 127
       | Escape_Z          -> 255
       | EINTR             -> 256
       | Unknown           -> 257
@@ -686,6 +689,7 @@ module Keys = struct
       reader
 
   (* Replacement for input_char which considers 0 as Enf_of_file *)
+  (* BUG: unmapped keys get all smashed into Unknown, which is not very convenient *)
   let rec next_key () : key =
     read_char ()
       |> function
@@ -2895,7 +2899,7 @@ module Ciseau = struct
 
   let rec apply_command =
     function
-      | Noop    -> (fun x -> x)
+      | Noop    -> id
       | Stop    -> stop_editor
       | Resize  -> resize_editor
       | TilesetOp op ->
@@ -3012,12 +3016,14 @@ module Ciseau = struct
     | Keys.Digit_8      -> Pending (Digit 8)
     | Keys.Digit_9      -> Pending (Digit 9)
 
-    | Keys.Ctrl_j       -> Noop
-    | Keys.Ctrl_k       -> Noop
-    | Keys.Upper_g      -> Noop
-    | Keys.Upper_z      -> Noop
-    | Keys.Unknown      -> Noop (* ignore for now *)
-    | Keys.Escape_Z     -> Noop
+    | Keys.Ctrl_j
+    | Keys.Ctrl_k
+    | Keys.Upper_g
+    | Keys.Upper_z
+    | Keys.Unknown
+    | Keys.Escape_Z
+    | Keys.Backspace
+                        -> Noop
 
     | Keys.EINTR        -> Resize
 
@@ -3060,13 +3066,15 @@ module Ciseau = struct
     }
 
   let rawinput_update =
-    Keys.code_of
-      >> Char.chr
-      >> function
-          | '\003'  -> stop_editor
-          | '\013'  -> change_mode Normal
-          | '\127'  -> rawinput_delete
-          | c       -> c |> Char.escaped |> rawinput_append
+    function
+      | Keys.Ctrl_c     ->  stop_editor
+      (* | Keys.Escape *)
+      | Keys.Escape_Z   ->  change_mode Normal
+      | Keys.Tab        ->  rawinput_append "\t"
+      | Keys.Backspace  ->  rawinput_delete
+      | Keys.EINTR      ->  resize_editor
+      | Keys.Unknown    ->  id
+      | k               ->  k |> Keys.code_of |> Char.chr |> Char.escaped |> rawinput_append
 
   (* TODO: introduce state_machine for decoupling editor struct from input processing *)
   let process_key key editor =
