@@ -464,7 +464,7 @@ end
 
 module Keys = struct
 
-  type key  = Unknown
+  type key  = Unknown of char
             | Tab
             | Ctrl_c
             | Ctrl_d
@@ -526,8 +526,9 @@ module Keys = struct
             | Escape_Z      (* esc[Z: shift + tab *)
             | EINTR         (* usually happen when terminal is resized *)
 
-  let code_to_key_table   = Array.make (256 + 32) Unknown
-  let code_to_descr_table = Array.make (256 + 32) "unknown"
+
+  let code_to_key_table   = Array.init (256) (fun c -> Unknown (Char.chr c))
+  let code_to_descr_table = Array.init (256) (fun c -> Printf.sprintf "unknown:%s(%i)" (c |> Char.chr |> Char.escaped) c)
 
   let add_key (sym, descr, code) =
     array_set code_to_key_table code sym ;
@@ -591,8 +592,8 @@ module Keys = struct
     (BraceLeft,       "{",            123) ;
     (BraceRight,      "}",            125) ;
     (Backspace,       "del",          127) ;
-    (Escape_Z,        "esc[Z",        255) ;
-    (EINTR,           "EINTR",        256) ;
+    (Escape_Z,        "esc[Z",        254) ;
+    (EINTR,           "EINTR",        255) ;
   ]
 
   let _ = List.iter add_key defined_keys
@@ -660,16 +661,16 @@ module Keys = struct
       | Backspace         -> 127
       | Escape_Z          -> 255
       | EINTR             -> 256
-      | Unknown           -> 257
+      | Unknown c         -> Char.code c
 
   let descr_of = code_of >> code_to_descr
 
   let key_to_escape =
     function
       | Upper_z   -> Escape_Z
-      | other     -> Unknown
+      | other     -> Unknown '?'(* FIXME: fuse with next_key and add mouse event parsing *)
 
-  let code_timeout    = -1  (* when read() returns 0 *)
+  let code_timeout    = -1  (* when read() returns 0: timeout*)
   let code_interrupt  = -2  (* when read() is interrupted: assume SIGWINCH *)
   let code_escape     = 27  (* starts an escape sequence *)
 
@@ -693,10 +694,10 @@ module Keys = struct
   let rec next_key () : key =
     read_char ()
       |> function
-          | c when c = code_timeout   ->  next_key ()     (* timeout: retry *)
+          | c when c = code_timeout   ->  next_key ()
           | c when c = code_interrupt ->  EINTR
-          | c when c = code_escape    ->  (* Escape sequence *)
-                                          assert_that (next_key () = BracketLeft) ;
+            (* BUG: how to distinquish the user pressing the real Esc key from an escape sequence ? Hacky timeout heuristic ? *)
+          | c when c = code_escape    ->  next_key () = BracketLeft |> assert_that ;
                                           next_key () |> key_to_escape
           | key   ->  array_get code_to_key_table key
 
@@ -2497,7 +2498,7 @@ module Stats = struct
     timestamp           = Sys.time () ;
     last_input_duration = 0. ;
     last_cycle_duration = 0. ;
-    last_key_input      = Keys.Unknown ;
+    last_key_input      = Keys.Unknown '?' ;
   }
 
   let update_stats key now input_duration stats = {
@@ -3020,7 +3021,7 @@ module Ciseau = struct
     | Keys.Ctrl_k
     | Keys.Upper_g
     | Keys.Upper_z
-    | Keys.Unknown
+    | Keys.Unknown _
     | Keys.Escape_Z
     | Keys.Backspace
                         -> Noop
@@ -3053,9 +3054,9 @@ module Ciseau = struct
       | Normal    -> update_normal_mode_command key editor
       | RawInput  -> editor
 
-  let rawinput_append s editor = {
+  let rawinput_append c editor = {
       editor with
-        user_input = editor.user_input ^ s ;
+        user_input = editor.user_input ^ (Char.escaped c) ;
     }
 
   let rawinput_delete editor =
@@ -3068,13 +3069,14 @@ module Ciseau = struct
   let rawinput_update =
     function
       | Keys.Ctrl_c     ->  stop_editor
-      (* | Keys.Escape *)
       | Keys.Escape_Z   ->  change_mode Normal
-      | Keys.Tab        ->  rawinput_append "\t"
+      | Keys.Tab        ->  rawinput_append '\t'
       | Keys.Backspace  ->  rawinput_delete
       | Keys.EINTR      ->  resize_editor
-      | Keys.Unknown    ->  id
-      | k               ->  k |> Keys.code_of |> Char.chr |> Char.escaped |> rawinput_append
+      | Keys.Unknown c  ->  rawinput_append c
+      | k               ->  k |> Keys.code_of
+                              |> Char.chr
+                              |> rawinput_append
 
   (* TODO: introduce state_machine for decoupling editor struct from input processing *)
   let process_key key editor =
