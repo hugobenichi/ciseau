@@ -499,6 +499,7 @@ module Keys = struct
             | Upper_j
             | Upper_k
             | Upper_l
+            | Upper_m
             | Upper_z
             | Digit_0
             | Digit_1
@@ -523,6 +524,8 @@ module Keys = struct
             | Underscore
             | Backspace
             (* Non-key events *)
+            | MouseClick of int * int
+            | MouseRelease of int * int
             | Escape_Z      (* esc[Z: shift + tab *)
             | EINTR         (* usually happen when terminal is resized *)
 
@@ -558,6 +561,7 @@ module Keys = struct
     (Upper_j,         "J",            74) ;
     (Upper_k,         "K",            75) ;
     (Upper_l,         "L",            76) ;
+    (Upper_m,         "M",            77) ;
     (Upper_z,         "Z",            90) ;
     (Lower_b,         "w",            98) ;
     (Lower_c,         "c",            99) ;
@@ -625,6 +629,7 @@ module Keys = struct
       | Upper_j           -> 74
       | Upper_k           -> 75
       | Upper_l           -> 76
+      | Upper_m           -> 77
       | Upper_z           -> 90
       | Lower_b           -> 98
       | Lower_c           -> 99
@@ -659,16 +664,22 @@ module Keys = struct
       | BraceLeft         -> 123
       | BraceRight        -> 125
       | Backspace         -> 127
+      | MouseClick _      -> 253
+      | MouseRelease _    -> 254
       | Escape_Z          -> 255
       | EINTR             -> 256
       | Unknown c         -> Char.code c
 
-  let descr_of = code_of >> code_to_descr
+  let descr_of =
+    function
+      | MouseClick (x, y)     ->  Printf.sprintf "MouseClick(%d,%d)" x y
+      | MouseRelease (x, y)   ->  Printf.sprintf "MouseRelease(%d,%d)" x y
+      | k                     ->  k |> code_of |> code_to_descr
 
   let key_to_escape =
     function
       | Upper_z   -> Escape_Z
-      | other     -> Unknown '?'(* FIXME: fuse with next_key and add mouse event parsing *)
+      | other     -> Unknown (other |> code_of |> Char.chr)
 
   let code_timeout    = -1  (* when read() returns 0: timeout*)
   let code_interrupt  = -2  (* when read() is interrupted: assume SIGWINCH *)
@@ -689,6 +700,24 @@ module Keys = struct
     in
       reader
 
+  let parse_escape_sequence () =
+    read_char ()
+      |> array_get code_to_key_table
+      |> function
+          | Upper_z   -> Escape_Z
+          | Upper_m   ->  let cb = (read_char ()) land 3 in (* Ignore modifier keys *)
+                          let cx = (read_char ()) - 33 in
+                          let cy = (read_char ()) - 33 in
+                          assert_that (cx >= 0) ;
+                          assert_that (cy >= 0) ;
+                          (match cb with
+                           | 0
+                           | 1
+                           | 2   ->  MouseClick   (cx, cy) (* TODO: distinguish buttons *)
+                           | 3   ->  MouseRelease (cx, cy)
+                           | _   ->  fail "unexpected mouse event code")
+          | other     -> Unknown (other |> code_of |> Char.chr)
+
   (* Replacement for input_char which considers 0 as Enf_of_file *)
   (* BUG: unmapped keys get all smashed into Unknown, which is not very convenient *)
   let rec next_key () : key =
@@ -698,7 +727,7 @@ module Keys = struct
           | c when c = code_interrupt ->  EINTR
             (* BUG: how to distinquish the user pressing the real Esc key from an escape sequence ? Hacky timeout heuristic ? *)
           | c when c = code_escape    ->  next_key () = BracketLeft |> assert_that ;
-                                          next_key () |> key_to_escape
+                                          parse_escape_sequence ()
           | key   ->  array_get code_to_key_table key
 
 end
@@ -869,6 +898,8 @@ module Term = struct
     let switch_offscreen            = start ^ "?47h"
     let switch_mainscreen           = start ^ "?47l"
     let switch_mouse_event_on       = start ^ "?1000h"
+    let switch_mouse_tracking_on    = start ^ "?1002h"
+    let switch_mouse_tracking_off   = start ^ "?1002l"
     let switch_mouse_event_off      = start ^ "?1000l"
     let switch_focus_event_on       = start ^ "?1004h"
     let switch_focus_event_off      = start ^ "?1004l"
@@ -918,11 +949,15 @@ module Term = struct
       stdout_write_string Control.cursor_save ;
       stdout_write_string Control.switch_offscreen ;
       stdout_write_string Control.switch_mouse_event_on ;
-      stdout_write_string Control.switch_focus_event_off ;
+      stdout_write_string Control.switch_mouse_tracking_on ;
+      stdout_write_string Control.switch_focus_event_off ; (* TODO: turn on and check if some files need to be reloaded *)
       tcsetattr stdin TCSAFLUSH want ;
 
       let cleanup () =
         tcsetattr stdin TCSAFLUSH initial ;
+        stdout_write_string Control.switch_mouse_event_off ;
+        stdout_write_string Control.switch_mouse_tracking_off ;
+        stdout_write_string Control.switch_focus_event_off ;
         stdout_write_string Control.switch_mainscreen ;
         stdout_write_string Control.cursor_restore
       in
@@ -3020,10 +3055,13 @@ module Ciseau = struct
     | Keys.Ctrl_j
     | Keys.Ctrl_k
     | Keys.Upper_g
+    | Keys.Upper_m
     | Keys.Upper_z
     | Keys.Unknown _
     | Keys.Escape_Z
     | Keys.Backspace
+    | Keys.MouseClick _
+    | Keys.MouseRelease _
                         -> Noop
 
     | Keys.EINTR        -> Resize
@@ -3068,13 +3106,16 @@ module Ciseau = struct
 
   let rawinput_update =
     function
-      | Keys.Ctrl_c     ->  stop_editor
-      | Keys.Escape_Z   ->  change_mode Normal
-      | Keys.Tab        ->  rawinput_append '\t'
-      | Keys.Backspace  ->  rawinput_delete
-      | Keys.EINTR      ->  resize_editor
-      | Keys.Unknown c  ->  rawinput_append c
-      | k               ->  k |> Keys.code_of
+      | Keys.Ctrl_c           ->  stop_editor
+      | Keys.EINTR            ->  resize_editor
+      | Keys.Escape_Z         ->  change_mode Normal
+      (* | Keys.Return           ->  finish_input_sequence TODO: signal end of rawinput *)
+      | Keys.Tab              ->  rawinput_append '\t'
+      | Keys.Backspace        ->  rawinput_delete
+      | Keys.MouseClick _
+      | Keys.MouseRelease _   ->  id
+      | Keys.Unknown c        ->  rawinput_append c
+      | k                     ->  k |> Keys.code_of
                               |> Char.chr
                               |> rawinput_append
 
