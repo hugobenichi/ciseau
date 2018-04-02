@@ -136,7 +136,17 @@ module ArrayOperations = struct
   let array_swap a i j =
     let t = a.(i) in
     a.(i) <- a.(j) ;
-    a.(j) <- t ;
+    a.(j) <- t
+
+  let array_find fn a =
+    let rec loop fn a i =
+      if i = alen a
+        then -1
+        else (if fn a.(i)
+          then i
+          else loop fn a (i + 1))
+    in
+      loop fn a 0
 end
 
 
@@ -524,8 +534,8 @@ module Keys = struct
             | Underscore
             | Backspace
             (* Non-key events *)
-            | MouseClick of int * int
-            | MouseRelease of int * int
+            | Click of v2
+            | ClickRelease of v2
             | Escape_Z      (* esc[Z: shift + tab *)
             | EINTR         (* usually happen when terminal is resized *)
 
@@ -664,16 +674,16 @@ module Keys = struct
       | BraceLeft         -> 123
       | BraceRight        -> 125
       | Backspace         -> 127
-      | MouseClick _      -> 253
-      | MouseRelease _    -> 254
+      | Click _           -> 253
+      | ClickRelease _    -> 254
       | Escape_Z          -> 255
       | EINTR             -> 256
       | Unknown c         -> Char.code c
 
   let descr_of =
     function
-      | MouseClick (x, y)     ->  Printf.sprintf "MouseClick(%d,%d)" x y
-      | MouseRelease (x, y)   ->  Printf.sprintf "MouseRelease(%d,%d)" x y
+      | Click {x ; y}         ->  Printf.sprintf "Click(%d,%d)" x y
+      | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
       | k                     ->  k |> code_of |> code_to_descr
 
   let key_to_escape =
@@ -713,8 +723,8 @@ module Keys = struct
                           (match cb with
                            | 0
                            | 1
-                           | 2   ->  MouseClick   (cx, cy) (* TODO: distinguish buttons *)
-                           | 3   ->  MouseRelease (cx, cy)
+                           | 2   ->  Click (mk_v2 cx cy) (* TODO: distinguish buttons *)
+                           | 3   ->  ClickRelease (mk_v2 cx cy)
                            | _   ->  fail "unexpected mouse event code")
           | other     -> Unknown (other |> code_of |> Char.chr)
 
@@ -2594,6 +2604,7 @@ module Tileset = struct
           | FocusPrev
           | FocusMain
           | BringFocusToMain
+          | Selection of v2
 
   type t = {
     screen_size   : rect ;
@@ -2734,6 +2745,21 @@ module Tileset = struct
             array_set t'.redrawing t.focus_index Redraw ;
             array_set t'.redrawing focus_index' Redraw ;
             t'
+      | Selection pos ->
+          let pos_in_tile {x ; y } r =
+            let x0 = rect_x r in
+            let y0 = rect_y r in
+            let x1 = rect_x_end r in
+            let y1 = rect_y_end r in
+            x0 <= x && x < x1 && y0 <= y && y < y1
+          in
+          let i = array_find (pos_in_tile pos) t.screen_tiles in
+          Printf.fprintf logs "selecting tile %d for pos %d,%d\n" i pos.x pos.y ;
+          flush logs ;
+          if i < 0
+            then t
+            else set_focus t i
+                  (* TODO: adjust cursor to p inside that tile *)
 end
 
 
@@ -3015,6 +3041,7 @@ module Ciseau = struct
     | Keys.Plus         -> Resize
     | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
     | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
+    | Keys.Click pos    -> TilesetOp (Tileset.Selection pos)
 
     | Keys.Lower_w      -> MoveModeOp Movement.Words
     | Keys.Upper_w      -> MoveModeOp Movement.Blocks
@@ -3060,8 +3087,7 @@ module Ciseau = struct
     | Keys.Unknown _
     | Keys.Escape_Z
     | Keys.Backspace
-    | Keys.MouseClick _
-    | Keys.MouseRelease _
+    | Keys.ClickRelease _
                         -> Noop
 
     | Keys.EINTR        -> Resize
@@ -3112,8 +3138,8 @@ module Ciseau = struct
       (* | Keys.Return           ->  finish_input_sequence TODO: signal end of rawinput *)
       | Keys.Tab              ->  rawinput_append '\t'
       | Keys.Backspace        ->  rawinput_delete
-      | Keys.MouseClick _
-      | Keys.MouseRelease _   ->  id
+      | Keys.Click _
+      | Keys.ClickRelease _   ->  id
       | Keys.Unknown c        ->  rawinput_append c
       | k                     ->  k |> Keys.code_of
                               |> Char.chr
