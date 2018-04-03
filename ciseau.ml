@@ -710,22 +710,29 @@ module Keys = struct
     in
       reader
 
+  let mk_mouse_click cx cy =
+    function
+      | 0
+      | 1
+      | 2   ->  Click (mk_v2 cx cy) (* TODO: distinguish buttons *)
+      | 3   ->  ClickRelease (mk_v2 cx cy)
+      | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy)
+
+  let parse_mouse_click_x10 () =
+    let cb = (read_char ()) land 3 in (* Ignore modifier keys *)
+    let cx = (read_char ()) - 33 in
+    let cy = (read_char ()) - 33 in
+    let cx' = if cx < 0 then cx + 255 else cx in
+    let cy' = if cy < 0 then cy + 255 else cy in
+    mk_mouse_click cx' cy' cb
+
   let parse_escape_sequence () =
     read_char ()
       |> array_get code_to_key_table
       |> function
           | Upper_z   -> Escape_Z
-          | Upper_m   ->  let cb = (read_char ()) land 3 in (* Ignore modifier keys *)
-                          let cx = (read_char ()) - 33 in
-                          let cy = (read_char ()) - 33 in
-                          assert_that (cx >= 0) ;
-                          assert_that (cy >= 0) ;
-                          (match cb with
-                           | 0
-                           | 1
-                           | 2   ->  Click (mk_v2 cx cy) (* TODO: distinguish buttons *)
-                           | 3   ->  ClickRelease (mk_v2 cx cy)
-                           | _   ->  fail "unexpected mouse event code")
+          | Upper_m   -> parse_mouse_click_x10 ()
+                         (* TODO: add support for xterm-262 mode *)
           | other     -> Unknown (other |> code_of |> Char.chr)
 
   (* Replacement for input_char which considers 0 as Enf_of_file *)
