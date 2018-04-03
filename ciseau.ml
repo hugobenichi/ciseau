@@ -678,10 +678,10 @@ module Keys = struct
       | BraceLeft         -> 123
       | BraceRight        -> 125
       | Backspace         -> 127
-      | Click _           -> 253
-      | ClickRelease _    -> 254
-      | Escape_Z          -> 255
-      | EINTR             -> 256
+      | Click _           -> 252
+      | ClickRelease _    -> 253
+      | Escape_Z          -> 254
+      | EINTR             -> 255
       | Unknown c         -> Char.code c
 
   let descr_of =
