@@ -153,7 +153,7 @@ end
 open ArrayOperations
 
 
-module ArrayBuffer = struct
+module Arraybuffer = struct
   type 'a t = {
     data : 'a array ;
     next : int ;
@@ -1358,13 +1358,13 @@ module Filebuffer = struct
   let read_file f =
     let rec loop lines ch =
       match input_line ch with
-      | s                     -> loop (ArrayBuffer.append lines s) ch
+      | s                     -> loop (Arraybuffer.append lines s) ch
       | exception End_of_file -> lines
     in
     let ch = open_in f in
     try
-      let r = loop (ArrayBuffer.reserve 32 "") ch
-                |> ArrayBuffer.to_array
+      let r = loop (Arraybuffer.reserve 32 "") ch
+                |> Arraybuffer.to_array
       in
         close_in ch ;
         r
@@ -2770,6 +2770,65 @@ module Tileset = struct
 end
 
 
+module Navigator = struct
+
+  let read_dir is_rec prefix path e =
+    let rec read_dir_handle is_rec prefix h e =
+      try
+        let s = Unix.readdir h in
+        let e' =
+          if is_rec && s = "." || s = ".."
+            then e
+            else Arraybuffer.append e (prefix ^ s)
+        in
+          read_dir_handle is_rec prefix h e'
+      with
+        _ -> e
+    in
+    try
+      let h = Unix.opendir path in
+      let e' = read_dir_handle is_rec prefix h e in
+      Unix.closedir h ;
+      e'
+    with
+      _ -> e
+
+  let path_to_prefix p =
+    if p = "." then "" else p ^ "/"
+
+  let rec read_dir_rec p e =
+    let open Arraybuffer in
+    let e' = ref (read_dir true (path_to_prefix p) p e) in
+    for i = e.next to !e'.next - 1 do
+      (* BUG: do not follow links, infinite loop risks otherwise ! *)
+      e' := read_dir_rec (array_get !e'.data i) !e'
+    done ;
+    !e'
+
+  let dir_ls_rec path =
+    let e =
+      Arraybuffer.empty ()
+        |> read_dir_rec path
+        |> Arraybuffer.to_array
+    in
+      Array.sort String.compare e ;
+      e
+
+  let dir_ls path =
+    let e =
+      Arraybuffer.empty ()
+        |> read_dir false (path_to_prefix path) path
+        |> Arraybuffer.to_array
+    in
+      Array.sort String.compare e ;
+      e
+
+  let dir_to_filebuffer     p = p |> dir_ls |> Filebuffer.from_lines p
+  let dir_rec_to_filebuffer p = p |> dir_ls_rec |> Filebuffer.from_lines p
+
+end
+
+
 (* Experimenting with parametrizing raw input capture for reusability:
  *   - insert mode
  *   - commands
@@ -2889,11 +2948,16 @@ module Ciseau = struct
     Printf.sprintf "(%d x %d)" w h
 
   let test_mk_filebuffers file = [|
+    (*
       Filebuffer.init_filebuffer file ;
       Filebuffer.init_filebuffer "./start_tmux.sh" ;
       Filebuffer.init_filebuffer "./ioctl.c" ;
-      (* Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *) *)
-      (* FileNavigator.dir_to_filebuffer (Sys.getcwd ()) ; *)
+      Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *)
+      *)
+      Navigator.dir_rec_to_filebuffer "." ;
+      (*
+      Navigator.dir_to_filebuffer (Sys.getcwd ()) ;
+      *)
     |]
 
   let test_mk_fileviews term_dim =
@@ -3361,28 +3425,4 @@ end = struct
     in loop 0
 
   let close_buffers filepath t = (* IMPLEMENT *) t
-end
-
-
-module FileNavigator = struct
-
-  let dir_ls path =
-    let rec loop entries handle =
-      match Unix.readdir handle with
-      | s                     -> loop (s :: entries) handle
-      | exception End_of_file -> entries
-    in
-    let handle = Unix.opendir path in
-    let entries =
-      loop [] handle
-        |> List.rev
-        |> Array.of_list
-    in
-      Array.sort String.compare entries ;
-      Unix.closedir handle ;
-      entries
-
-  let dir_to_filebuffer path =
-    path |> dir_ls |> Filebuffer.from_lines path
-
 end
