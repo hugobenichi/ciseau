@@ -750,9 +750,6 @@ module Keys = struct
 end
 
 
-type linebreak = Clip | Overflow (* TODO: consider putting the linebreaking offset here ? *)
-
-
 module ScreenConfiguration = struct
 
   type orientation = Normal | Mirror
@@ -1002,7 +999,7 @@ module Framebuffer : sig
   (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> v2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
-  val put_framebuffer   : t -> rect -> int -> t -> linebreak -> v2
+  val put_framebuffer   : t -> rect -> t -> unit
 
 end = struct
 
@@ -1187,11 +1184,10 @@ end = struct
     update_line_end framebuffer (x + blitlen) y ;
     bytes_blit_string s offset framebuffer.text bytes_offset blitlen
 
-  (* Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
-   * If 'linebreaking' is Overflow, lines of 'src' which do not fit in 'dst_rect' are
-   * wrapped to the next line in 'dst'.
+  (* TODO: eliminate this once remains of Overflow mdoe is gone and Fileview draws directly to a screen
+   * Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
    * Copy cursor in 'dst' if 'copy_cursor' is true. *)
-  let put_framebuffer dst dst_rect linebreaking_offset src linebreaking =
+  let put_framebuffer dst dst_rect src =
     assert_rect_inside dst.window dst_rect ;
     assert_that (src.window.y >= rect_h dst_rect) ;
 
@@ -1203,16 +1199,6 @@ end = struct
     let y_src = ref 0 in
     let x_src_stop = ref 0 in
 
-    let cursor_out = ref v2_zero in
-
-    (* BUG: because of line are laid down from top to bottom, in Overflow mode the cursor can fallover below the
-     * visible portaion of the screen !
-     * To fix this properly I would need to either:
-     *    1) start puting lines from the cursors, both upward and downward
-     *    2) repeat put_framebuffer adding y offset until the cursor would not fall off the screen !
-     *    3) make view_adjust, recenter, y scrolling, ... works with the final on frame position instead of the
-     *       text position.
-     *)
     while !y_dst < (rect_y_end dst_rect) do
       let o_dst = to_offset dst.window !x_dst !y_dst in
       let o_src = to_offset src.window !x_src !y_src in
@@ -1226,31 +1212,9 @@ end = struct
       array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
       array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
 
-      (* Works in Overflow mode *)
-      if src.cursor.y = !y_src && !x_src <= src.cursor.x && src.cursor.x < !x_src + w_dst then (
-        let x_dst_space = !x_dst + src.cursor.x mod w_dst in
-        let y_dst_space = !y_dst in
-        cursor_out := mk_v2 x_dst_space y_dst_space ;
-        assert_v2_inside dst.window !cursor_out
-      ) ;
-
       incr y_dst;
-      match linebreaking with
-        | Clip -> (
-          incr y_src
-        )
-        | Overflow -> (
-          x_src += w_dst ;
-          x_dst := (rect_x dst_rect) + linebreaking_offset ;
-          if !x_src_stop < !x_src then (
-            x_src := 0 ;
-            x_dst := (rect_x dst_rect) ;
-            incr y_src
-          )
-        )
-    done ;
-
-    !cursor_out
+      incr y_src
+    done
 
 end
 
@@ -1275,7 +1239,7 @@ module Screen : sig
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
   val put_cursor        : t -> v2 -> unit
-  val put_framebuffer   : t -> Framebuffer.t -> linebreak -> v2
+  val put_framebuffer   : t -> Framebuffer.t -> unit
 
 end = struct
 
@@ -1346,11 +1310,8 @@ end = struct
       |> v2_add pos
       |> Framebuffer.put_cursor screen.frame_buffer
 
-  let put_framebuffer screen src linebreaking =
-    let cursor =
-      Framebuffer.put_framebuffer screen.frame_buffer screen.window 6 src linebreaking
-    in
-      v2_sub cursor (rect_offset screen.window)
+  let put_framebuffer screen src =
+    Framebuffer.put_framebuffer screen.frame_buffer screen.window src
 end
 
 
@@ -2238,7 +2199,6 @@ end = struct
     cursor            : v2 ;       (* current position in file space: x = column index, y = row index *)
     view_start        : int ;      (* index of first row in view *)
     numbering         : numbering_mode ;
-    linebreaking      : linebreak ;
     mov_mode          : Movement.mode ;
     show_token        : bool ;
     show_neighbor     : bool ;
@@ -2251,7 +2211,6 @@ end = struct
     cursor            = v2_zero ;
     view_start        = 0 ;
     numbering         = CursorRelative ;
-    linebreaking      = Clip ;
     mov_mode          = Movement.Chars ;
     show_token        = true ;
     show_neighbor     = true ;
@@ -2315,14 +2274,7 @@ end = struct
         numbering = new_mode ;
     }
 
-  let swap_linebreaking_mode t =
-    let new_mode = match t.linebreaking with
-    | Clip      -> Overflow
-    | Overflow  -> Clip
-    in {
-      t with
-        linebreaking  = new_mode ;
-    }
+  let swap_linebreaking_mode = id
 
   let toggle_show_token t = {
     t with
@@ -2353,10 +2305,9 @@ end = struct
    * recreate the same objects. *)
 
   let frame_default_line      = "~  "
-  let frame_continuation_line = "..."
 
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
-  let fill_framebuffer t screen framebuffer =
+  let fill_framebuffer t is_focused screen framebuffer =
     let screen_size = Screen.screen_size screen in
     let text_width  = screen_size.x in
     let text_height = screen_size.y in
@@ -2371,19 +2322,15 @@ end = struct
     let last_x_index = text_width - 6 in
     let base_scrolling_offset = last_x_index - 1 in
     let (cursor_x, scrolling_offset) =
-      if t.linebreaking = Overflow || t.cursor.x < last_x_index
+      if t.cursor.x < last_x_index
         then (t.cursor.x, 0)
         else (base_scrolling_offset, t.cursor.x - base_scrolling_offset)
     in
-    let cursor_x_screenspace = 6 + cursor_x in
+    let cursor = mk_v2 (cursor_x + 6) (t.cursor.y - t.view_start) in
+    if is_focused then
+      Screen.put_cursor screen cursor ;
 
     let x_scrolling_offset = scrolling_offset in
-
-    (* Continuation dots for overflow mode *)
-    if t.linebreaking = Overflow then
-      for y = 0 to text_height do
-        Screen.put_line screen ~x:0 ~y:y frame_continuation_line
-      done ;
 
     (* Text area *)
     for i = 0 to text_stop_y - 1 do
@@ -2434,7 +2381,6 @@ end = struct
       done ;
     ) ;
 
-    (* BUG: these show_* color rectangles cause weirdness in Overflow mode ! *)
     (* Show selection *)
     if t.show_selection then (
       let show_selection selection_rect =
@@ -2478,14 +2424,11 @@ end = struct
       Config.default.colors.no_text
       (mk_rect 0 text_stop_y 1 text_height) ;
 
-    (* Cursor: pass down cursor to framebuffer -> put_framebuffer will compute the screen position and pass it back *)
-    let cursor = mk_v2 cursor_x_screenspace (t.cursor.y - t.view_start) in
-    Framebuffer.put_cursor framebuffer cursor ;
+    (* Cursor vertical line *)
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.string
       (mk_rect 0 cursor.y 6 cursor.y)
-
 
   let put_border_frame t screen header_color =
     Screen.put_line screen ~x:0 ~y:0
@@ -2526,11 +2469,8 @@ end = struct
         put_border_frame t screen header_color ;
         Screen.clear textscreen ;
         Framebuffer.clear framebuffer ;
-        fill_framebuffer t textscreen framebuffer ;
-        (* CLEANUP: pass the args in a struct and do the drawing of cursor there *)
-        let final_cursor = Screen.put_framebuffer textscreen framebuffer t.linebreaking in
-        if is_focused then
-          Screen.put_cursor textscreen final_cursor
+        fill_framebuffer t is_focused textscreen framebuffer ;
+        Screen.put_framebuffer textscreen framebuffer ;
       )
 
 end
@@ -2953,14 +2893,14 @@ module Ciseau = struct
     Printf.sprintf "(%d x %d)" w h
 
   let test_mk_filebuffers file = [|
-    (*
       Filebuffer.init_filebuffer file ;
       Filebuffer.init_filebuffer "./start_tmux.sh" ;
       Filebuffer.init_filebuffer "./ioctl.c" ;
+      (*
       Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *)
       *)
-      Navigator.dir_rec_to_filebuffer "." ;
       (*
+      Navigator.dir_rec_to_filebuffer "." ;
       Navigator.dir_to_filebuffer (Sys.getcwd ()) ;
       *)
     |]
@@ -2971,7 +2911,7 @@ module Ciseau = struct
   let mk_tileset term_dim filebuffers =
     filebuffers
       |> Array.map Fileview.init_fileview
-      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.zero
+      |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
 
   let init_editor file =
     let term_dim = Term.get_terminal_dimensions () in
@@ -3340,8 +3280,6 @@ let () =
  *
  * rendering:
  *  - bug: in paragraph mode when selecting the top most paragraph I get stuck there !
- *  - bug: with multiple view there is some crosstalk where the left border of the left view gets eat by the
- *    the right Overflow view !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
  *  - better management of screen dragging for horizontal scrolling
  *
