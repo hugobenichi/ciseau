@@ -2153,16 +2153,16 @@ module Fileview : sig
 
   val init_fileview           : Filebuffer.t -> t
   val set_mov_mode            : Movement.mode -> t -> t
-  val apply_movement          : Movement.movement -> int -> t -> t
+  val apply_movement          : Movement.movement -> v2 -> t -> t
   val cursor                  : t -> v2
-  val adjust_view             : int -> t -> t
+  val adjust_view             : v2 -> t -> t
   val last_line_index         : t -> int
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
   val toggle_show_token       : t -> t
   val toggle_show_neighbor    : t -> t
   val toggle_show_selection   : t -> t
-  val recenter_view           : int -> t -> t
+  val recenter_view           : v2 -> t -> t
   val draw                    : t -> Screen.t -> redraw_level -> bool -> unit
 
 end = struct
@@ -2197,7 +2197,7 @@ end = struct
   type t = {
     filebuffer        : filebuffer ;
     cursor            : v2 ;       (* current position in file space: x = column index, y = row index *)
-    view_start        : int ;      (* index of first row in view *)
+    view              : v2 ;       (* x,y offset of the rectangle view into the text *)
     numbering         : numbering_mode ;
     mov_mode          : Movement.mode ;
     show_token        : bool ;
@@ -2209,7 +2209,7 @@ end = struct
   let init_fileview filebuffer = {
     filebuffer        = filebuffer ;
     cursor            = v2_zero ;
-    view_start        = 0 ;
+    view              = v2_zero ;
     numbering         = CursorRelative ;
     mov_mode          = Movement.Chars ;
     show_token        = true ;
@@ -2228,27 +2228,36 @@ end = struct
   let cursor { cursor } =
     cursor
 
-  let view_height { view_start ; filebuffer } =
-    (Filebuffer.file_length filebuffer) - view_start
+  let view_height { view ; filebuffer } =
+    (Filebuffer.file_length filebuffer) - view.y
 
   let last_line_index { filebuffer } =
     Filebuffer.last_line_index filebuffer
 
-  let adjust_view screen_height t =
-    let text_height = screen_height - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
-    let view_start =
-      if t.cursor.y < t.view_start then
+  let adjust_view { x ; y } t =
+    let text_height = y - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
+    let text_width  = x - 6 in (* -6 for line numbering CLEANUP: remove this hardcoded offset *)
+    let view_x =
+      if t.cursor.x < t.view.x then
+        0
+      else if t.cursor.x > t.view.x + text_width then
+        t.cursor.x - text_width
+      else
+        t.view.x
+    in
+    let view_y =
+      if t.cursor.y < t.view.y then
         t.cursor.y
-      else if t.cursor.y > t.view_start + text_height then
+      else if t.cursor.y > t.view.y + text_height then
         t.cursor.y - text_height
       else
-        t.view_start
-    in
-      { t with
-          view_start  = view_start ;
-      }
+        t.view.y
+    in {
+      t with
+        view  = mk_v2 view_x view_y ;
+    }
 
-  let apply_movement mov view_height t =
+  let apply_movement mov screen_size t =
     let cursor' = Movement.compute_movement t.context t.mov_mode mov t.filebuffer t.cursor in
 
     if kDEBUG then (
@@ -2263,7 +2272,7 @@ end = struct
       assert_that (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg
     ) ;
 
-    adjust_view view_height { t with cursor = cursor' }
+    adjust_view screen_size { t with cursor = cursor' }
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -2291,11 +2300,12 @@ end = struct
       show_selection  = not t.show_selection ;
   }
 
-  (* TODO: this should also recenter the view horizontally in Clip mode *)
-  let recenter_view view_height t =
-    let new_start = t.cursor.y - view_height / 2 in {
+  (* TODO: should y_recenter and x_recenter together ? *)
+  let recenter_view { x ; y } t =
+    let view_x = t.cursor.x - x / 2 in
+    let view_y = t.cursor.y - y / 2 in {
       t with
-        view_start  = max new_start 0 ;
+        view = mk_v2 (max view_x 0) (max view_y 0) ;
     }
 
   (* TODO: move drawing in separate module ? *)
@@ -2326,7 +2336,7 @@ end = struct
         then (t.cursor.x, 0)
         else (base_scrolling_offset, t.cursor.x - base_scrolling_offset)
     in
-    let cursor = mk_v2 (cursor_x + 6) (t.cursor.y - t.view_start) in
+    let cursor = mk_v2 (cursor_x + 6) (t.cursor.y - t.view.y) in
     if is_focused then
       Screen.put_cursor screen cursor ;
 
@@ -2334,7 +2344,7 @@ end = struct
 
     (* Text area *)
     for i = 0 to text_stop_y - 1 do
-      let line_idx = i + t.view_start in
+      let line_idx = i + t.view.y in
       let l = Filebuffer.line_at t.filebuffer line_idx in
       let x_len = (slen l) - x_scrolling_offset in
       Framebuffer.put_line framebuffer ~x:0 ~y:i ~len:6 (LineNumberCache.get line_number_offset line_idx) ;
@@ -2352,7 +2362,7 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
-      (mk_rect 6 (t.cursor.y - t.view_start) text_width (t.cursor.y - t.view_start)) ;
+      (mk_rect 6 (t.cursor.y - t.view.y) text_width (t.cursor.y - t.view.y)) ;
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
@@ -2362,11 +2372,11 @@ end = struct
     if t.show_token then (
       let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor in
       let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s in
-      let y_start = token_s.y - t.view_start in
-      let y_end   = token_e.y - t.view_start in
+      let y_start = token_s.y - t.view.y in
+      let y_end   = token_e.y - t.view.y in
       (* The current token can leak out of the current screen: bound start and stop to the screen *)
       for y = max 0 y_start to min y_end text_stop_y do
-        let len = Filebuffer.line_length t.filebuffer (y + t.view_start) in
+        let len = Filebuffer.line_length t.filebuffer (y + t.view.y) in
         let x0 =
           if y = y_start then token_s.x else 0 in       (* start from x=0 for lines after the first *)
         let x1 =
@@ -2385,9 +2395,9 @@ end = struct
     if t.show_selection then (
       let show_selection selection_rect =
           let tl_x = 6 + (max 0 ((rect_x selection_rect) - x_scrolling_offset)) in
-          let tl_y = (rect_y selection_rect) - t.view_start in
+          let tl_y = (rect_y selection_rect) - t.view.y in
           let br_x = (rect_x_end selection_rect) + 7 - x_scrolling_offset in
-          let br_y = (rect_y_end selection_rect) - t.view_start in
+          let br_y = (rect_y_end selection_rect) - t.view.y in
           if 0 <= br_y && tl_y < text_height && tl_x < br_x then (
             let r = mk_rect tl_x tl_y br_x br_y in
             Framebuffer.put_color_rect framebuffer Config.default.colors.selection r
@@ -2400,7 +2410,7 @@ end = struct
     if t.show_neighbor then (
       let lightup_pixel t framebuffer colors pos =
           let x = pos.x + 6 - x_scrolling_offset in
-          let y = pos.y - t.view_start  in
+          let y = pos.y - t.view.y  in
           if 6 <= x then
             Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
       in
@@ -2546,7 +2556,7 @@ end
 module Tileset = struct
 
   type op = Resize of rect
-          | FileviewOp of (int -> Fileview.t -> Fileview.t)
+          | FileviewOp of (v2 -> Fileview.t -> Fileview.t)
           | RotateViewsLeft
           | RotateViewsRight
           | ScreenLayoutCycleNext
@@ -2573,7 +2583,7 @@ module Tileset = struct
       let view = array_get fileviews i in
       (* In Single tile mode, len tiles < len fileviews *)
       if i < n_tiles
-        then Fileview.adjust_view (array_get screen_tiles i |> rect_h) view
+        then Fileview.adjust_view (array_get screen_tiles i |> rect_size) view
         else view
     in
     Array.init (alen fileviews) adjust_fileview
@@ -2637,10 +2647,9 @@ module Tileset = struct
             t.focus_index new_screen_size t.screen_config t.fileviews
       | FileviewOp fileview_op ->
           let fileviews' = Array.copy t.fileviews in
-          let screen_height = get_focused_tile t |> rect_h in
           t.focus_index
             |> array_get fileviews'
-            |> fileview_op screen_height
+            |> fileview_op (t |> get_focused_tile |> rect_size)
             |> array_set fileviews' t.focus_index ;
           let t' = {
             t with
@@ -3001,9 +3010,9 @@ module Ciseau = struct
   let apply_command_with_repetition n command editor =
     match command with
     | MoveOp m ->
-          let rec loop m n view_height fb =
+          let rec loop m n viewsize fb =
             if (n > 0)
-              then loop m (n - 1) view_height (Fileview.apply_movement m view_height fb)
+              then loop m (n - 1) viewsize (Fileview.apply_movement m viewsize fb)
               else fb
           in
           let fileview_op = Tileset.FileviewOp (loop m n) in {
