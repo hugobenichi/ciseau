@@ -1315,6 +1315,59 @@ end = struct
 end
 
 
+type step = Nomore
+                 | Continue
+
+
+(* A 4-directional text cursor: can move up/down one line at a time or left/right one char at a time
+ * No constructor specified: Text impls provide their own TextCursor *)
+module type TextCursor = sig
+  type t
+
+  (* Result of an cursor movement step. *)
+
+  val x               : t -> int        (* current column index *)
+  val y               : t -> int        (* current line index *)
+  val pos             : t -> v2         (* current column and line indexes as a vec *)
+
+  val line_get        : t -> string
+  val line_is_empty   : t -> bool
+  val line_next       : t -> step
+  val line_prev       : t -> step
+
+  val char_get        : t -> char       (* TODO: what to do for empty lines ?? *)
+  val char_next       : t -> step       (* move to next char, or return Nomore if cursor is at end of line *)
+  val char_prev       : t -> step       (* move to previous char, or return Nomore if cursor is at beginning of line *)
+
+  val save : t -> t
+end
+
+
+(* TextCursor impl for an array of strings *)
+module FilebufferCursor : TextCursor = struct
+  type t = {
+    text  :  string array ;
+    mutable x     : int ;
+    mutable y     : int ;
+  }
+
+  let x { x } = x
+  let y { y } = y
+  let pos { x ; y} = mk_v2 x y
+
+  let line_get { text ; y } = array_get text y
+  let line_is_empty cursor = cursor |> line_get |> slen |> (=) 0
+  let line_next cursor = Nomore (* TODO *)
+  let line_prev cursor = Nomore (* TODO *)
+
+  let char_get { text ; x ; y } = string_at (array_get text y) x
+  let char_next cursor = Nomore (* TODO *)
+  let char_prev cursor = Nomore (* TODO *)
+
+  let save { text ; x ; y } = { text ; x ; y }
+end
+
+
 module Filebuffer : sig
   type t
 
