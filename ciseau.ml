@@ -1315,7 +1315,28 @@ end = struct
 end
 
 
-module Filebuffer = struct
+module Filebuffer : sig
+  type t
+
+  val init_filebuffer     : string -> t
+  val from_lines          : string -> string array -> t
+  val header              : t -> string
+  val filename            : t -> string
+  val file_length         : t -> int
+  val search              : t -> string -> rect array
+
+  (* TODO: eliminate in favor of a text cursor ! *)
+  val line_at             : t -> int -> string
+  val char_at             : t -> int -> int -> char
+  val line_length         : t -> int -> int
+  val is_line_empty       : t -> int -> bool
+  val is_valid_cursor     : t -> int -> int -> bool
+  val last_line_index     : t -> int
+  val last_cursor_x       : t -> int -> int
+  val last_cursor_x2      : t -> int -> int
+
+
+end = struct
   type t = {
     filename    : string ;
     filepath    : string ;
@@ -1360,6 +1381,8 @@ module Filebuffer = struct
 
   let file_length { buflen } = buflen
   let last_line_index { buflen } = buflen - 1
+  let filename { filename } = filename
+  let header { header } = header
 
   let is_line_empty filebuffer y = (line_length filebuffer y = 0)
 
@@ -1370,7 +1393,7 @@ module Filebuffer = struct
   let last_cursor_x2 filebuffer y = (line_length filebuffer y) - 1
 
   let is_valid_cursor filebuffer x y = (0 <= y)
-                                    && (y <= last_line_index filebuffer)
+                                    && (y < file_length filebuffer)
                                     && line_length filebuffer y > 0
                                     && (0 <= x)
                                     && (x <= last_cursor_x filebuffer y)
@@ -2300,7 +2323,7 @@ end = struct
       show_selection  = not t.show_selection ;
   }
 
-  (* TODO: should y_recenter and x_recenter together ? *)
+  (* TODO: should y_recenter and x_recenter together or separately ? *)
   let recenter_view { x ; y } t =
     let view_x = t.cursor.x - x / 2 in
     let view_y = t.cursor.y - y / 2 in {
@@ -2334,7 +2357,7 @@ end = struct
     let (cursor_x, scrolling_offset) =
       if t.cursor.x < last_x_index
         then (t.cursor.x, 0)
-        else (base_scrolling_offset, t.cursor.x - base_scrolling_offset)
+        else (base_scrolling_offset, t.view.x) (* t.cursor.x - base_scrolling_offset) *)
     in
     let cursor = mk_v2 (cursor_x + 6) (t.cursor.y - t.view.y) in
     if is_focused then
@@ -2444,7 +2467,7 @@ end = struct
     Screen.put_line screen ~x:0 ~y:0
       (Printf.sprintf
         "%s %d,%d  mode=%s"
-        t.filebuffer.Filebuffer.header
+        (Filebuffer.header t.filebuffer)
         t.cursor.y t.cursor.x
         (Movement.mode_to_string t.mov_mode)) ;
     (* header *)
@@ -3165,8 +3188,8 @@ module Ciseau = struct
       | Keys.ClickRelease _   ->  id
       | Keys.Unknown c        ->  rawinput_append c
       | k                     ->  k |> Keys.code_of
-                              |> Char.chr
-                              |> rawinput_append
+                                    |> Char.chr
+                                    |> rawinput_append
 
   (* TODO: introduce state_machine for decoupling editor struct from input processing *)
   let process_key key editor =
@@ -3291,19 +3314,13 @@ let () =
  *  - bug: in paragraph mode when selecting the top most paragraph I get stuck there !
  *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
  *  - better management of screen dragging for horizontal scrolling
- *
- *  general cleanups:
- *  - variable renaming
- *  - solidification
- *  - doc
- *  - use named parameters and optional parameters
+ *  - remove intermediary framebuffer experiment, only support CLip mode.
  *
  *  movements:
  *  - implement easymotion
  *  - once I have a proper tokenizer for the text:
  *    - Number tokenizer which recognizes 0xdeadbeef and 6.667e-11
- *    - Math operator movement
- *    - string movement
+ *    - string, comments, movement
  *  - Proper tree navigation
  *  - bind brackets and braces delim movement
  *
@@ -3311,11 +3328,6 @@ let () =
  *  - static syntax coloring based on tokens
  *
  *  hud: put movement/command history per Fileview and show in user input bar
- *
- *  minimal edition features
- *  - token deletion
- *  - token swap
- *  - token rotate
  *
  *  perfs:
  *  - memory optimization for
@@ -3351,7 +3363,7 @@ end = struct
   }
 
   let buffers_menu t =
-    t.buffers |> Array.map (fun fb -> fb.Filebuffer.filename)
+    t.buffers |> Array.map Filebuffer.filename
               |> Filebuffer.from_lines "opened buffers"
 
   let list_buffers { buffers } =
@@ -3368,7 +3380,7 @@ end = struct
       if i < e
         then
           let fb = array_get buffers i in
-          if fb.Filebuffer.filename = filepath
+          if filepath = Filebuffer.filename fb
             then Some fb
             else loop (i + 1)
         else None
