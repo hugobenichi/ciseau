@@ -858,6 +858,7 @@ module ScreenConfiguration = struct
 end
 
 
+(* TODO: try using std Buffer instead *)
 module Bytevector : sig
   type t
 
@@ -1316,7 +1317,7 @@ end
 
 
 type step = Nomore
-                 | Continue
+          | Continue
 
 
 (* A 4-directional text cursor: can move up/down one line at a time or left/right one char at a time
@@ -1342,29 +1343,85 @@ module type TextCursor = sig
   val save : t -> t
 end
 
-
 (* TextCursor impl for an array of strings *)
-module FilebufferCursor : TextCursor = struct
+module FilebufferCursor : sig
+
+  type t
+  include TextCursor with type t := t
+
+  val mk_cursor : string array -> int -> int -> t
+
+end = struct
+
   type t = {
     text  :  string array ;
     mutable x     : int ;
     mutable y     : int ;
   }
 
+  let mk_cursor t x y = {
+    text  = t ;
+    x     = x ;
+    y     = y ;
+  }
+
   let x { x } = x
+
   let y { y } = y
-  let pos { x ; y} = mk_v2 x y
+
+  let pos { x ; y } = mk_v2 x y
 
   let line_get { text ; y } = array_get text y
+
   let line_is_empty cursor = cursor |> line_get |> slen |> (=) 0
-  let line_next cursor = Nomore (* TODO *)
-  let line_prev cursor = Nomore (* TODO *)
+
+  let line_next cursor =
+    let y' = cursor.y + 1 in
+    if y' < alen cursor.text
+      then (
+        cursor.y <- y' ;
+        Continue
+      )
+      else Nomore
+
+  let line_prev cursor =
+    let y' = cursor.y - 1 in
+    if y' >= 0
+      then (
+        cursor.y <- y' ;
+        Continue
+      )
+      else Nomore
 
   let char_get { text ; x ; y } = string_at (array_get text y) x
-  let char_next cursor = Nomore (* TODO *)
-  let char_prev cursor = Nomore (* TODO *)
+
+  let char_next cursor =
+    let len = cursor |> line_get |> slen in
+    let x' = cursor.x + 1 in
+    if x' < len
+      then (
+        cursor.x <- cursor.x + 1 ;
+        Continue
+      )
+      else Nomore
+
+  let char_prev cursor =
+    let len = cursor |> line_get |> slen in
+    let x' = cursor.x - 1 in
+    if len > 0 && x' >= 0
+      then (
+        cursor.x <- x' ;
+        Continue
+      )
+      else Nomore
 
   let save { text ; x ; y } = { text ; x ; y }
+
+  (* Conversion plan for introducing cursors little by little:
+   *  1) add a vec -> cursor and cursor -> vec conversion fns
+   *  2) translate little by little every movement module to use cursors internally but return vec as currently
+   *  3) change the outer impl
+   *)
 end
 
 
@@ -1377,6 +1434,7 @@ module Filebuffer : sig
   val filename            : t -> string
   val file_length         : t -> int
   val search              : t -> string -> rect array
+  val cursor              : t -> v2 -> FilebufferCursor.t
 
   (* TODO: eliminate in favor of a text cursor ! *)
   val line_at             : t -> int -> string
@@ -1397,6 +1455,9 @@ end = struct
     buffer      : string array ;          (* the file data, line per line *)
     buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
   }
+
+  let cursor { buffer } { x ; y } =
+    FilebufferCursor.mk_cursor buffer x y
 
   let read_file f =
     let rec loop lines ch =
