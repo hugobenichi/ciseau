@@ -858,45 +858,6 @@ module ScreenConfiguration = struct
 end
 
 
-(* TODO: try using std Buffer instead *)
-module Bytevector : sig
-  type t
-
-  val init_bytevector : int -> t
-  val reset : t -> unit
-  val append : t -> string -> unit
-  val append_bytes : t -> Bytes.t -> int -> int -> unit
-  val write : Unix.file_descr -> t -> unit
-
-end = struct
-
-  type t = {
-    mutable bytes   : bytes ;
-    mutable cursor  : int ;
-  }
-
-  let init_bytevector len = {
-    bytes   = Bytes.make len '\000' ;
-    cursor  = 0 ;
-  }
-
-  let reset bvec =
-    bvec.cursor <- 0
-
-  let append bvec s =
-    let len = slen s in
-    bytes_blit_string s 0 bvec.bytes bvec.cursor len ;
-    bvec.cursor <- bvec.cursor + len
-
-  let append_bytes bvec src offset len =
-    bytes_blit src offset bvec.bytes bvec.cursor len ;
-    bvec.cursor <- bvec.cursor + len
-
-  let write fd bvec =
-    write fd bvec.bytes bvec.cursor
-end
-
-
 (* main module for interacting with the terminal *)
 module Term = struct
 
@@ -995,7 +956,7 @@ module Framebuffer : sig
   val clear             : t -> unit
   val clear_rect        : t -> rect -> unit
   val clear_line        : t -> x:int -> y:int -> len:int -> unit
-  val render            : t -> Bytevector.t -> unit
+  val render            : t -> unit
   val put_color_rect    : t -> Color.color_cell -> rect -> unit
   (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> v2 -> unit
@@ -1003,6 +964,8 @@ module Framebuffer : sig
   val put_framebuffer   : t -> rect -> t -> unit
 
 end = struct
+
+  let buffer = Buffer.create 4096
 
   module Default = struct
     let fg    = Color.White
@@ -1039,45 +1002,45 @@ end = struct
     let next_line_len t start stop =
       min (t.window.x - (start mod t.window.x)) (stop - start)
 
-    let render_section start stop t bvec =
+    let render_section start stop t =
       (* append lines one at a time starting from start offset, ending at stop offset *)
-      let append_newline_if_needed bvec t position =
+      let append_newline_if_needed t position =
         let is_end_of_line        = (position mod t.window.x) = 0 in
         let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
         if is_end_of_line && is_not_end_of_buffer
-          then Bytevector.append bvec Term.Control.newline
+          then Buffer.add_string buffer Term.Control.newline
       in
-      let rec loop t start stop colorbuffer_idx bvec =
+      let rec loop t start stop colorbuffer_idx =
         (* memory opt: all arguments passed explicitly *)
         if start < stop
           then
             let len = next_line_len t start stop in
-            Bytevector.append bvec Term.Control.start ;
+            Buffer.add_string buffer Term.Control.start ;
             colorbuffer_idx
               |> array_get t.fg_colors
               |> array_get Color.fg_color_control_strings
-              |> Bytevector.append bvec ;
+              |> Buffer.add_string buffer ;
             colorbuffer_idx
               |> array_get t.bg_colors
               |> array_get Color.bg_color_control_strings
-              |> Bytevector.append bvec ;
-            Bytevector.append_bytes bvec t.text start len ;
-            Bytevector.append bvec Term.Control.finish ;
+              |> Buffer.add_string buffer ;
+            Buffer.add_subbytes buffer t.text start len ;
+            Buffer.add_string buffer Term.Control.finish ;
             (* Last newline need to be appened *after* the terminating control command for colors *)
-            append_newline_if_needed bvec t (start + len) ;
-            loop t (start + len) stop colorbuffer_idx bvec
+            append_newline_if_needed t (start + len) ;
+            loop t (start + len) stop colorbuffer_idx
       in
-        loop t start stop start bvec
+        loop t start stop start
 
-    let render_all_sections t bvec =
-      let rec loop start bvec =
+    let render_all_sections t =
+      let rec loop start =
         if start < t.len
           then
             let stop = next_contiguous_color_section t start in
-            render_section start stop t bvec ;
-            loop stop bvec
+            render_section start stop t;
+            loop stop
       in
-        loop 0 bvec
+        loop 0
   end
 
   let init_framebuffer vec2 =
@@ -1140,15 +1103,17 @@ end = struct
     array_blit default_fg_colors 0 t.fg_colors offset len ;
     array_blit default_bg_colors 0 t.bg_colors offset len
 
-  let render frame_buffer render_buffer =
-    Bytevector.reset render_buffer ;
-    Bytevector.append render_buffer Term.Control.cursor_hide ;
-    Bytevector.append render_buffer Term.Control.gohome ;
-    Rendering.render_all_sections frame_buffer render_buffer ;
-    Bytevector.append render_buffer (Term.Control.cursor_control_string frame_buffer.cursor) ;
-    Bytevector.append render_buffer Term.Control.cursor_show ;
-    if kDRAW_SCREEN
-      then Bytevector.write Unix.stdout render_buffer
+  let render frame_buffer =
+    Buffer.clear buffer ;
+    Buffer.add_string buffer Term.Control.cursor_hide ;
+    Buffer.add_string buffer Term.Control.gohome ;
+    Rendering.render_all_sections frame_buffer ;
+    Buffer.add_string buffer (Term.Control.cursor_control_string frame_buffer.cursor) ;
+    Buffer.add_string buffer Term.Control.cursor_show ;
+    if kDRAW_SCREEN then (
+      Buffer.output_buffer stdout buffer ;
+      flush stdout
+    )
 
   let update_line_end t x y =
     if (array_get t.line_lengths y) < x then
@@ -3013,7 +2978,6 @@ module Ciseau = struct
   type editor = {
     term_dim        : v2 ;
     term_dim_descr  : string ;
-    render_buffer   : Bytevector.t ;
     frame_buffer    : Framebuffer.t ;
     running         : bool ;
     status_screen   : Screen.t ;
@@ -3066,7 +3030,6 @@ module Ciseau = struct
     {
       term_dim        = term_dim ;
       term_dim_descr  = mk_window_size_descr term_dim ;
-      render_buffer   = Bytevector.init_bytevector 0x100000 ;
       frame_buffer    = frame_buffer ;
       running         = true ;
       status_screen   = mk_status_screen frame_buffer term_dim ;
@@ -3177,7 +3140,7 @@ module Ciseau = struct
   let refresh_screen editor =
     Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
     show_status editor ;
-    Framebuffer.render editor.frame_buffer editor.render_buffer ;
+    Framebuffer.render editor.frame_buffer ;
     editor
 
   let key_to_command = function
