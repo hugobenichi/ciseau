@@ -1281,6 +1281,8 @@ end = struct
 end
 
 
+(* Result of a cursor movement step. *)
+(* TODO: move back into TextCursor *)
 type step = Nomore
           | Continue
 
@@ -1290,22 +1292,25 @@ type step = Nomore
 module type TextCursor = sig
   type t
 
-  (* Result of an cursor movement step. *)
-
   val x               : t -> int        (* current column index *)
   val y               : t -> int        (* current line index *)
   val pos             : t -> v2         (* current column and line indexes as a vec *)
+  val save            : t -> t
+  val goto            : ?x:int -> ?y:int -> t -> unit
 
   val line_get        : t -> string
   val line_is_empty   : t -> bool
   val line_next       : t -> step
   val line_prev       : t -> step
+  val line_first      : t -> unit
+  val line_last       : t -> unit
 
   val char_get        : t -> char       (* TODO: what to do for empty lines ?? *)
   val char_next       : t -> step       (* move to next char, or return Nomore if cursor is at end of line *)
   val char_prev       : t -> step       (* move to previous char, or return Nomore if cursor is at beginning of line *)
+  val char_first      : t -> unit
+  val char_last       : t -> unit
 
-  val save : t -> t
 end
 
 (* TextCursor impl for an array of strings *)
@@ -1335,6 +1340,16 @@ end = struct
   let y { y } = y
 
   let pos { x ; y } = mk_v2 x y
+
+  let save { text ; x ; y } = { text ; x ; y }
+
+  let goto ?x:(x_want = -1) ?y:(y_want = -1) cursor =
+    let x_want' = if x_want < 0 then cursor.x else x_want in
+    let y_want' = if y_want < 0 then cursor.y else y_want in
+    let y' = min y_want' ((alen cursor.text) - 1) in
+    let x' = min x_want' ((slen (array_get cursor.text y')) - 1) in
+    cursor.x <- x' ;
+    cursor.y <- y'
 
   let line_get { text ; y } = array_get text y
 
@@ -1380,7 +1395,11 @@ end = struct
       )
       else Nomore
 
-  let save { text ; x ; y } = { text ; x ; y }
+  let char_first cursor = goto ~x:0 cursor
+  let char_last cursor = goto ~x:max_int cursor
+
+  let line_first cursor = goto ~y:0 cursor
+  let line_last cursor = goto ~y:max_int cursor
 
   (* Conversion plan for introducing cursors little by little:
    *  1) add a vec -> cursor and cursor -> vec conversion fns
