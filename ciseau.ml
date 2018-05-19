@@ -498,6 +498,7 @@ module Keys = struct
             | Lower_b
             | Lower_c
             | Lower_s
+            | Lower_v
             | Lower_d
             | Lower_w
             | Lower_x
@@ -560,12 +561,13 @@ module Keys = struct
     (Colon,           ":",            58) ;
     (SemiColon,       ";",            59) ;
     (Equal,           "Equal",        61) ;
+    (* BUG: this collides with 'A', 'B', 'C', 'D', Wat the Moon !!! *)
     (ArrowUp,         "ArrowUp",      65) ;
     (ArrowDown,       "ArrowDown",    66) ;
     (ArrowRight,      "ArrowRight",   67) ;
     (ArrowLeft,       "ArrowLeft",    68) ;
-    (Upper_b,         "W",            66) ;
-    (Upper_w,         "B",            87) ;
+    (Upper_b,         "B",            66) ;
+    (Upper_w,         "W",            87) ;
     (Upper_g,         "G",            71) ;
     (Upper_h,         "H",            72) ;
     (Upper_j,         "J",            74) ;
@@ -576,6 +578,7 @@ module Keys = struct
     (Lower_b,         "w",            98) ;
     (Lower_c,         "c",            99) ;
     (Lower_s,         "s",            115) ;
+    (Lower_v,         "w",            118) ;
     (Lower_d,         "d",            100) ;
     (Lower_z,         "z",            122) ;
     (Lower_x,         "x",            120) ;
@@ -644,6 +647,7 @@ module Keys = struct
       | Lower_b           -> 98
       | Lower_c           -> 99
       | Lower_s           -> 115
+      | Lower_v           -> 118
       | Lower_d           -> 100
       | Lower_z           -> 122
       | Lower_x           -> 120
@@ -1343,13 +1347,20 @@ end = struct
 
   let save { text ; x ; y } = { text ; x ; y }
 
+  let goto_y y cursor =
+    let y' = min y ((alen cursor.text) - 1) in
+    cursor.y <- y'
+
+  let goto_x x cursor =
+    let x' = min x ((slen (array_get cursor.text cursor.y)) - 1) in
+    let x'' = max 0 x' in (* empty lines: put cursor on 0 *)
+    cursor.x <- x''
+
   let goto ?x:(x_want = -1) ?y:(y_want = -1) cursor =
     let x_want' = if x_want < 0 then cursor.x else x_want in
     let y_want' = if y_want < 0 then cursor.y else y_want in
-    let y' = min y_want' ((alen cursor.text) - 1) in
-    let x' = min x_want' ((slen (array_get cursor.text y')) - 1) in
-    cursor.x <- x' ;
-    cursor.y <- y'
+    goto_y y_want' cursor ;
+    goto_x x_want' cursor
 
   let line_get { text ; y } = array_get text y
 
@@ -1360,6 +1371,7 @@ end = struct
     if y' < alen cursor.text
       then (
         cursor.y <- y' ;
+        goto_x cursor.x cursor ;
         Continue
       )
       else Nomore
@@ -1369,6 +1381,7 @@ end = struct
     if y' >= 0
       then (
         cursor.y <- y' ;
+        goto_x cursor.x cursor ;
         Continue
       )
       else Nomore
@@ -1760,40 +1773,33 @@ module WordMovement = TokenMovement(WordFinder)
 
 module LineMovement = struct
 
-  let go_line_start filebuffer cursor =
-    mk_v2 0 cursor.y
+  let cursor_position_bridge fn filebuffer p =
+    let c = Filebuffer.cursor filebuffer p in
+    fn c ;
+    FilebufferCursor.pos c
 
-  let go_line_end filebuffer cursor =
-    mk_v2 (Filebuffer.last_cursor_x filebuffer cursor.y) cursor.y
+  let go_line_start'  = FilebufferCursor.char_first
+  let go_line_end'    = FilebufferCursor.char_last
+  let go_line_up'     = FilebufferCursor.line_prev
+  let go_line_down'   = FilebufferCursor.line_next
 
-  let go_line_up filebuffer cursor =
-    if cursor.y > 0
-      then
-        let y' = cursor.y - 1 in
-        let x' = min cursor.x (Filebuffer.last_cursor_x filebuffer y') in
-        mk_v2 x' y'
-      else cursor
+  let go_line_left' cursor =
+    FilebufferCursor.line_prev cursor |> ignore ;
+    FilebufferCursor.char_first cursor ;
+    while cursor |> FilebufferCursor.line_is_empty |> not && cursor |> FilebufferCursor.char_get |> is_space do
+      FilebufferCursor.char_next cursor |> ignore
+    done
 
-  let go_line_down filebuffer cursor =
-    if cursor.y + 1 < Filebuffer.file_length filebuffer
-      then
-        let y' = cursor.y + 1 in
-        let x' = min cursor.x (Filebuffer.last_cursor_x filebuffer y') in
-        mk_v2 x' y'
-      else cursor
+  let go_line_right' cursor =
+    FilebufferCursor.line_next cursor |> ignore ;
+    FilebufferCursor.char_last cursor
 
-  let go_line_left filebuffer cursor =
-    let cursor' = go_line_up filebuffer cursor in
-    if cursor.y = cursor'.y || Filebuffer.is_line_empty filebuffer cursor'.y
-      then cursor'
-      else BlockMovement.go_token_first filebuffer cursor'.y
-            |> OptionCombinators.get_or cursor'
-
-  let go_line_right filebuffer cursor =
-    let x' = Filebuffer.last_cursor_x filebuffer cursor.y in
-    if cursor.x >= x'
-      then go_line_down filebuffer cursor |> go_line_end filebuffer
-      else mk_v2 x' cursor.y
+  let go_line_start = cursor_position_bridge go_line_start'
+  let go_line_end   = cursor_position_bridge go_line_end'
+  let go_line_up    = cursor_position_bridge go_line_up'
+  let go_line_down  = cursor_position_bridge go_line_down'
+  let go_line_left  = cursor_position_bridge go_line_left'
+  let go_line_right = cursor_position_bridge go_line_right'
 
   let movement =
     let open Move in
@@ -3187,7 +3193,7 @@ module Ciseau = struct
 
     | Keys.Lower_w      -> MoveModeOp Movement.Words
     | Keys.Upper_w      -> MoveModeOp Movement.Blocks
-    | Keys.Lower_b      -> MoveModeOp Movement.Lines
+    | Keys.Lower_v      -> MoveModeOp Movement.Lines
     | Keys.Upper_b      -> MoveModeOp Movement.Lines
     | Keys.Lower_c      -> MoveModeOp Movement.Chars
     | Keys.Lower_s      -> MoveModeOp Movement.Selection
@@ -3197,8 +3203,8 @@ module Ciseau = struct
 
     | Keys.ArrowUp      -> MoveOp Movement.Up
     | Keys.ArrowDown    -> MoveOp Movement.Down
-    | Keys.ArrowRight   -> MoveOp Movement.Left
-    | Keys.ArrowLeft    -> MoveOp Movement.Right
+    | Keys.ArrowLeft    -> MoveOp Movement.Left
+    | Keys.ArrowRight   -> MoveOp Movement.Right
     | Keys.Lower_k      -> MoveOp Movement.Up
     | Keys.Lower_j      -> MoveOp Movement.Down
     | Keys.Lower_l      -> MoveOp Movement.Right
@@ -3226,6 +3232,7 @@ module Ciseau = struct
     | Keys.Upper_g
     | Keys.Upper_m
     | Keys.Upper_z
+    | Keys.Lower_b
     | Keys.Unknown _
     | Keys.Escape_Z
     | Keys.Backspace
