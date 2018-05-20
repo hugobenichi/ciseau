@@ -1771,12 +1771,12 @@ module WordFinder = BaseTokenFinder(struct
 end)
 module WordMovement = TokenMovement(WordFinder)
 
-module LineMovement = struct
-
   let cursor_position_bridge fn filebuffer p =
     let c = Filebuffer.cursor filebuffer p in
     fn c ;
     FilebufferCursor.pos c
+
+module LineMovement = struct
 
   let go_line_start'  = FilebufferCursor.char_first
   let go_line_end'    = FilebufferCursor.char_last
@@ -1815,24 +1815,8 @@ end
 
 module CharMovement = struct
 
-  let go_char_left filebuffer cursor =
-    if cursor.x = 0
-      then
-        let cursor' = LineMovement.go_line_up filebuffer cursor in
-        (if cursor' = cursor
-          then cursor
-          else LineMovement.go_line_end filebuffer cursor')
-      else mk_v2 (cursor.x - 1) cursor.y
-
-  let go_char_right filebuffer cursor =
-    let x' = Filebuffer.last_cursor_x filebuffer cursor.y in
-    if cursor.x >= x'
-      then
-        let cursor' = LineMovement.go_line_down filebuffer cursor in
-        (if cursor = cursor'
-          then cursor
-          else LineMovement.go_line_start filebuffer cursor')
-      else mk_v2 (cursor.x + 1) cursor.y
+  let go_char_left = cursor_position_bridge FilebufferCursor.char_prev
+  let go_char_right = cursor_position_bridge FilebufferCursor.char_next
 
   let noop any cursor = cursor
 
