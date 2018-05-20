@@ -1320,7 +1320,7 @@ module type TextCursor = sig
 end
 
 (* TextCursor impl for an array of strings *)
-module FilebufferCursor : sig
+module Cursor : sig
 
   type t
   include TextCursor with type t := t
@@ -1441,7 +1441,7 @@ module Filebuffer : sig
   val filename            : t -> string
   val file_length         : t -> int
   val search              : t -> string -> rect array
-  val cursor              : t -> v2 -> FilebufferCursor.t
+  val cursor              : t -> v2 -> Cursor.t
 
   (* TODO: eliminate in favor of a text cursor ! *)
   val line_at             : t -> int -> string
@@ -1464,7 +1464,7 @@ end = struct
   }
 
   let cursor { buffer } { x ; y } =
-    FilebufferCursor.mk_cursor buffer x y
+    Cursor.mk_cursor buffer x y
 
   let read_file f =
     let rec loop lines ch =
@@ -1559,15 +1559,14 @@ module type TokenFinder = sig
 end
 
 
+(* CLEANUP: don't forget to delete me once all movement code is migrated to cursor *)
+let cursor_position_bridge fn filebuffer p =
+  let c = Filebuffer.cursor filebuffer p in
+  fn c ;
+  Cursor.pos c
+
+
 module TokenMovement (T : TokenFinder) : sig
-  val go_token_first  : Filebuffer.t -> int -> v2 option
-  val go_token_last   : Filebuffer.t -> int -> v2 option
-  val go_token_left   : Filebuffer.t -> v2 -> v2
-  val go_token_right  : Filebuffer.t -> v2 -> v2
-  val go_token_up     : Filebuffer.t -> v2 -> v2
-  val go_token_down   : Filebuffer.t -> v2 -> v2
-  val go_token_start  : Filebuffer.t -> v2 -> v2
-  val go_token_end    : Filebuffer.t -> v2 -> v2
   val movement        : Move.t -> Filebuffer.t -> v2 -> v2
 end = struct
   open Token
@@ -1588,29 +1587,29 @@ end = struct
   let token_start_to_cursor y { start } = mk_v2 start y
   let token_stop_to_cursor y { stop }   = mk_v2 (stop - 1) y
 
-  let go_token_start filebuffer cursor =
-    Filebuffer.line_at filebuffer cursor.y
-      |> find_token cursor.x
-      |> map (token_start_to_cursor cursor.y)
-      |> get_or cursor
+  let go_token_start cursor =
+    Cursor.line_get cursor
+      |> find_token (Cursor.x cursor)
+      |> function
+          | None -> ()
+          | Some { start } -> Cursor.goto ~x:start cursor
 
-  let go_token_end filebuffer cursor =
-    Filebuffer.line_at filebuffer cursor.y
-      |> find_token cursor.x
-      |> map (token_stop_to_cursor cursor.y)
-      |> get_or cursor
+  let go_token_end cursor =
+    Cursor.line_get cursor
+      |> find_token (Cursor.x cursor)
+      |> function
+          | None -> ()
+          | Some { stop } -> Cursor.goto ~x:(stop - 1) cursor
 
-  let rec go_token_first filebuffer y =
-    if y > Filebuffer.last_line_index filebuffer
-      then None
-      else
-        T.next (Filebuffer.line_at filebuffer y) None
-          |> map (token_start_to_cursor y)
-          |> function
-              | None   -> go_token_first filebuffer (y + 1)
-              | cursor -> cursor
+  let rec go_token_first cursor =
+    Cursor.char_zero cursor ;
+    T.next (Cursor.line_get cursor) None
+      |> function
+        | Some { start } -> Cursor.goto ~x:start cursor
+        | None           -> if Cursor.line_next cursor = Continue
+                              then go_token_first cursor
 
-  let go_token_right filebuffer cursor =
+  let go_token_right cursor =
     let rec loop line x =
       function
         | None                        -> None
@@ -1619,28 +1618,28 @@ end = struct
                                           |> T.next line
                                           |> loop line x
     in
-      let line = Filebuffer.line_at filebuffer cursor.y in
-      loop line cursor.x (T.next line None)
+      let line = Cursor.line_get cursor in
+      loop line (Cursor.x cursor) (T.next line None)
         |> function
-            | Some tok  -> mk_v2 tok.start cursor.y
-            | None      -> go_token_first filebuffer (cursor.y + 1)
-        |> get_or cursor
+            | Some { start } -> Cursor.goto ~x:start cursor
+            | None           -> if Cursor.line_next cursor = Continue
+                                  then go_token_first cursor
 
-  let rec go_token_last filebuffer y =
+  let rec go_token_last cursor =
     let rec loop line tok_opt =
       match (tok_opt, T.next line tok_opt) with
-        | (None,      None)         -> None
-        | (Some last, None)         -> Some (mk_v2 last.start y)
-        | (_,         next_tok_opt) -> loop line next_tok_opt
+        | (None, None)         -> None
+        | (tok,  None)         -> tok
+        | (_,    next_tok_opt) -> loop line next_tok_opt
     in
-      if y < 0
-        then None
-        else loop (Filebuffer.line_at filebuffer y) None
-              |> function
-                  | None -> go_token_last filebuffer (y - 1)
-                  | last -> last
+      Cursor.char_last cursor ;
+      loop (Cursor.line_get cursor) None
+        |> function
+            | Some { start } -> Cursor.goto ~x:start cursor
+            | None           -> if Cursor.line_prev cursor = Continue
+                                  then go_token_last cursor
 
-  let go_token_left filebuffer cursor =
+  let go_token_left cursor =
     let rec loop line x tok_opt =
       T.next line tok_opt
         |> function
@@ -1648,13 +1647,11 @@ end = struct
             | Some tok when token_contains x tok  -> tok_opt
             | next_tok_opt                        -> loop line x next_tok_opt
     in
-      if cursor.y < 0
-        then cursor
-        else loop (Filebuffer.line_at filebuffer cursor.y) cursor.x None
-          |> (function
-              | None      -> go_token_last filebuffer (cursor.y - 1)
-              | Some tok  -> Some (mk_v2 tok.start cursor.y))
-          |> get_or cursor
+      loop (Cursor.line_get cursor) (Cursor.x cursor) None
+        |> function
+            | Some { start } -> Cursor.goto ~x:start cursor
+            | None           -> if Cursor.line_prev cursor = Continue
+                                  then go_token_last cursor
 
   let find_token_nth x line =
     let rec loop line x n =
@@ -1677,45 +1674,39 @@ end = struct
     in
       loop line n (T.next line None)
 
-  let go_token_down filebuffer cursor =
-    let rec loop filebuffer y n =
-      if y > Filebuffer.last_line_index filebuffer
-        then None
-        else
-          go_token_nth n(Filebuffer.line_at filebuffer y)
-            |> map (token_start_to_cursor y)
+  let go_token_down cursor =
+    let rec loop cursor n =
+      if Cursor.line_next cursor = Continue
+        then
+          go_token_nth n (Cursor.line_get cursor)
             |> function
-                | None  -> loop filebuffer (y + 1) n
-                | token -> token
+                | Some { start } -> Cursor.goto ~x:start cursor
+                | None           -> loop cursor n
     in
-      find_token_nth cursor.x (Filebuffer.line_at filebuffer cursor.y)
-        |> fmap (loop filebuffer (cursor.y + 1))
-        |> get_or cursor
+      find_token_nth (Cursor.x cursor) (Cursor.line_get cursor)
+        |> map (loop cursor)
 
-  let go_token_up filebuffer cursor =
-    let rec loop filebuffer y n =
-      if y < 0
-        then None
-        else
-          go_token_nth n (Filebuffer.line_at filebuffer y)
-            |> map (token_start_to_cursor y)
+  let go_token_up cursor =
+    let rec loop cursor n =
+      if Cursor.line_prev cursor = Continue
+        then
+          go_token_nth n (Cursor.line_get cursor)
             |> function
-                | None  -> loop filebuffer (y - 1) n
-                | token -> token
+              | Some { start } -> Cursor.goto ~x:start cursor
+              | None  -> loop cursor n
     in
-      find_token_nth cursor.x (Filebuffer.line_at filebuffer cursor.y)
-        |> fmap (loop filebuffer (cursor.y - 1))
-        |> get_or cursor
+      find_token_nth (Cursor.x cursor) (Cursor.line_get cursor)
+        |> map (loop cursor)
 
   let movement =
     let open Move in
     function
-      | Left    -> go_token_left
-      | Right   -> go_token_right
-      | Up      -> go_token_up
-      | Down    -> go_token_down
-      | Start   -> go_token_start
-      | End     -> go_token_end
+      | Left    -> cursor_position_bridge go_token_left
+      | Right   -> cursor_position_bridge go_token_right
+      | Up      -> cursor_position_bridge go_token_up
+      | Down    -> cursor_position_bridge go_token_down
+      | Start   -> cursor_position_bridge go_token_start
+      | End     -> cursor_position_bridge go_token_end
 end
 
 
@@ -1773,33 +1764,27 @@ module DigitMovement = TokenMovement(DigitFinder)
 
 module WordFinder = BaseTokenFinder(struct
   let kind_of c =
-    if is_alphanum c || c == '_'
+    if is_alphanum c || c = '_'
       then Include
       else Exclude
 end)
 module WordMovement = TokenMovement(WordFinder)
 
 
-(* CLEANUP: don't forget to delete me once all movement code is migrated to cursor *)
-let cursor_position_bridge fn filebuffer p =
-  let c = Filebuffer.cursor filebuffer p in
-  fn c ;
-  FilebufferCursor.pos c
-
 module LineMovement = struct
 
-  let go_line_start'  = FilebufferCursor.char_zero
-  let go_line_end'    = FilebufferCursor.char_last
-  let go_line_up'     = FilebufferCursor.line_prev
-  let go_line_down'   = FilebufferCursor.line_next
+  let go_line_start'  = Cursor.char_zero
+  let go_line_end'    = Cursor.char_last
+  let go_line_up'     = Cursor.line_prev
+  let go_line_down'   = Cursor.line_next
 
   let go_line_left' cursor =
-    FilebufferCursor.line_prev cursor |> ignore ;
-    FilebufferCursor.char_first cursor
+    Cursor.line_prev cursor |> ignore ;
+    Cursor.char_first cursor
 
   let go_line_right' cursor =
-    FilebufferCursor.line_next cursor |> ignore ;
-    FilebufferCursor.char_last cursor
+    Cursor.line_next cursor |> ignore ;
+    Cursor.char_last cursor
 
   let go_line_start = cursor_position_bridge go_line_start'
   let go_line_end   = cursor_position_bridge go_line_end'
@@ -1822,8 +1807,8 @@ end
 
 module CharMovement = struct
 
-  let go_char_left = cursor_position_bridge FilebufferCursor.char_prev
-  let go_char_right = cursor_position_bridge FilebufferCursor.char_next
+  let go_char_left = cursor_position_bridge Cursor.char_prev
+  let go_char_right = cursor_position_bridge Cursor.char_next
 
   let noop any cursor = cursor
 
@@ -1843,7 +1828,7 @@ end
 
 module ParagraphMovement = struct
 
-  open FilebufferCursor
+  open Cursor
 
   let go_while cursor_condition cursor_step_fn cursor =
     let c = ref Continue in
@@ -1900,6 +1885,7 @@ module ParagraphMovement = struct
 end
 
 
+(* TODO: migrate to Cursor *)
 module type DelimiterKind = sig
   (* Returns:
    *    +1 for left delimiter: '(', '[', '{'
@@ -2070,6 +2056,7 @@ module MovementContext = struct
   }
 end
 
+(* TODO: migrate to Cursor *)
 module SelectionMovement = struct
   open MovementContext
 
