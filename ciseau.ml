@@ -1304,6 +1304,7 @@ module type TextCursor = sig
 
   val line_get        : t -> string
   val line_is_empty   : t -> bool
+  val line_not_empty  : t -> bool
   val line_next       : t -> step
   val line_prev       : t -> step
   val line_first      : t -> unit
@@ -1312,7 +1313,8 @@ module type TextCursor = sig
   val char_get        : t -> char       (* TODO: what to do for empty lines ?? *)
   val char_next       : t -> step       (* move to next char, or return Nomore if cursor is at end of line *)
   val char_prev       : t -> step       (* move to previous char, or return Nomore if cursor is at beginning of line *)
-  val char_first      : t -> unit
+  val char_zero       : t -> unit
+  val char_first      : t -> unit       (* go to first non-space character *)
   val char_last       : t -> unit
 
 end
@@ -1366,6 +1368,8 @@ end = struct
 
   let line_is_empty cursor = cursor |> line_get |> slen |> (=) 0
 
+  let line_not_empty cursor = cursor |> line_get |> slen |> (<) 0
+
   let line_next cursor =
     let y' = cursor.y + 1 in
     if y' < alen cursor.text
@@ -1408,8 +1412,14 @@ end = struct
       )
       else Nomore
 
-  let char_first cursor = goto ~x:0 cursor
+  let char_zero cursor = goto ~x:0 cursor
   let char_last cursor = goto ~x:max_int cursor
+
+  let char_first cursor =
+    goto ~x:0 cursor ;
+    if not (line_is_empty cursor) then
+      while cursor |> char_get |> is_space && char_next cursor = Continue
+      do () done
 
   let line_first cursor = goto ~y:0 cursor
   let line_last cursor = goto ~y:max_int cursor
@@ -1550,8 +1560,6 @@ end
 
 
 module TokenMovement (T : TokenFinder) : sig
-  (* Fix these two signatures for plugin into other Movement modules using go_token_first
-   * and go_token_last *)
   val go_token_first  : Filebuffer.t -> int -> v2 option
   val go_token_last   : Filebuffer.t -> int -> v2 option
   val go_token_left   : Filebuffer.t -> v2 -> v2
@@ -1771,24 +1779,23 @@ module WordFinder = BaseTokenFinder(struct
 end)
 module WordMovement = TokenMovement(WordFinder)
 
-  let cursor_position_bridge fn filebuffer p =
-    let c = Filebuffer.cursor filebuffer p in
-    fn c ;
-    FilebufferCursor.pos c
+
+(* CLEANUP: don't forget to delete me once all movement code is migrated to cursor *)
+let cursor_position_bridge fn filebuffer p =
+  let c = Filebuffer.cursor filebuffer p in
+  fn c ;
+  FilebufferCursor.pos c
 
 module LineMovement = struct
 
-  let go_line_start'  = FilebufferCursor.char_first
+  let go_line_start'  = FilebufferCursor.char_zero
   let go_line_end'    = FilebufferCursor.char_last
   let go_line_up'     = FilebufferCursor.line_prev
   let go_line_down'   = FilebufferCursor.line_next
 
   let go_line_left' cursor =
     FilebufferCursor.line_prev cursor |> ignore ;
-    FilebufferCursor.char_first cursor ;
-    while cursor |> FilebufferCursor.line_is_empty |> not && cursor |> FilebufferCursor.char_get |> is_space do
-      FilebufferCursor.char_next cursor |> ignore
-    done
+    FilebufferCursor.char_first cursor
 
   let go_line_right' cursor =
     FilebufferCursor.line_next cursor |> ignore ;
@@ -1836,92 +1843,60 @@ end
 
 module ParagraphMovement = struct
 
-  (* Go up until first line reached, or empty line above *)
-  let rec find_para_start filebuffer y =
-    if y = 0 || Filebuffer.is_line_empty filebuffer (y - 1)
-      then y
-      else find_para_start filebuffer (y - 1)
+  open FilebufferCursor
 
-  (* Go down until last line reached, or empty line below *)
-  let rec find_para_end filebuffer y =
-    let y' = y + 1 in
-    if y' = Filebuffer.file_length filebuffer || Filebuffer.is_line_empty filebuffer y'
-      then y
-      else find_para_end filebuffer y'
+  let go_while cursor_condition cursor_step_fn cursor =
+    let c = ref Continue in
+    let m = ref false in
+    while !c = Continue && cursor_condition cursor do
+      c := cursor_step_fn cursor ;
+      m := !m || ( !c = Continue )
+    done ;
+    !m
 
-  (* Go up until first line reached, or non-empty line above *)
-  let rec find_non_empty_above filebuffer y =
-    if y = 0 || Filebuffer.is_line_empty filebuffer (y - 1) |> not
-      then y
-      else find_non_empty_above filebuffer (y - 1)
+  let go_para_start cursor =
+    if go_while line_not_empty line_prev cursor
+      then line_next cursor |> ignore ;
+    char_first cursor
 
-  (* Go down until last line reached, or empty line below *)
-  let rec find_non_empty_below filebuffer y =
-    let y' = y + 1 in
-    if y' = Filebuffer.file_length filebuffer || Filebuffer.is_line_empty filebuffer y' |> not
-      then y
-      else find_non_empty_below filebuffer y'
+  let go_para_end cursor =
+    if go_while line_not_empty line_next cursor
+      then line_prev cursor |> ignore ;
+    char_last cursor
 
-  (* Go to first word of the current paragraph, or nowhere if cursor not inside paragraph *)
-  let go_para_start filebuffer cursor =
-    if Filebuffer.is_line_empty filebuffer cursor.y
-      then cursor
-      else
-        find_para_start filebuffer cursor.y
-          |> BlockMovement.go_token_first filebuffer
-          |> function
-              | None          -> cursor
-              | Some cursor'  -> cursor'
+  let go_para_up cursor =
+    go_para_start cursor ;
+    line_prev cursor |> ignore ;
+    if go_while line_is_empty line_prev cursor
+      then go_para_start cursor
 
-  (* Go to last char of last line of paragraph, or nowhere if cursor not inside paragraph *)
-  let go_para_end filebuffer cursor =
-    if Filebuffer.is_line_empty filebuffer cursor.y
-      then cursor
-      else
-        let y' = find_para_end filebuffer cursor.y in
-        mk_v2 (Filebuffer.last_cursor_x filebuffer y') y'
+  let go_para_down cursor =
+    go_para_end cursor ;
+    line_next cursor |> ignore ;
+    if go_while line_is_empty line_next cursor
+      then go_para_start cursor
 
-  let go_para_up filebuffer cursor =
-    let y' = find_para_start filebuffer cursor.y in
-    if y' = 0
-      then cursor
-      else
-        let y'' = find_non_empty_above filebuffer y' in
-        if y'' = 0
-          then cursor
-          else go_para_start filebuffer (mk_v2 0 (y'' - 1))
+  let go_para_left cursor =
+    go_para_start cursor ;
+    line_prev cursor |> ignore ;
+    if go_while line_is_empty line_prev cursor
+      then go_para_end cursor
 
-  let go_para_down filebuffer cursor =
-    let y' = find_para_end filebuffer cursor.y in
-    if y' = 0
-      then cursor
-      else
-        let y'' = 1 + find_non_empty_below filebuffer y' in
-        if y'' = Filebuffer.file_length filebuffer
-          then cursor
-          else go_para_start filebuffer (mk_v2 0 y'')
+  let go_para_right cursor =
+    go_para_end cursor ;
+    line_next cursor |> ignore ;
+    if go_while line_is_empty line_next cursor
+      then go_para_end cursor
 
-  let go_para_left filebuffer cursor =
-    let cursor' = go_para_up filebuffer cursor in
-    if cursor = cursor'
-      then cursor'
-      else go_para_end filebuffer cursor'
-
-  let go_para_right filebuffer cursor =
-    let cursor' = go_para_down filebuffer cursor in
-    if cursor = cursor'
-      then cursor'
-      else go_para_end filebuffer cursor'
-
-  let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
+  let movement =
     let open Move in
     function
-      | Start   -> go_para_start
-      | End     -> go_para_end
-      | Left    -> go_para_left
-      | Right   -> go_para_right
-      | Up      -> go_para_up
-      | Down    -> go_para_down
+      | Start   -> cursor_position_bridge go_para_start
+      | End     -> cursor_position_bridge go_para_end
+      | Left    -> cursor_position_bridge go_para_left
+      | Right   -> cursor_position_bridge go_para_right
+      | Up      -> cursor_position_bridge go_para_up
+      | Down    -> cursor_position_bridge go_para_down
 end
 
 
@@ -3398,10 +3373,7 @@ let () =
 (* next TODOs:
  *
  * rendering:
- *  - bug: in paragraph mode when selecting the top most paragraph I get stuck there !
- *  - bug: fix the cursor desired position offset caused by line breaking in overflow mode
  *  - better management of screen dragging for horizontal scrolling
- *  - remove intermediary framebuffer experiment, only support CLip mode.
  *
  *  movements:
  *  - implement easymotion
