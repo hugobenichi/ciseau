@@ -1488,16 +1488,9 @@ module Filebuffer : sig
   val search              : t -> string -> rect array
   val cursor              : t -> v2 -> Cursor.t
 
-  (* TODO: eliminate in favor of a text cursor ! *)
+  (* TODO: migrate fill_framebuffer to text cursor and eliminate these two *)
   val line_at             : t -> int -> string
-  val char_at             : t -> int -> int -> char
   val line_length         : t -> int -> int
-  val is_line_empty       : t -> int -> bool
-  val is_valid_cursor     : t -> int -> int -> bool
-  val last_line_index     : t -> int
-  val last_cursor_x       : t -> int -> int
-  val last_cursor_x2      : t -> int -> int
-
 
 end = struct
   type t = {
@@ -1546,26 +1539,8 @@ end = struct
   let line_length { buffer } y = array_get buffer y |> slen (* TODO: take into account '\t' *)
 
   let file_length { buflen } = buflen
-  let last_line_index { buflen } = buflen - 1
   let filename { filename } = filename
   let header { header } = header
-
-  let is_line_empty filebuffer y = (line_length filebuffer y = 0)
-
-  (* This function should generate bugs: callers cannot distinguish strings with length 1 and the empty string *)
-  let last_cursor_x filebuffer y = max 0 ((line_length filebuffer y) - 1)
-
-  (* This function should return an option for empty lines *)
-  let last_cursor_x2 filebuffer y = (line_length filebuffer y) - 1
-
-  let is_valid_cursor filebuffer x y = (0 <= y)
-                                    && (y < file_length filebuffer)
-                                    && line_length filebuffer y > 0
-                                    && (0 <= x)
-                                    && (x <= last_cursor_x filebuffer y)
-
-  let char_at filebuffer x y =
-    string_at (line_at filebuffer y) x
 
   let search filebuffer target =
     let rec loop_in_one_line width r s y xi acc =
@@ -2170,25 +2145,18 @@ module Movement (* TODO: formalize module signature *) = struct
 
   let page_offset = Config.default.page_size
 
-  let move_file_start filebuffer any = mk_v2 0 0
-  let move_file_end   filebuffer any = mk_v2 0 (Filebuffer.last_line_index filebuffer)
+  let move_file_start = Cursor.goto ~x:0 ~y:0
+  let move_file_end   = Cursor.line_last
 
-  let move_page_up filebuffer { x ; y } =
-    let y' = max (y - page_offset) 0
-    in {
-      x = min x (Filebuffer.last_cursor_x filebuffer y') ;
-      y = y' ;
-    }
+  let move_page_up cursor =
+    let y' = (Cursor.y cursor) - page_offset in
+    let y'' = max 0 y' in
+    Cursor.goto ~y:y'' cursor
 
-  let move_page_down filebuffer { x ; y } =
-    let y' = min (y + page_offset) (Filebuffer.last_line_index filebuffer)
-    in {
-      x = min x (Filebuffer.last_cursor_x filebuffer y') ;
-      y = y' ;
-    }
-
-  let noop_move mov filebuffer cursor =
-    cursor
+  let move_page_down cursor =
+    let y' = (Cursor.y cursor) + page_offset in
+    let y'' = max 0 y' in
+    Cursor.goto ~y:y'' cursor
 
   let move movement_context =
     function
@@ -2211,10 +2179,10 @@ module Movement (* TODO: formalize module signature *) = struct
       | Down          -> move movement_context mode Move.Down
       | Start         -> move movement_context mode Move.Start
       | End           -> move movement_context mode Move.End
-      | PageUp        -> move_page_up
-      | PageDown      -> move_page_down
-      | FileStart     -> move_file_start
-      | FileEnd       -> move_file_end
+      | PageUp        -> cursor_position_bridge move_page_up
+      | PageDown      -> cursor_position_bridge move_page_down
+      | FileStart     -> cursor_position_bridge move_file_start
+      | FileEnd       -> cursor_position_bridge move_file_end
 end
 
 
@@ -2229,7 +2197,6 @@ module Fileview : sig
   val apply_movement          : Movement.movement -> v2 -> t -> t
   val cursor                  : t -> v2
   val adjust_view             : v2 -> t -> t
-  val last_line_index         : t -> int
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
   val toggle_show_token       : t -> t
@@ -2303,9 +2270,6 @@ end = struct
 
   let view_height { view ; filebuffer } =
     (Filebuffer.file_length filebuffer) - view.y
-
-  let last_line_index { filebuffer } =
-    Filebuffer.last_line_index filebuffer
 
   let adjust_view { x ; y } t =
     let text_height = y - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
