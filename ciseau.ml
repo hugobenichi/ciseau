@@ -1317,6 +1317,9 @@ module type TextCursor = sig
   val char_first      : t -> unit       (* go to first non-space character *)
   val char_last       : t -> unit
 
+  val prev            : t -> step
+  val next            : t -> step
+
 end
 
 (* TextCursor impl for an array of strings *)
@@ -1423,6 +1426,48 @@ end = struct
 
   let line_first cursor = goto ~y:0 cursor
   let line_last cursor = goto ~y:max_int cursor
+
+  let do_if_no_more fn cursor =
+    function
+      | Nomore    -> fn cursor
+      | Continue  -> Continue
+
+  (* These two next functions are ugly ! Isn't there a better way ?? *)
+
+  let line_prev_non_empty cursor =
+    if line_prev cursor = Nomore
+      then Nomore
+      else (
+        let step = ref Continue in
+        while line_is_empty cursor && !step = Continue do
+          step := line_prev cursor
+        done ;
+        if !step = Continue
+          then char_last cursor ;
+        !step
+      )
+
+  let line_next_non_empty cursor =
+    if line_next cursor = Nomore
+      then Nomore
+      else (
+        let step = ref Continue in
+        while line_is_empty cursor && !step = Continue do
+          step := line_next cursor
+        done ;
+        if !step = Continue
+          then char_zero cursor ;
+        !step
+      )
+
+  let prev cursor =
+    char_prev cursor
+      |> do_if_no_more line_prev_non_empty cursor
+
+  let next cursor =
+    char_next cursor
+      |> do_if_no_more line_next_non_empty cursor
+
 
   (* Conversion plan for introducing cursors little by little:
    *  1) add a vec -> cursor and cursor -> vec conversion fns
@@ -1902,123 +1947,78 @@ module DelimMovement(K : DelimiterKind) = struct
   let is_right k = (k = -1)
 
   (* Returns kind score of char at x,y position, or 0 if x,y is not valid *)
-  let get_kind_at filebuffer x y =
-    if Filebuffer.is_valid_cursor filebuffer x y
-      then Filebuffer.char_at filebuffer x y |> K.get_kind
-      else 0
+  let get_kind_at = Cursor.char_get >> K.get_kind
 
-  (* Go to first 'left' delimiter on the left of current position *)
-  let rec go_first_left filebuffer x y skip =
-    if x < 0
-      then
-        (if y = 0
-          then None
-          else
-            let y' = y - 1 in
-            let x' = Filebuffer.last_cursor_x filebuffer y' in
-            go_first_left filebuffer x' y' false)
-      else
-        if not skip && get_kind_at filebuffer x y |> is_left
-          then Some (mk_v2 x y)
-          else go_first_left filebuffer (x - 1) y false
+  (* Go to first 'left' delimiter on the left of current position. *)
+  let rec go_first_left cursor skip =
+    if not skip && cursor |> get_kind_at |> is_left || Cursor.prev cursor = Nomore
+      then ()
+      else go_first_left cursor false
 
   (* Go to first 'left' delimiter on the right of current position *)
-  let rec go_first_right filebuffer x y skip =
-    if x >= Filebuffer.line_length filebuffer y
-      then
-        (if y = Filebuffer.last_line_index filebuffer
-          then None
-          else go_first_right filebuffer 0 (y + 1) false)
-      else
-        if not skip && get_kind_at filebuffer x y |> is_left
-          then Some (mk_v2 x y)
-          else go_first_right filebuffer (x + 1) y false
+  let rec go_first_right cursor skip =
+    if not skip && cursor |> get_kind_at |> is_left || Cursor.next cursor = Nomore
+      then ()
+      else go_first_right cursor false
 
   (* Go to first 'right' delimiter on the left of current position *)
-  let rec go_first_end_left filebuffer x y skip =
-    if x < 0
-      then
-        (if y = 0
-          then None
-          else
-            let y' = y - 1 in
-            let x' = Filebuffer.last_cursor_x filebuffer y' in
-            go_first_end_left filebuffer x' y' false)
-      else
-        if not skip && get_kind_at filebuffer x y |> is_right
-          then Some (mk_v2 x y)
-          else go_first_end_left filebuffer (x - 1) y false
+  let rec go_first_end_left cursor skip =
+    if not skip && cursor |> get_kind_at |> is_right || Cursor.prev cursor = Nomore
+      then ()
+      else go_first_end_left cursor false
 
   (* Move cursor left until balance is 0 *)
-  let rec go_left filebuffer x y b =
-    if x < 0
-      then
-        (if y = 0
-          then None
-          else go_left filebuffer (Filebuffer.last_cursor_x filebuffer (y - 1)) (y - 1) b)
-      else
-        let b' = b + (get_kind_at filebuffer x y) in
-        if b' = 0
-          then Some (mk_v2 x y)
-          else go_left filebuffer (x - 1) y b'
+  let rec go_left cursor b =
+    let b' = b + (get_kind_at cursor) in
+    if b' = 0 || Cursor.prev cursor = Nomore
+      then ()
+      else go_left cursor b'
 
   (* Move cursor right until balance is 0 *)
-  let rec go_right filebuffer x y b =
-    if x >= Filebuffer.line_length filebuffer y
-      then
-        (if y = Filebuffer.last_line_index filebuffer
-          then None
-          else go_right filebuffer 0 (y + 1) b)
-      else
-        let b' = b + (get_kind_at filebuffer x y) in
-        if b' = 0
-          then Some (mk_v2 x y)
-          else go_right filebuffer (x + 1) y b'
+  let rec go_right cursor b =
+    let b' = b + (get_kind_at cursor) in
+    if b' = 0 || Cursor.next cursor = Nomore
+      then ()
+      else go_right cursor b'
 
-  let go_delim_left filebuffer cursor =
-    go_first_left filebuffer cursor.x cursor.y true |> get_or cursor
+  let go_delim_left cursor =
+    go_first_left cursor true
 
-  let go_delim_end_left filebuffer cursor =
-    go_first_end_left filebuffer cursor.x cursor.y true |> get_or cursor
+  let go_delim_end_left cursor =
+    go_first_end_left cursor true
 
-  let go_delim_right filebuffer cursor =
-    go_first_right filebuffer cursor.x cursor.y true |> get_or cursor
+  let go_delim_right cursor =
+    go_first_right cursor true
 
-  let go_delim_start filebuffer cursor =
-    let k = get_kind_at filebuffer cursor.x cursor.y in
-    if is_left k
-      then cursor
-      else go_left filebuffer cursor.x cursor.y (0 - k - 1)
-            |> get_or cursor
+  let go_delim_start cursor =
+    let k = get_kind_at cursor in
+    if not (is_left k)
+      then go_left cursor (0 - k - 1)
 
-  let go_delim_end filebuffer cursor =
-    let k = get_kind_at filebuffer cursor.x cursor.y in
-    if is_right k
-      then cursor
-      else go_right filebuffer cursor.x cursor.y (1 - k)
-            |> get_or cursor
+  let go_delim_end cursor =
+    let k = get_kind_at cursor in
+    if not (is_right k)
+      then go_right cursor (1 - k)
 
-  let go_delim_up filebuffer cursor =
-    cursor
-      |> go_delim_start filebuffer
-      |> go_delim_end_left filebuffer
-      |> go_delim_start filebuffer
+  let go_delim_up cursor =
+    go_delim_start cursor ;
+    go_delim_end_left cursor ;
+    go_delim_start cursor
 
-  let go_delim_down filebuffer cursor =
-    cursor
-      |> go_delim_start filebuffer
-      |> go_delim_end filebuffer
-      |> go_delim_right filebuffer
+  let go_delim_down cursor =
+    go_delim_start cursor ;
+    go_delim_end cursor ;
+    go_delim_right cursor
 
   let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
     let open Move in
     function
-      | Left    -> go_delim_left
-      | Right   -> go_delim_right
-      | Up      -> go_delim_up
-      | Down    -> go_delim_down
-      | Start   -> go_delim_start
-      | End     -> go_delim_end
+      | Left    -> cursor_position_bridge go_delim_left
+      | Right   -> cursor_position_bridge go_delim_right
+      | Up      -> cursor_position_bridge go_delim_up
+      | Down    -> cursor_position_bridge go_delim_down
+      | Start   -> cursor_position_bridge go_delim_start
+      | End     -> cursor_position_bridge go_delim_end
 end
 
 
