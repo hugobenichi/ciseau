@@ -80,6 +80,8 @@ module ArrayOperations = struct
   let blen = Bytes.length
   let slen = String.length
 
+  let astop ary = (alen ary) - 1
+
   let check_bounds src_offset src_len =
     if src_offset < 0 || src_len <= src_offset
       then fail (Printf.sprintf "set/get out of bounds: offset %d for range 0..%d" src_offset src_len)
@@ -1333,7 +1335,7 @@ module Cursor : sig
 end = struct
 
   type t = {
-    text  :  string array ;
+    text          : string array ;
     mutable x     : int ;
     mutable y     : int ;
   }
@@ -2187,6 +2189,82 @@ end
 
 
 type redraw_level = Nodraw | FrameDirty | Redraw
+
+
+(* TextView is an intermediary step in writing a filebuffer section on the screen
+ * It helps with layout composition. *)
+module TextView : sig
+  type t
+
+  val mk_textview               : int -> t
+  val fill                      : t -> int -> Cursor.t -> unit
+  val relative_lineno           : t -> unit
+  val h_offset                  : t -> int -> unit
+
+end = struct
+
+  (* TODO: also count tabs for elastic tabs ! *)
+  type t = {
+    linenos           : int array ;
+    lines             : string array ;
+    line_offsets      : int array ;
+    line_lens         : int array ;
+    mutable cursor_x  : int ;
+    mutable cursor_y  : int ;
+    (* Consider adding h_offset and v_offset ? *)
+  }
+
+  let no_lineno = min_int (* Used to indicate wrapped lines *)
+
+  let mk_textview len = {
+    linenos         = Array.make len 0 ;    (* When a line is wrapped, its lineno is 'no_lineno' *)
+    lines           = Array.make len "" ;
+    line_offsets    = Array.make len 0 ;
+    line_lens       = Array.make len 0 ;
+    cursor_x        = 0 ;
+    cursor_y        = 0 ;
+  }
+
+  let rec fill_lines textview cursor i =
+    let line = Cursor.line_get cursor in
+    let lineno = 1 + (Cursor.y cursor) in
+    array_set textview.linenos i lineno ;
+    array_set textview.lines i line ;
+    array_set textview.line_offsets i 0 ;
+    array_set textview.line_lens i (slen line) ;
+    (* BUG? is this skipping the last line ? *)
+    if Cursor.line_next cursor = Continue && i + 1 < alen textview.lines
+      then fill_lines textview cursor (i + 1)
+
+  let fill textview v_offset cursor =
+    let lineno_zero = textview.cursor_y - v_offset in
+    assert_that (0 <= lineno_zero) ;
+    assert_that (0 <= v_offset) ;
+    assert_that (v_offset < alen textview.lines) ;
+    textview.cursor_x <- Cursor.x cursor ;
+    textview.cursor_y <- Cursor.y cursor - v_offset ;
+    Cursor.goto ~y:lineno_zero cursor ;
+    fill_lines textview cursor 0
+
+  let relative_lineno textview =
+    for i = 0 to astop textview.linenos do
+      let lineno = textview.linenos.(i) in
+      if lineno > no_lineno
+        then array_set textview.linenos i (lineno - textview.cursor_y)
+    done
+
+  let h_offset textview h_offset =
+    (* TODO: needs to be added to the position mapping matrix *)
+    textview.cursor_x <- textview.cursor_x - h_offset ;
+    for i = 0 to astop textview.line_offsets do
+      array_set textview.line_offsets i h_offset
+    done
+
+  let view_position_to_text_position x y =
+    (* This can be computed if I keep the horizontal offset, and the cursor mapping *)
+    mk_v2 x y
+
+end
 
 
 module Fileview : sig
