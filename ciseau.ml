@@ -1489,6 +1489,8 @@ module Filebuffer : sig
   val file_length         : t -> int
   val search              : t -> string -> rect array
   val cursor              : t -> v2 -> Cursor.t
+  val insert              : t -> Cursor.t -> char -> unit
+  val copy                : t -> t
 
   (* TODO: migrate fill_framebuffer to text cursor and eliminate these two *)
   val line_at             : t -> int -> string
@@ -2597,6 +2599,34 @@ end = struct
         fill_framebuffer t is_focused textscreen framebuffer ;
         Screen.put_framebuffer textscreen framebuffer ;
       )
+
+
+(* NEW fill_screen function
+
+  features to take into account:
+    correctly iterating through the text line per line
+    put the cursor at the right vertical offset
+    put beginning of lines at the right horizontal offset
+    correctly expand tabs
+      support fixed tabs columns
+      support elastic tabs
+    put all color segments
+    support mouse cursor to text cursor mapping
+    support horizontal and vertical screen dragging
+
+    screen and/or framebuffer should be enhanced with a mouse_cursor _coord_mapping
+
+    possible data transformation flow:
+
+      cursor + view height
+        -> text array  // array can be cached for the screen and reused
+        -> text array + tab annotations
+        -> text array is mutated to account for line overflow, line clipping, horizontal offset
+        -> text array is finally blitted onto screen ?
+
+        Q: where to insert selections and color blocks ?
+          text array can keep range per line of y offset and x ranges -> this guide the coloring
+*)
 
 end
 
