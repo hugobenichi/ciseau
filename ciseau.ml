@@ -1489,8 +1489,6 @@ module Filebuffer : sig
   val file_length         : t -> int
   val search              : t -> string -> rect array
   val cursor              : t -> v2 -> Cursor.t
-  val insert              : t -> Cursor.t -> char -> unit
-  val copy                : t -> t
 
   (* TODO: migrate fill_framebuffer to text cursor and eliminate these two *)
   val line_at             : t -> int -> string
