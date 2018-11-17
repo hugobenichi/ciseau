@@ -692,69 +692,13 @@ module Keys = struct
       | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
       | k                     ->  k |> code_of |> code_to_descr
 
-  let key_to_escape =
-    function
-      | Upper_z   -> Escape_Z
-      | other     -> Unknown (other |> code_of |> Char.chr)
-
-  let code_timeout    = -1  (* when read() returns 0: timeout*)
-  let code_interrupt  = -2  (* when read() is interrupted: assume SIGWINCH *)
-  let code_escape     = 27  (* starts an escape sequence *)
-
-  (* input_char equivalent with enhancements for terminal stuff. Not thread safe *)
-  let read_char =
-    let buffer = Bytes.make 1 'z' in
-    let reader () =
-      match Unix.read Unix.stdin buffer 0 1 with
-        | 0   ->  code_timeout
-        | 1   ->  Bytes.get buffer 0 |> Char.code
-        | _   -> fail "next_char failed"
-        | exception Unix.Unix_error (errcode,  fn_name, fn_param) ->
-          (match errcode with
-          | Unix.EINTR  -> code_interrupt
-          | _           -> raise (Unix.Unix_error (errcode, fn_name, fn_param)))
-    in
-      reader
-
-  let mk_mouse_click cx cy =
-    function
-      | 0
-      | 1
-      | 2   ->  Click (mk_v2 cx cy) (* TODO: distinguish buttons *)
-      | 3   ->  ClickRelease (mk_v2 cx cy)
-      | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy)
-
-  let parse_mouse_click_x10 () =
-    let cb = (read_char ()) land 3 in (* Ignore modifier keys *)
-    let cx = (read_char ()) - 33 in
-    let cy = (read_char ()) - 33 in
-    let cx' = if cx < 0 then cx + 255 else cx in
-    let cy' = if cy < 0 then cy + 255 else cy in
-    mk_mouse_click cx' cy' cb
-
-  let parse_escape_sequence () =
-    read_char ()
-      |> array_get code_to_key_table
-      |> function
-          | Upper_z   -> Escape_Z
-          | Upper_m   -> parse_mouse_click_x10 ()
-                         (* TODO: add support for xterm-262 mode *)
-          | other     -> Unknown (other |> code_of |> Char.chr)
-
-  (* Replacement for input_char which considers 0 as Enf_of_file *)
-  (* BUG: unmapped keys get all smashed into Unknown, which is not very convenient *)
+  (* BUGS and other lose ends:
+   *  - crashes on a key combo like CTRL + [ then another key stroke
+   *  - double check timeout
+   *  - should mouse parsing do a second 3B buffer read instead of sizing the input buffer to 6B ?
+   *)
   let rec next_key () : key =
-    read_char ()
-      |> function
-          | c when c = code_timeout   ->  next_key ()
-          | c when c = code_interrupt ->  EINTR
-            (* BUG: how to distinquish the user pressing the real Esc key from an escape sequence ? Hacky timeout heuristic ? *)
-          | c when c = code_escape    ->  next_key () = BracketLeft |> assert_that ;
-                                          parse_escape_sequence ()
-          | key   ->  array_get code_to_key_table key
-
-  let rec next_key2 () : key =
-    let len = 32 in
+    let len = 6 in
     let buffer = Bytes.make len '\000' in
     match
       Unix.read Unix.stdin buffer 0 len
@@ -763,20 +707,34 @@ module Keys = struct
       | exception Unix.Unix_error (Unix.EINTR, _, _)
             -> EINTR
       (* timeout: retry *)
-      | 0   -> next_key2 ()
+      | 0   -> next_key ()
       (* one normal key *)
       | 1   -> Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
-      (* invalid input *)
-      | n when Bytes.get buffer 1 <> '['
-            -> fail (Printf.sprintf "unexpected %d byte sequence TODO:print bytes" n)
       (* escape sequences *)
-      | _ when Bytes.get buffer 2 = 'Z'
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z'
             -> Escape_Z
       (* mouse click *)
-      | _ when Bytes.get buffer 2 = 'M'
-            -> EINTR (* TODO: parse mouse click !! *)
-      | _
-            -> Unknown '\000'
+      | 6 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
+            ->
+              (* x10 mouse click mode. TODO: add support for other xterm-262 *)
+              let x10_position_reader c =
+                let c' = (Char.code c) - 33 in
+                if c' < 0 then c' + 255 else c'
+              in
+              let cx = Bytes.get buffer 4 |> x10_position_reader in
+              let cy = Bytes.get buffer 5 |> x10_position_reader in
+              Bytes.get buffer 3
+                |> Char.code
+                |> (land) 3 (* Ignore modifier keys *)
+                |> (function
+                  (* TODO: distinguish between left/middle/right buttons *)
+                  | 0
+                  | 1
+                  | 2   ->  Click (mk_v2 cx cy)
+                  | 3   ->  ClickRelease (mk_v2 cx cy)
+                  | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
+      | n
+            -> fail (Printf.sprintf "unknown byte sequence '%s'" (buffer |> Bytes.escaped |> Bytes.to_string))
 
 
 end
@@ -905,6 +863,7 @@ module Term = struct
     let (term_rows, term_cols) = get_terminal_size () in
     mk_v2 term_cols term_rows
 
+(* TODO: this absolutely need to unwrap action so as to get a precise stack trace ! *)
   let do_with_raw_mode action =
     let open Unix in
     let stdout_write_string s =
