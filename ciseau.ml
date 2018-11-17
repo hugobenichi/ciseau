@@ -753,6 +753,32 @@ module Keys = struct
                                           parse_escape_sequence ()
           | key   ->  array_get code_to_key_table key
 
+  let rec next_key2 () : key =
+    let len = 32 in
+    let buffer = Bytes.make len '\000' in
+    match
+      Unix.read Unix.stdin buffer 0 len
+    with
+      (* interrupt: probably a screen resize event *)
+      | exception Unix.Unix_error (Unix.EINTR, _, _)
+            -> EINTR
+      (* timeout: retry *)
+      | 0   -> next_key2 ()
+      (* one normal key *)
+      | 1   -> Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
+      (* invalid input *)
+      | n when Bytes.get buffer 1 <> '['
+            -> fail (Printf.sprintf "unexpected %d byte sequence TODO:print bytes" n)
+      (* escape sequences *)
+      | _ when Bytes.get buffer 2 = 'Z'
+            -> Escape_Z
+      (* mouse click *)
+      | _ when Bytes.get buffer 2 = 'M'
+            -> EINTR (* TODO: parse mouse click !! *)
+      | _
+            -> Unknown '\000'
+
+
 end
 
 
