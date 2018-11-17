@@ -863,57 +863,45 @@ module Term = struct
     let (term_rows, term_cols) = get_terminal_size () in
     mk_v2 term_cols term_rows
 
-(* TODO: this absolutely need to unwrap action so as to get a precise stack trace ! *)
-  let do_with_raw_mode action =
-    let open Unix in
-    let stdout_write_string s =
-      if (write_substring stdout s 0 (slen s)) <> slen s then fail "sdtout write failed"
-    in
-    (* because terminal_io is a record of mutable fields, do tcgetattr twice:
-       once for restoring later, once for setting the terminal to raw mode *)
-    let initial = tcgetattr stdin in
-    let want    = tcgetattr stdin in
-    (
-      want.c_brkint  <- false ;   (* no break *)
-      want.c_icrnl   <- false ;   (* no CR to NL *)
-      want.c_inpck   <- false ;   (* no parity check *)
-      want.c_istrip  <- false ;   (* no strip character *)
-      want.c_ixon    <- false ;
-      want.c_opost   <- false ;
-      want.c_echo    <- false ;
-      want.c_icanon  <- false ;
-      want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
-      want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-      want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
-                                  (* TODO: how to set a low timeout in order to process async IO results
-                                               but not deal with the hassle of End_of_file from input_char ... *)
-      want.c_csize   <- 8;        (* 8 bit chars *)
+  let stdout_write_string s =
+    let l = slen s in
+    let n = Unix.write_substring Unix.stdout s 0 l in
+    if l <> n then fail ("sdtout write failed for " ^ s)
 
-      Printf.fprintf logs "enter raw mode %f\n" (Sys.time() -. starttime) ;
+  (* Used for restoring terminal state at program exit *)
+  let terminal_initial = Unix.tcgetattr Unix.stdin
 
-      stdout_write_string "\027[s" ; (* cursor save *)
-      stdout_write_string "\027[?47h" ; (* switch offscreen *)
-      stdout_write_string "\027[?1000h" ; (* mouse event on *)
-      stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
-      (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
-      tcsetattr stdin TCSAFLUSH want ;
+  let restore_initial_state () =
+    Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH terminal_initial ;
+    stdout_write_string "\027[?1000l" ; (* mouse event off *)
+    stdout_write_string "\027[?1002l" ; (* mouse tracking off *)
+    stdout_write_string "\027[?1004l" ; (* switch focus event off *)
+    stdout_write_string "\027[?47l" ; (* switch back to main screen *)
+    stdout_write_string "\027[u" (* cursor restore *)
 
-      let cleanup () =
-        tcsetattr stdin TCSAFLUSH initial ;
-        stdout_write_string "\027[?1000l" ; (* mouse event off *)
-        stdout_write_string "\027[?1002l" ; (* mouse tracking off *)
-        stdout_write_string "\027[?1004l" ; (* switch focus event off *)
-        stdout_write_string "\027[?47l" ; (* switch back to main screen *)
-        stdout_write_string "\027[u" (* cursor restore *)
-      in
-      try
-        action () ;
-        cleanup () ;
-      with
-        e ->
-          cleanup () ;
-          raise e ;
-    )
+  let set_raw_mode () =
+    let want = Unix.tcgetattr Unix.stdin in
+    want.c_brkint  <- false ;   (* no break *)
+    want.c_icrnl   <- false ;   (* no CR to NL *)
+    want.c_inpck   <- false ;   (* no parity check *)
+    want.c_istrip  <- false ;   (* no strip character *)
+    want.c_ixon    <- false ;
+    want.c_opost   <- false ;
+    want.c_echo    <- false ;
+    want.c_icanon  <- false ;
+    want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
+    want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
+    want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
+                                (* TODO: how to set a low timeout in order to process async IO results
+                                             but not deal with the hassle of End_of_file from input_char ... *)
+    want.c_csize   <- 8;        (* 8 bit chars *)
+
+    stdout_write_string "\027[s" ; (* cursor save *)
+    stdout_write_string "\027[?47h" ; (* switch offscreen *)
+    stdout_write_string "\027[?1000h" ; (* mouse event on *)
+    stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
+    (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
+    Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
 
 end
 
@@ -3312,20 +3300,21 @@ module Ciseau = struct
         |> process_events next_key_fn
         |> loop next_key_fn
 
-  let run_editor_loop editor () =
-    loop Keys.next_key editor
-
   let main () =
     try
       let file =
         if alen Sys.argv > 1
           then Sys.argv.(1)
           else __FILE__
-      in file |> init_editor
-              |> run_editor_loop
-              |> Term.do_with_raw_mode
+      in
+        Term.set_raw_mode () ;
+        file
+          |> init_editor
+          |> loop Keys.next_key ;
+        Term.restore_initial_state ()
     with
-      e ->  Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+      e ->  Term.restore_initial_state () ;
+            Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
 
 end
@@ -3340,7 +3329,7 @@ module Fuzzer = struct
       |> List.filter ((<>) Keys.EINTR)
       |> Array.of_list
 
-  let next_key_fuzzer r n =
+  let next_key r n =
     let l = alen fuzz_keys in
     let i = ref 0 in
     let rec loop () =
@@ -3354,21 +3343,21 @@ module Fuzzer = struct
           Random.State.int r l |> array_get fuzz_keys
     in loop
 
-  let run_editor_loop n editor () =
-    let r = Random.State.make [| 0 ; 1 ; 2 |] in
-    Ciseau.loop (next_key_fuzzer r n) editor
-
   let main n =
     try
       let file =
         if alen Sys.argv > 1
           then Sys.argv.(1)
           else __FILE__
-      in file |> Ciseau.init_editor
-              |> run_editor_loop n
-              |> Term.do_with_raw_mode
+      in
+        Term.set_raw_mode () ;
+        file
+          |> Ciseau.init_editor
+          |> Ciseau.loop (next_key (Random.State.make [| 0 ; 1 ; 2 |]) n) ;
+        Term.restore_initial_state ()
     with
-      e ->  Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+      e ->  Term.restore_initial_state () ;
+            Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
 
 end
