@@ -866,34 +866,12 @@ end
 
 (* main module for interacting with the terminal *)
 module Term = struct
+  (* TODO: this should be platform specific *)
+  let newline                     = "\r\n"
 
-  module Control = struct
-    let escape                      = "\027"
-    let start                       = escape ^ "["
-    let finish                      = escape ^ "[0m"
-    let clear                       = escape ^ "c"
-    let newline                     = "\r\n"
-    let cursor_hide                 = start ^ "?25l"
-    let cursor_show                 = start ^ "?25h"
-    let cursor_save                 = start ^ "s"
-    let cursor_restore              = start ^ "u"
-    let switch_offscreen            = start ^ "?47h"
-    let switch_mainscreen           = start ^ "?47l"
-    let switch_mouse_event_on       = start ^ "?1000h"
-    let switch_mouse_tracking_on    = start ^ "?1002h"
-    let switch_mouse_tracking_off   = start ^ "?1002l"
-    let switch_mouse_event_off      = start ^ "?1000l"
-    let switch_focus_event_on       = start ^ "?1004h"
-    let switch_focus_event_off      = start ^ "?1004l"
-    let gohome                      = start ^ "H"
-
-    let cursor_offset = mk_v2 1 1
-
-    (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
-    let cursor_control_string vec2 =
-      Printf.sprintf "%s%d;%dH" start (vec2.y + 1) (vec2.x + 1)
-
-  end
+  (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
+  let cursor_control_string vec2 =
+    Printf.sprintf "\027[%d;%dH" (vec2.y + 1) (vec2.x + 1)
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
@@ -928,20 +906,20 @@ module Term = struct
 
       Printf.fprintf logs "enter raw mode %f\n" (Sys.time() -. starttime) ;
 
-      stdout_write_string Control.cursor_save ;
-      stdout_write_string Control.switch_offscreen ;
-      stdout_write_string Control.switch_mouse_event_on ;
-      stdout_write_string Control.switch_mouse_tracking_on ;
-      stdout_write_string Control.switch_focus_event_off ; (* TODO: turn on and check if some files need to be reloaded *)
+      stdout_write_string "\027[s" ; (* cursor save *)
+      stdout_write_string "\027[?47h" ; (* switch offscreen *)
+      stdout_write_string "\027[?1000h" ; (* mouse event on *)
+      stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
+      (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
       tcsetattr stdin TCSAFLUSH want ;
 
       let cleanup () =
         tcsetattr stdin TCSAFLUSH initial ;
-        stdout_write_string Control.switch_mouse_event_off ;
-        stdout_write_string Control.switch_mouse_tracking_off ;
-        stdout_write_string Control.switch_focus_event_off ;
-        stdout_write_string Control.switch_mainscreen ;
-        stdout_write_string Control.cursor_restore
+        stdout_write_string "\027[?1000l" ; (* mouse event off *)
+        stdout_write_string "\027[?1002l" ; (* mouse tracking off *)
+        stdout_write_string "\027[?1004l" ; (* switch focus event off *)
+        stdout_write_string "\027[?47l" ; (* switch back to main screen *)
+        stdout_write_string "\027[u" (* cursor restore *)
       in
       try
         action () ;
@@ -1014,14 +992,14 @@ end = struct
         let is_end_of_line        = (position mod t.window.x) = 0 in
         let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
         if is_end_of_line && is_not_end_of_buffer
-          then Buffer.add_string buffer Term.Control.newline
+          then Buffer.add_string buffer Term.newline
       in
       let rec loop t start stop colorbuffer_idx =
         (* memory opt: all arguments passed explicitly *)
         if start < stop
           then
             let len = next_line_len t start stop in
-            Buffer.add_string buffer Term.Control.start ;
+            Buffer.add_string buffer "\027[" ;
             colorbuffer_idx
               |> array_get t.fg_colors
               |> array_get Color.fg_color_control_strings
@@ -1031,7 +1009,7 @@ end = struct
               |> array_get Color.bg_color_control_strings
               |> Buffer.add_string buffer ;
             Buffer.add_subbytes buffer t.text start len ;
-            Buffer.add_string buffer Term.Control.finish ;
+            Buffer.add_string buffer "\027[0m" ; (* finish sequence for colored strings *)
             (* Last newline need to be appened *after* the terminating control command for colors *)
             append_newline_if_needed t (start + len) ;
             loop t (start + len) stop colorbuffer_idx
@@ -1111,11 +1089,12 @@ end = struct
 
   let render frame_buffer =
     Buffer.clear buffer ;
-    Buffer.add_string buffer Term.Control.cursor_hide ;
-    Buffer.add_string buffer Term.Control.gohome ;
+    (* Buffer.add_string buffer "\027c" ; *) (* TODO: delete ? *)
+    Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
+    Buffer.add_string buffer "\027[H" ;       (* go home *)
     Rendering.render_all_sections frame_buffer ;
-    Buffer.add_string buffer (Term.Control.cursor_control_string frame_buffer.cursor) ;
-    Buffer.add_string buffer Term.Control.cursor_show ;
+    Buffer.add_string buffer (Term.cursor_control_string frame_buffer.cursor) ;
+    Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
     if kDRAW_SCREEN then (
       Buffer.output_buffer stdout buffer ;
       flush stdout
