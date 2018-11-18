@@ -484,6 +484,7 @@ module Keys = struct
             | Ctrl_k
             | Ctrl_u
             | Ctrl_z
+            | Escape
             | Space
             | SingleQuote
             | Colon
@@ -558,6 +559,7 @@ module Keys = struct
     (Ctrl_k,          "Ctrl_k",       11) ;
     (Ctrl_u,          "Ctrl_u",       21) ;
     (Ctrl_z,          "Ctrl_z",       26) ;
+    (Escape,          "Escape",       27) ;
     (Space,           "Space",        32) ;
     (SingleQuote,     "'",            39) ;
     (Colon,           ":",            58) ;
@@ -628,6 +630,7 @@ module Keys = struct
       | Ctrl_k            -> 11
       | Ctrl_u            -> 21
       | Ctrl_z            -> 26
+      | Escape            -> 27
       | Space             -> 32
       | SingleQuote       -> 39
       | Colon             -> 58
@@ -698,7 +701,7 @@ module Keys = struct
    *  - should mouse parsing do a second 3B buffer read instead of sizing the input buffer to 6B ?
    *)
   let rec next_key () : key =
-    let len = 6 in
+    let len = 3 in
     let buffer = Bytes.make len '\000' in
     match
       Unix.read Unix.stdin buffer 0 len
@@ -707,23 +710,26 @@ module Keys = struct
       | exception Unix.Unix_error (Unix.EINTR, _, _)
             -> EINTR
       (* timeout: retry *)
-      | 0   -> next_key ()
+      | 0   ->
+          output_string logs "input timeout\n" ;
+          next_key ()
       (* one normal key *)
       | 1   -> Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
       (* escape sequences *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z'
             -> Escape_Z
       (* mouse click *)
-      | 6 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
             ->
+              Unix.read Unix.stdin buffer 0 len |> ignore ;
               (* x10 mouse click mode. TODO: add support for other xterm-262 *)
               let x10_position_reader c =
                 let c' = (Char.code c) - 33 in
                 if c' < 0 then c' + 255 else c'
               in
-              let cx = Bytes.get buffer 4 |> x10_position_reader in
-              let cy = Bytes.get buffer 5 |> x10_position_reader in
-              Bytes.get buffer 3
+              let cx = Bytes.get buffer 1 |> x10_position_reader in
+              let cy = Bytes.get buffer 2 |> x10_position_reader in
+              Bytes.get buffer 0
                 |> Char.code
                 |> (land) 3 (* Ignore modifier keys *)
                 |> (function
@@ -890,8 +896,9 @@ module Term = struct
     want.c_echo    <- false ;
     want.c_icanon  <- false ;
     want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
-    want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-    want.c_vtime   <- 100;      (* 100 * 100 ms timeout for reading input *)
+(* TODO: tune me based on http://www.unixwiz.net/techtips/termios-vmin-vtime.html *)
+    want.c_vmin    <- 1;        (* return each byte one by one, or 0 if timeout *)
+    want.c_vtime   <- 0;        (* 0 * 100 ms timeout for reading input *)
                                 (* TODO: how to set a low timeout in order to process async IO results
                                              but not deal with the hassle of End_of_file from input_char ... *)
     want.c_csize   <- 8;        (* 8 bit chars *)
@@ -3197,6 +3204,7 @@ module Ciseau = struct
 
     | Keys.Ctrl_j
     | Keys.Ctrl_k
+    | Keys.Escape
     | Keys.Upper_g
     | Keys.Upper_m
     | Keys.Upper_z
