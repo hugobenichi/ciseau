@@ -543,7 +543,6 @@ module Keys = struct
             | Escape_Z      (* esc[Z: shift + tab *)
             | EINTR         (* usually happen when terminal is resized *)
 
-
   let code_to_key_table   = Array.init (256) (fun c -> Unknown (Char.chr c))
   let code_to_descr_table = Array.init (256) (fun c -> Printf.sprintf "unknown:%s(%i)" (c |> Char.chr |> Char.escaped) c)
 
@@ -695,16 +694,31 @@ module Keys = struct
       | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
       | k                     ->  k |> code_of |> code_to_descr
 
-  (* BUGS and other lose ends:
-   *  - crashes on a key combo like CTRL + [ then another key stroke
-   *  - double check timeout
-   *  - should mouse parsing do a second 3B buffer read instead of sizing the input buffer to 6B ?
-   *)
-  let rec next_key () : key =
-    let len = 3 in
-    let buffer = Bytes.make len '\000' in
+  let input_buffer_len = 3
+
+  (* Buffer inputs across next_key calls in order to correclty segment escape key codes *)
+  type input_buffer = {
+    buffer : Bytes.t ;
+    mutable cursor : int ;    (* indicate if there is some pending input from last read *)
+    mutable lastread : int ;
+  }
+
+  let mk_input_buffer () = {
+    buffer    = Bytes.make input_buffer_len '\000' ;
+    cursor    = 0 ;
+    lastread  = 0;
+  }
+
+  let rec next_key input_buffer () =
+    let { buffer ; cursor ; lastread } = input_buffer in
+    if cursor > 0 then
+      let c = Bytes.get buffer cursor in
+      input_buffer.cursor <- (cursor + 1) mod lastread ;
+      c |> Char.code |> array_get code_to_key_table
+    else
+    let { buffer ; cursor } = input_buffer in
     match
-      Unix.read Unix.stdin buffer 0 len
+      Unix.read Unix.stdin buffer 0 input_buffer_len
     with
       (* interrupt: probably a screen resize event *)
       | exception Unix.Unix_error (Unix.EINTR, _, _)
@@ -712,7 +726,7 @@ module Keys = struct
       (* timeout: retry *)
       | 0   ->
           output_string logs "input timeout\n" ;
-          next_key ()
+          next_key input_buffer ()
       (* one normal key *)
       | 1   -> Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
       (* escape sequences *)
@@ -721,7 +735,7 @@ module Keys = struct
       (* mouse click *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
             ->
-              Unix.read Unix.stdin buffer 0 len |> ignore ;
+              Unix.read Unix.stdin buffer 0 input_buffer_len |> ignore ;
               (* x10 mouse click mode. TODO: add support for other xterm-262 *)
               let x10_position_reader c =
                 let c' = (Char.code c) - 33 in
@@ -739,9 +753,11 @@ module Keys = struct
                   | 2   ->  Click (mk_v2 cx cy)
                   | 3   ->  ClickRelease (mk_v2 cx cy)
                   | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
-      | n
-            -> fail (Printf.sprintf "unknown byte sequence '%s'" (buffer |> Bytes.escaped |> Bytes.to_string))
-
+      (* this happens when typing  CTRL + [ followed by another key *)
+      | n  ->
+          input_buffer.cursor <- 1 ;
+          input_buffer.lastread <- n ;
+          Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
 
 end
 
@@ -896,11 +912,8 @@ module Term = struct
     want.c_echo    <- false ;
     want.c_icanon  <- false ;
     want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
-(* TODO: tune me based on http://www.unixwiz.net/techtips/termios-vmin-vtime.html *)
-    want.c_vmin    <- 1;        (* return each byte one by one, or 0 if timeout *)
-    want.c_vtime   <- 0;        (* 0 * 100 ms timeout for reading input *)
-                                (* TODO: how to set a low timeout in order to process async IO results
-                                             but not deal with the hassle of End_of_file from input_char ... *)
+    want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
+    want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
     want.c_csize   <- 8;        (* 8 bit chars *)
 
     stdout_write_string "\027[s" ; (* cursor save *)
@@ -3318,7 +3331,7 @@ module Ciseau = struct
         Term.set_raw_mode () ;
         file
           |> init_editor
-          |> loop Keys.next_key ;
+          |> (Keys.mk_input_buffer () |> Keys.next_key |> loop) ;
         Term.restore_initial_state ()
     with
       e ->  Term.restore_initial_state () ;
