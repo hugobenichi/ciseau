@@ -476,223 +476,96 @@ end
 
 module Keys = struct
 
-  type key  = Unknown of char
-            | Tab
-            | Ctrl_c
-            | Ctrl_d
-            | Ctrl_j
-            | Ctrl_k
-            | Ctrl_u
-            | Ctrl_z
-            | Escape
-            | Space
-            | SingleQuote
-            | Colon
-            | SemiColon
-            | Equal
-            | ArrowUp
-            | ArrowDown
-            | ArrowRight
-            | ArrowLeft
-            | Lower_h
-            | Lower_j
-            | Lower_k
-            | Lower_l
-            | Lower_b
-            | Lower_c
-            | Lower_s
-            | Lower_v
-            | Lower_d
-            | Lower_w
-            | Lower_x
-            | Lower_z
-            | Upper_b
-            | Upper_w
-            | Upper_g
-            | Upper_h
-            | Upper_j
-            | Upper_k
-            | Upper_l
-            | Upper_m
-            | Upper_z
-            | Digit_0
-            | Digit_1
-            | Digit_2
-            | Digit_3
-            | Digit_4
-            | Digit_5
-            | Digit_6
-            | Digit_7
-            | Digit_8
-            | Digit_9
-            | Backslash
-            | ParenLeft
-            | ParenRight
-            | BracketLeft
-            | BracketRight
-            | BraceLeft
-            | BraceRight
-            | Pipe
-            | Plus
-            | Minus
-            | Underscore
-            | Backspace
-            (* Non-key events *)
-            | Click of v2
-            | ClickRelease of v2
-            | Escape_Z      (* esc[Z: shift + tab *)
-            | EINTR         (* usually happen when terminal is resized *)
+  let ctrl_at               = '\x00'
+  let ctrl_a                = '\x01'
+  let ctrl_b                = '\x02'
+  let ctrl_c                = '\x03'
+  let ctrl_d                = '\x04'
+  let ctrl_e                = '\x05'
+  let ctrl_f                = '\x06'
+  let ctrl_g                = '\x07'
+  let ctrl_h                = '\x08'
+  let ctrl_i                = '\x09'
+  let ctrl_j                = '\x0a'
+  let ctrl_k                = '\x0b'
+  let ctrl_l                = '\x0c'
+  let ctrl_m                = '\x0d'
+  let ctrl_n                = '\x0e'
+  let ctrl_o                = '\x0f'
+  let ctrl_p                = '\x10'
+  let ctrl_q                = '\x11'
+  let ctrl_r                = '\x12'
+  let ctrl_s                = '\x13'
+  let ctrl_t                = '\x14'
+  let ctrl_u                = '\x15'
+  let ctrl_v                = '\x16'
+  let ctrl_w                = '\x17'
+  let ctrl_x                = '\x18'
+  let ctrl_y                = '\x19'
+  let ctrl_z                = '\x1a'
+  let ctrl_left_bracket     = '\x1b'
+  let ctrl_backslash        = '\x1c'
+  let ctrl_right_bracket    = '\x1d'
+  let ctrl_caret            = '\x1e'
+  let ctrl_underscore       = '\x1f'
+  let space                 = '\x20'
+  let del                   = '\x7f'
+  let esc                   = ctrl_left_bracket
+  let backspace             = ctrl_h
+  let tab                   = ctrl_i
+  let line_feed             = ctrl_j
+  let vtab                  = ctrl_k
+  let new_page              = ctrl_l
+  let enter                 = ctrl_m
 
-  let code_to_key_table   = Array.init (256) (fun c -> Unknown (Char.chr c))
-  let code_to_descr_table = Array.init (256) (fun c -> Printf.sprintf "unknown:%s(%i)" (c |> Char.chr |> Char.escaped) c)
-
-  let add_key (sym, descr, code) =
-    array_set code_to_key_table code sym ;
-    array_set code_to_descr_table code descr
-
-  let defined_keys = [
-    (Tab,             "Tab",          9) ;
-    (Ctrl_c,          "Ctrl_c",       3) ;
-    (Ctrl_d,          "Ctrl_d",       4) ;
-    (Ctrl_j,          "Ctrl_j",       10) ;
-    (Ctrl_k,          "Ctrl_k",       11) ;
-    (Ctrl_u,          "Ctrl_u",       21) ;
-    (Ctrl_z,          "Ctrl_z",       26) ;
-    (Escape,          "Escape",       27) ;
-    (Space,           "Space",        32) ;
-    (SingleQuote,     "'",            39) ;
-    (Colon,           ":",            58) ;
-    (SemiColon,       ";",            59) ;
-    (Equal,           "Equal",        61) ;
-    (* BUG: this collides with 'A', 'B', 'C', 'D', Wat the Moon !!! *)
-    (ArrowUp,         "ArrowUp",      65) ;
-    (ArrowDown,       "ArrowDown",    66) ;
-    (ArrowRight,      "ArrowRight",   67) ;
-    (ArrowLeft,       "ArrowLeft",    68) ;
-    (Upper_b,         "B",            66) ;
-    (Upper_w,         "W",            87) ;
-    (Upper_g,         "G",            71) ;
-    (Upper_h,         "H",            72) ;
-    (Upper_j,         "J",            74) ;
-    (Upper_k,         "K",            75) ;
-    (Upper_l,         "L",            76) ;
-    (Upper_m,         "M",            77) ;
-    (Upper_z,         "Z",            90) ;
-    (Lower_b,         "w",            98) ;
-    (Lower_c,         "c",            99) ;
-    (Lower_s,         "s",            115) ;
-    (Lower_v,         "w",            118) ;
-    (Lower_d,         "d",            100) ;
-    (Lower_z,         "z",            122) ;
-    (Lower_x,         "x",            120) ;
-    (Lower_h,         "h",            104) ;
-    (Lower_j,         "j",            106) ;
-    (Lower_k,         "k",            107) ;
-    (Lower_l,         "l",            108) ;
-    (Lower_w,         "w",            119) ;
-    (Digit_0,         "0",            48) ;
-    (Digit_1,         "1",            49) ;
-    (Digit_2,         "2",            50) ;
-    (Digit_3,         "3",            51) ;
-    (Digit_4,         "4",            52) ;
-    (Digit_5,         "5",            53) ;
-    (Digit_6,         "6",            54) ;
-    (Digit_7,         "7",            55) ;
-    (Digit_8,         "8",            56) ;
-    (Digit_9,         "9",            57) ;
-    (Backslash,       "\\",           92) ;
-    (ParenLeft,       "(",            40) ;
-    (ParenRight,      ")",            41) ;
-    (Plus,            "+",            43) ;
-    (Minus,           "-",            45) ;
-    (BracketLeft,     "[",            91) ;
-    (BracketRight,    "]",            93) ;
-    (Underscore,      "_",            95) ;
-    (Pipe,            "|",            124) ;
-    (BraceLeft,       "{",            123) ;
-    (BraceRight,      "}",            125) ;
-    (Backspace,       "del",          127) ;
-    (Escape_Z,        "esc[Z",        254) ;
-    (EINTR,           "EINTR",        255) ;
-  ]
-
-  let _ = List.iter add_key defined_keys
-
-  let code_to_descr = array_get code_to_descr_table
-
-  let code_of =
-    function
-      | Tab               -> 9
-      | Ctrl_c            -> 3
-      | Ctrl_d            -> 4
-      | Ctrl_j            -> 10
-      | Ctrl_k            -> 11
-      | Ctrl_u            -> 21
-      | Ctrl_z            -> 26
-      | Escape            -> 27
-      | Space             -> 32
-      | SingleQuote       -> 39
-      | Colon             -> 58
-      | SemiColon         -> 59
-      | Equal             -> 61
-      | ArrowUp           -> 65
-      | ArrowDown         -> 66
-      | ArrowRight        -> 67
-      | ArrowLeft         -> 68
-      | Upper_b           -> 66
-      | Upper_w           -> 87
-      | Upper_g           -> 71
-      | Upper_h           -> 72
-      | Upper_j           -> 74
-      | Upper_k           -> 75
-      | Upper_l           -> 76
-      | Upper_m           -> 77
-      | Upper_z           -> 90
-      | Lower_b           -> 98
-      | Lower_c           -> 99
-      | Lower_s           -> 115
-      | Lower_v           -> 118
-      | Lower_d           -> 100
-      | Lower_z           -> 122
-      | Lower_x           -> 120
-      | Lower_h           -> 104
-      | Lower_j           -> 106
-      | Lower_k           -> 107
-      | Lower_l           -> 108
-      | Lower_w           -> 119
-      | Digit_0           -> 48
-      | Digit_1           -> 49
-      | Digit_2           -> 50
-      | Digit_3           -> 51
-      | Digit_4           -> 52
-      | Digit_5           -> 53
-      | Digit_6           -> 54
-      | Digit_7           -> 55
-      | Digit_8           -> 56
-      | Digit_9           -> 57
-      | Backslash         -> 92
-      | ParenLeft         -> 40
-      | ParenRight        -> 41
-      | Plus              -> 43
-      | Minus             -> 45
-      | BracketLeft       -> 91
-      | BracketRight      -> 93
-      | Underscore        -> 95
-      | Pipe              -> 124
-      | BraceLeft         -> 123
-      | BraceRight        -> 125
-      | Backspace         -> 127
-      | Click _           -> 252
-      | ClickRelease _    -> 253
-      | Escape_Z          -> 254
-      | EINTR             -> 255
-      | Unknown c         -> Char.code c
+  type key =
+      Key of char
+    | Click of v2           (* esc[M + mod + mouse position *)
+    | ClickRelease of v2    (* esc[M + mod + mouse position *)
+    | Escape_Z              (* esc[Z: shift + tab *)
+    | EINTR                 (* usually happen when terminal is resized *)
 
   let descr_of =
     function
       | Click {x ; y}         ->  Printf.sprintf "Click(%d,%d)" x y
       | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
-      | k                     ->  k |> code_of |> code_to_descr
+      | Escape_Z              -> "Escape_z"
+      | EINTR                 -> "Interrupt"
+      | Key '\x00'            -> "ctrl_at"
+      | Key '\x01'            -> "ctrl_a"
+      | Key '\x02'            -> "ctrl_b"
+      | Key '\x03'            -> "ctrl_c"
+      | Key '\x04'            -> "ctrl_d"
+      | Key '\x05'            -> "ctrl_e"
+      | Key '\x06'            -> "ctrl_f"
+      | Key '\x07'            -> "ctrl_g"
+      | Key '\x08'            -> "ctrl_h"
+      | Key '\x09'            -> "ctrl_i"
+      | Key '\x0a'            -> "ctrl_j"
+      | Key '\x0b'            -> "ctrl_k"
+      | Key '\x0c'            -> "ctrl_l"
+      | Key '\x0d'            -> "ctrl_m"
+      | Key '\x0e'            -> "ctrl_n"
+      | Key '\x0f'            -> "ctrl_o"
+      | Key '\x10'            -> "ctrl_p"
+      | Key '\x11'            -> "ctrl_q"
+      | Key '\x12'            -> "ctrl_r"
+      | Key '\x13'            -> "ctrl_s"
+      | Key '\x14'            -> "ctrl_t"
+      | Key '\x15'            -> "ctrl_u"
+      | Key '\x16'            -> "ctrl_v"
+      | Key '\x17'            -> "ctrl_w"
+      | Key '\x18'            -> "ctrl_x"
+      | Key '\x19'            -> "ctrl_y"
+      | Key '\x1a'            -> "ctrl_z"
+      | Key '\x1b'            -> "ctrl_left_bracket"
+      | Key '\x1c'            -> "ctrl_backslash"
+      | Key '\x1d'            -> "ctrl_right_bracket"
+      | Key '\x1e'            -> "ctrl_caret"
+      | Key '\x1f'            -> "ctrl_underscore"
+      | Key '\x20'            -> "space"
+      | Key '\x7f'            -> "del"
+      | Key k                 ->  "'" ^ (Char.escaped k) ^ "'"
 
   let input_buffer_len = 3
 
@@ -714,7 +587,7 @@ module Keys = struct
     if cursor > 0 then
       let c = Bytes.get buffer cursor in
       input_buffer.cursor <- (cursor + 1) mod lastread ;
-      c |> Char.code |> array_get code_to_key_table
+      Key c
     else
     let { buffer ; cursor } = input_buffer in
     match
@@ -725,10 +598,10 @@ module Keys = struct
             -> EINTR
       (* timeout: retry *)
       | 0   ->
-          output_string logs "input timeout\n" ;
-          next_key input_buffer ()
+              output_string logs "input timeout\n" ;
+              next_key input_buffer ()
       (* one normal key *)
-      | 1   -> Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
+      | 1   -> Key (Bytes.get buffer 0)
       (* escape sequences *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z'
             -> Escape_Z
@@ -757,7 +630,7 @@ module Keys = struct
       | n  ->
           input_buffer.cursor <- 1 ;
           input_buffer.lastread <- n ;
-          Bytes.get buffer 0 |> Char.code |> array_get code_to_key_table
+          Key (Bytes.get buffer 0)
 
 end
 
@@ -2620,7 +2493,7 @@ module Stats = struct
     timestamp           = Sys.time () ;
     last_input_duration = 0. ;
     last_cycle_duration = 0. ;
-    last_key_input      = Keys.Unknown '?' ;
+    last_key_input      = Keys.Key '?' ;
   }
 
   let update_stats key now input_duration stats = {
@@ -2662,8 +2535,12 @@ module Stats = struct
     output_string logs "\n" ;
     output_string f "key " ;
     output_string f (Keys.descr_of stats.last_key_input) ;
-    output_string f " " ;
-    output_int f (Keys.code_of stats.last_key_input) ;
+    let open Keys in
+    match stats.last_key_input with
+      | Key c -> 
+          output_string f " " ;
+          output_int f (Char.code c)
+      | _ -> () ;
     output_string logs "\n"
 end
 
@@ -3156,79 +3033,72 @@ module Ciseau = struct
     Framebuffer.render editor.frame_buffer ;
     editor
 
-  let key_to_command = function
-    | Keys.Tab          -> Mode RawInput
-    | Keys.Ctrl_c       -> Stop
-    | Keys.Backslash    -> View Fileview.swap_line_number_mode
-    | Keys.Pipe         -> View Fileview.swap_linebreaking_mode
-    | Keys.Colon        -> View Fileview.toggle_show_token
-    | Keys.SemiColon    -> View Fileview.toggle_show_neighbor
-    | Keys.SingleQuote  -> View Fileview.toggle_show_selection
-                           (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
-    | Keys.ParenLeft    -> TilesetOp Tileset.RotateViewsLeft
-    | Keys.ParenRight   -> TilesetOp Tileset.RotateViewsRight
-    | Keys.BraceLeft    -> TilesetOp Tileset.ScreenLayoutCyclePrev
-    | Keys.BraceRight   -> TilesetOp Tileset.ScreenLayoutCycleNext
-    | Keys.BracketLeft  -> TilesetOp Tileset.FocusPrev
-    | Keys.BracketRight -> TilesetOp Tileset.FocusNext
-    | Keys.Underscore   -> TilesetOp Tileset.ScreenLayoutFlip
-    | Keys.Minus        -> TilesetOp Tileset.BringFocusToMain
-    | Keys.Equal        -> TilesetOp Tileset.FocusMain
-    | Keys.Plus         -> Resize
-    | Keys.Ctrl_z       -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
-    | Keys.Space        -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
-    | Keys.Click pos    -> TilesetOp (Tileset.Selection pos)
+  let key_to_command =
+    let open Keys in
+    function
+      | EINTR               -> Resize
+      | Key tab             -> Mode RawInput
+      | Key ctrl_c          -> Stop
+      | Key '\\'            -> View Fileview.swap_line_number_mode
+      | Key '|'             -> View Fileview.swap_linebreaking_mode
+      | Key ':'             -> View Fileview.toggle_show_token
+      | Key ';'             -> View Fileview.toggle_show_neighbor
+      | Key '\''            -> View Fileview.toggle_show_selection
+      (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
+      | Key '('             -> TilesetOp Tileset.RotateViewsLeft
+      | Key ')'             -> TilesetOp Tileset.RotateViewsRight
+      | Key '{'             -> TilesetOp Tileset.ScreenLayoutCyclePrev
+      | Key '}'             -> TilesetOp Tileset.ScreenLayoutCycleNext
+      | Key '['             -> TilesetOp Tileset.FocusPrev
+      | Key ']'             -> TilesetOp Tileset.FocusNext
+      | Key '_'             -> TilesetOp Tileset.ScreenLayoutFlip
+      | Key '-'             -> TilesetOp Tileset.BringFocusToMain
+      | Key '='             -> TilesetOp Tileset.FocusMain
+      | Key '+'             -> Resize
+      | Key ctrl_z          -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
+      | Key ' '             -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
+      | Click pos           -> TilesetOp (Tileset.Selection pos)
 
-    | Keys.Lower_w      -> MoveModeOp Movement.Words
-    | Keys.Upper_w      -> MoveModeOp Movement.Blocks
-    | Keys.Lower_v      -> MoveModeOp Movement.Lines
-    | Keys.Upper_b      -> MoveModeOp Movement.Lines
-    | Keys.Lower_c      -> MoveModeOp Movement.Chars
-    | Keys.Lower_s      -> MoveModeOp Movement.Selection
-    | Keys.Lower_d      -> MoveModeOp Movement.Digits
-    | Keys.Lower_z      -> MoveModeOp Movement.Paragraphs
-    | Keys.Lower_x      -> MoveModeOp Movement.Parens
+      | Key 'w'             -> MoveModeOp Movement.Words
+      | Key 'W'             -> MoveModeOp Movement.Blocks
+      | Key 'v'             -> MoveModeOp Movement.Lines
+      | Key 'B'             -> MoveModeOp Movement.Lines
+      | Key 'c'             -> MoveModeOp Movement.Chars
+      | Key 's'             -> MoveModeOp Movement.Selection
+      | Key 'd'             -> MoveModeOp Movement.Digits
+      | Key 'z'             -> MoveModeOp Movement.Paragraphs
+      | Key 'x'             -> MoveModeOp Movement.Parens
 
-    | Keys.ArrowUp      -> MoveOp Movement.Up
-    | Keys.ArrowDown    -> MoveOp Movement.Down
-    | Keys.ArrowLeft    -> MoveOp Movement.Left
-    | Keys.ArrowRight   -> MoveOp Movement.Right
-    | Keys.Lower_k      -> MoveOp Movement.Up
-    | Keys.Lower_j      -> MoveOp Movement.Down
-    | Keys.Lower_l      -> MoveOp Movement.Right
-    | Keys.Lower_h      -> MoveOp Movement.Left
-    | Keys.Upper_h      -> MoveOp Movement.Start
-    | Keys.Upper_l      -> MoveOp Movement.End
-    | Keys.Upper_j      -> MoveOp Movement.FileEnd
-    | Keys.Upper_k      -> MoveOp Movement.FileStart
-    | Keys.Ctrl_u       -> MoveOp Movement.PageUp
-    | Keys.Ctrl_d       -> MoveOp Movement.PageDown
+      (* FIXME
+      | Key arrow_up        -> MoveOp Movement.Up
+      | Key arrow_down      -> MoveOp Movement.Down
+      | Key arrow_left      -> MoveOp Movement.Left
+      | Key arrow_right     -> MoveOp Movement.Right
+      *)
+      | Key 'k'             -> MoveOp Movement.Up
+      | Key 'j'             -> MoveOp Movement.Down
+      | Key 'l'             -> MoveOp Movement.Right
+      | Key 'h'             -> MoveOp Movement.Left
+      | Key 'H'             -> MoveOp Movement.Start
+      | Key 'L'             -> MoveOp Movement.End
+      | Key 'J'             -> MoveOp Movement.FileEnd
+      | Key 'K'             -> MoveOp Movement.FileStart
+      | Key ctrl_u          -> MoveOp Movement.PageUp
+      | Key ctrl_d          -> MoveOp Movement.PageDown
 
-    | Keys.Digit_0      -> Pending (Digit 0)
-    | Keys.Digit_1      -> Pending (Digit 1)
-    | Keys.Digit_2      -> Pending (Digit 2)
-    | Keys.Digit_3      -> Pending (Digit 3)
-    | Keys.Digit_4      -> Pending (Digit 4)
-    | Keys.Digit_5      -> Pending (Digit 5)
-    | Keys.Digit_6      -> Pending (Digit 6)
-    | Keys.Digit_7      -> Pending (Digit 7)
-    | Keys.Digit_8      -> Pending (Digit 8)
-    | Keys.Digit_9      -> Pending (Digit 9)
+      | Key '0'             -> Pending (Digit 0)
+      | Key '1'             -> Pending (Digit 1)
+      | Key '2'             -> Pending (Digit 2)
+      | Key '3'             -> Pending (Digit 3)
+      | Key '4'             -> Pending (Digit 4)
+      | Key '5'             -> Pending (Digit 5)
+      | Key '6'             -> Pending (Digit 6)
+      | Key '7'             -> Pending (Digit 7)
+      | Key '8'             -> Pending (Digit 8)
+      | Key '9'             -> Pending (Digit 9)
 
-    | Keys.Ctrl_j
-    | Keys.Ctrl_k
-    | Keys.Escape
-    | Keys.Upper_g
-    | Keys.Upper_m
-    | Keys.Upper_z
-    | Keys.Lower_b
-    | Keys.Unknown _
-    | Keys.Escape_Z
-    | Keys.Backspace
-    | Keys.ClickRelease _
-                        -> Noop
-
-    | Keys.EINTR        -> Resize
+      | Escape_Z
+      | ClickRelease _      -> Noop
 
   let process_command editor =
     match editor.pending_input with
@@ -3269,19 +3139,18 @@ module Ciseau = struct
     }
 
   let rawinput_update =
+    let open Keys in
     function
-      | Keys.Ctrl_c           ->  stop_editor
-      | Keys.EINTR            ->  resize_editor
-      | Keys.Escape_Z         ->  change_mode Normal
-      (* | Keys.Return           ->  finish_input_sequence TODO: signal end of rawinput *)
-      | Keys.Tab              ->  rawinput_append '\t'
-      | Keys.Backspace        ->  rawinput_delete
-      | Keys.Click _
-      | Keys.ClickRelease _   ->  id
-      | Keys.Unknown c        ->  rawinput_append c
-      | k                     ->  k |> Keys.code_of
-                                    |> Char.chr
-                                    |> rawinput_append
+      | Click _
+      | ClickRelease _              ->  id
+      | EINTR                       ->  resize_editor
+      | Escape_Z                    ->  change_mode Normal
+      | Key c when c = ctrl_c
+                                    ->  stop_editor
+      (* | Key c when c = return ->  finish_input_sequence TODO: signal end of rawinput *)
+      | Key c when c = tab          ->  rawinput_append '\t'
+      | Key c when c = backspace    ->  rawinput_delete
+      | Key c                       ->  rawinput_append c
 
   (* TODO: introduce state_machine for decoupling editor struct from input processing *)
   let process_key key editor =
@@ -3343,12 +3212,18 @@ end
 
 module Fuzzer = struct
 
+  (*
+   * FIXME: generate real key list
   let fuzz_keys =
     Keys.defined_keys
       |> List.map (fun (k, _, _) -> k)
       |> List.filter ((<>) Keys.Ctrl_c)
       |> List.filter ((<>) Keys.EINTR)
       |> Array.of_list
+  *)
+  let fuzz_keys = [|
+    Keys.Key 'a'
+  |]
 
   let next_key r n =
     let l = alen fuzz_keys in
@@ -3359,7 +3234,7 @@ module Fuzzer = struct
       *)
       incr i ;
       if !i > n
-        then Keys.Ctrl_c
+        then Keys.Key Keys.ctrl_c
         else
           Random.State.int r l |> array_get fuzz_keys
     in loop
