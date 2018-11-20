@@ -523,6 +523,10 @@ module Keys = struct
     | Click of v2           (* esc[M + mod + mouse position *)
     | ClickRelease of v2    (* esc[M + mod + mouse position *)
     | Escape_Z              (* esc[Z: shift + tab *)
+    | ArrowUp               (* esc[A *)
+    | ArrowDown             (* esc[B *)
+    | ArrowRight            (* esc[C *) 
+    | ArrowLeft             (* esc[D *)
     | EINTR                 (* usually happen when terminal is resized *)
 
   let descr_of =
@@ -530,42 +534,47 @@ module Keys = struct
       | Click {x ; y}         ->  Printf.sprintf "Click(%d,%d)" x y
       | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
       | Escape_Z              -> "Escape_z"
+      | ArrowUp               -> "ArrowUp"
+      | ArrowDown             -> "ArrowDown"
+      | ArrowRight            -> "ArrowRight" 
+      | ArrowLeft             -> "ArrowLeft"
       | EINTR                 -> "Interrupt"
-      | Key '\x00'            -> "ctrl_at"
-      | Key '\x01'            -> "ctrl_a"
-      | Key '\x02'            -> "ctrl_b"
-      | Key '\x03'            -> "ctrl_c"
-      | Key '\x04'            -> "ctrl_d"
-      | Key '\x05'            -> "ctrl_e"
-      | Key '\x06'            -> "ctrl_f"
-      | Key '\x07'            -> "ctrl_g"
-      | Key '\x08'            -> "ctrl_h"
-      | Key '\x09'            -> "ctrl_i"
-      | Key '\x0a'            -> "ctrl_j"
-      | Key '\x0b'            -> "ctrl_k"
-      | Key '\x0c'            -> "ctrl_l"
-      | Key '\x0d'            -> "ctrl_m"
-      | Key '\x0e'            -> "ctrl_n"
-      | Key '\x0f'            -> "ctrl_o"
-      | Key '\x10'            -> "ctrl_p"
-      | Key '\x11'            -> "ctrl_q"
-      | Key '\x12'            -> "ctrl_r"
-      | Key '\x13'            -> "ctrl_s"
-      | Key '\x14'            -> "ctrl_t"
-      | Key '\x15'            -> "ctrl_u"
-      | Key '\x16'            -> "ctrl_v"
-      | Key '\x17'            -> "ctrl_w"
-      | Key '\x18'            -> "ctrl_x"
-      | Key '\x19'            -> "ctrl_y"
-      | Key '\x1a'            -> "ctrl_z"
-      | Key '\x1b'            -> "ctrl_left_bracket"
-      | Key '\x1c'            -> "ctrl_backslash"
-      | Key '\x1d'            -> "ctrl_right_bracket"
-      | Key '\x1e'            -> "ctrl_caret"
-      | Key '\x1f'            -> "ctrl_underscore"
+      | Key '\x00'            -> "^@"
+      | Key '\x01'            -> "^a"
+      | Key '\x02'            -> "^b"
+      | Key '\x03'            -> "^c"
+      | Key '\x04'            -> "^d"
+      | Key '\x05'            -> "^e"
+      | Key '\x06'            -> "^f"
+      | Key '\x07'            -> "^g"
+      | Key '\x08'            -> "^h"
+      | Key '\x09'            -> "^i"
+      | Key '\x0a'            -> "^j"
+      | Key '\x0b'            -> "^k"
+      | Key '\x0c'            -> "^l"
+      | Key '\x0d'            -> "^m"
+      | Key '\x0e'            -> "^n"
+      | Key '\x0f'            -> "^o"
+      | Key '\x10'            -> "^p"
+      | Key '\x11'            -> "^q"
+      | Key '\x12'            -> "^r"
+      | Key '\x13'            -> "^s"
+      | Key '\x14'            -> "^t"
+      | Key '\x15'            -> "^u"
+      | Key '\x16'            -> "^v"
+      | Key '\x17'            -> "^w"
+      | Key '\x18'            -> "^x"
+      | Key '\x19'            -> "^y"
+      | Key '\x1a'            -> "^z"
+      | Key '\x1b'            -> "^["
+      | Key '\x1c'            -> "^\\"
+      | Key '\x1d'            -> "^]"
+      | Key '\x1e'            -> "^^"
+      | Key '\x1f'            -> "^_"
       | Key '\x20'            -> "space"
       | Key '\x7f'            -> "del"
-      | Key k                 ->  "'" ^ (Char.escaped k) ^ "'"
+      | Key '\''              -> "'"
+      | Key k                 ->  Char.escaped k
 
   let input_buffer_len = 3
 
@@ -605,6 +614,14 @@ module Keys = struct
       (* escape sequences *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z'
             -> Escape_Z
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'A'
+            -> ArrowUp
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'B'
+            -> ArrowDown
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'C'
+            -> ArrowRight
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'D'
+            -> ArrowLeft
       (* mouse click *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
             ->
@@ -3033,72 +3050,76 @@ module Ciseau = struct
     Framebuffer.render editor.frame_buffer ;
     editor
 
+  let command_key_table : command array = Array.make 255 Noop
+
+  let _ =
+    let open Keys in
+    Array.iter
+    (fun (c, command) -> array_set command_key_table (Char.code c) command)
+    [|
+      (tab             , Mode RawInput) ;
+      (ctrl_c          , Stop) ;
+      ('\\'            , View Fileview.swap_line_number_mode) ;
+      ('|'             , View Fileview.swap_linebreaking_mode) ;
+      (':'             , View Fileview.toggle_show_token) ;
+      (';'             , View Fileview.toggle_show_neighbor) ;
+      ('\''            , View Fileview.toggle_show_selection) ;
+      (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
+      ('('             , TilesetOp Tileset.RotateViewsLeft) ;
+      (')'             , TilesetOp Tileset.RotateViewsRight) ;
+      ('{'             , TilesetOp Tileset.ScreenLayoutCyclePrev) ;
+      ('}'             , TilesetOp Tileset.ScreenLayoutCycleNext) ;
+      ('['             , TilesetOp Tileset.FocusPrev) ;
+      (']'             , TilesetOp Tileset.FocusNext) ;
+      ('_'             , TilesetOp Tileset.ScreenLayoutFlip) ;
+      ('-'             , TilesetOp Tileset.BringFocusToMain) ;
+      ('='             , TilesetOp Tileset.FocusMain) ;
+      ('+'             , Resize) ;
+      (ctrl_z          , TilesetOp (Tileset.FileviewOp Fileview.recenter_view)) ;
+      (' '             , TilesetOp (Tileset.FileviewOp Fileview.recenter_view)) ;
+      ('w'             , MoveModeOp Movement.Words) ;
+      ('W'             , MoveModeOp Movement.Blocks) ;
+      ('v'             , MoveModeOp Movement.Lines) ;
+      ('B'             , MoveModeOp Movement.Lines) ;
+      ('c'             , MoveModeOp Movement.Chars) ;
+      ('s'             , MoveModeOp Movement.Selection) ;
+      ('d'             , MoveModeOp Movement.Digits) ;
+      ('z'             , MoveModeOp Movement.Paragraphs) ;
+      ('x'             , MoveModeOp Movement.Parens) ;
+      ('k'             , MoveOp Movement.Up) ;
+      ('j'             , MoveOp Movement.Down) ;
+      ('l'             , MoveOp Movement.Right) ;
+      ('h'             , MoveOp Movement.Left) ;
+      ('H'             , MoveOp Movement.Start) ;
+      ('L'             , MoveOp Movement.End) ;
+      ('J'             , MoveOp Movement.FileEnd) ;
+      ('K'             , MoveOp Movement.FileStart) ;
+      (ctrl_u          , MoveOp Movement.PageUp) ;
+      (ctrl_d          , MoveOp Movement.PageDown) ;
+      ('0'             , Pending (Digit 0)) ;
+      ('1'             , Pending (Digit 1)) ;
+      ('2'             , Pending (Digit 2)) ;
+      ('3'             , Pending (Digit 3)) ;
+      ('4'             , Pending (Digit 4)) ;
+      ('5'             , Pending (Digit 5)) ;
+      ('6'             , Pending (Digit 6)) ;
+      ('7'             , Pending (Digit 7)) ;
+      ('8'             , Pending (Digit 8)) ;
+      ('9'             , Pending (Digit 9)) ;
+    |]
+
   let key_to_command =
     let open Keys in
     function
-      | EINTR               -> Resize
-      | Key tab             -> Mode RawInput
-      | Key ctrl_c          -> Stop
-      | Key '\\'            -> View Fileview.swap_line_number_mode
-      | Key '|'             -> View Fileview.swap_linebreaking_mode
-      | Key ':'             -> View Fileview.toggle_show_token
-      | Key ';'             -> View Fileview.toggle_show_neighbor
-      | Key '\''            -> View Fileview.toggle_show_selection
-      (* CLEANUP: try to separate TilesetOp and FileviewOp with different variants *)
-      | Key '('             -> TilesetOp Tileset.RotateViewsLeft
-      | Key ')'             -> TilesetOp Tileset.RotateViewsRight
-      | Key '{'             -> TilesetOp Tileset.ScreenLayoutCyclePrev
-      | Key '}'             -> TilesetOp Tileset.ScreenLayoutCycleNext
-      | Key '['             -> TilesetOp Tileset.FocusPrev
-      | Key ']'             -> TilesetOp Tileset.FocusNext
-      | Key '_'             -> TilesetOp Tileset.ScreenLayoutFlip
-      | Key '-'             -> TilesetOp Tileset.BringFocusToMain
-      | Key '='             -> TilesetOp Tileset.FocusMain
-      | Key '+'             -> Resize
-      | Key ctrl_z          -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
-      | Key ' '             -> TilesetOp (Tileset.FileviewOp Fileview.recenter_view)
+      | Key c               -> array_get command_key_table (Char.code c)
       | Click pos           -> TilesetOp (Tileset.Selection pos)
-
-      | Key 'w'             -> MoveModeOp Movement.Words
-      | Key 'W'             -> MoveModeOp Movement.Blocks
-      | Key 'v'             -> MoveModeOp Movement.Lines
-      | Key 'B'             -> MoveModeOp Movement.Lines
-      | Key 'c'             -> MoveModeOp Movement.Chars
-      | Key 's'             -> MoveModeOp Movement.Selection
-      | Key 'd'             -> MoveModeOp Movement.Digits
-      | Key 'z'             -> MoveModeOp Movement.Paragraphs
-      | Key 'x'             -> MoveModeOp Movement.Parens
-
-      (* FIXME
-      | Key arrow_up        -> MoveOp Movement.Up
-      | Key arrow_down      -> MoveOp Movement.Down
-      | Key arrow_left      -> MoveOp Movement.Left
-      | Key arrow_right     -> MoveOp Movement.Right
-      *)
-      | Key 'k'             -> MoveOp Movement.Up
-      | Key 'j'             -> MoveOp Movement.Down
-      | Key 'l'             -> MoveOp Movement.Right
-      | Key 'h'             -> MoveOp Movement.Left
-      | Key 'H'             -> MoveOp Movement.Start
-      | Key 'L'             -> MoveOp Movement.End
-      | Key 'J'             -> MoveOp Movement.FileEnd
-      | Key 'K'             -> MoveOp Movement.FileStart
-      | Key ctrl_u          -> MoveOp Movement.PageUp
-      | Key ctrl_d          -> MoveOp Movement.PageDown
-
-      | Key '0'             -> Pending (Digit 0)
-      | Key '1'             -> Pending (Digit 1)
-      | Key '2'             -> Pending (Digit 2)
-      | Key '3'             -> Pending (Digit 3)
-      | Key '4'             -> Pending (Digit 4)
-      | Key '5'             -> Pending (Digit 5)
-      | Key '6'             -> Pending (Digit 6)
-      | Key '7'             -> Pending (Digit 7)
-      | Key '8'             -> Pending (Digit 8)
-      | Key '9'             -> Pending (Digit 9)
-
-      | Escape_Z
       | ClickRelease _      -> Noop
+      | Escape_Z            -> Noop
+      | ArrowUp             -> MoveOp Movement.Up
+      | ArrowDown           -> MoveOp Movement.Down
+      | ArrowLeft           -> MoveOp Movement.Left
+      | ArrowRight          -> MoveOp Movement.Right
+      | EINTR               -> Resize
 
   let process_command editor =
     match editor.pending_input with
@@ -3141,6 +3162,10 @@ module Ciseau = struct
   let rawinput_update =
     let open Keys in
     function
+      | ArrowUp
+      | ArrowDown
+      | ArrowLeft
+      | ArrowRight
       | Click _
       | ClickRelease _              ->  id
       | EINTR                       ->  resize_editor
