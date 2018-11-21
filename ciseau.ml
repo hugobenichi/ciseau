@@ -201,17 +201,10 @@ module Vec2 = struct
     y : int ;
   }
 
-  let mk_v2 x y = {
-    x = x ;
-    y = y ;
-  }
-
+  let mk_v2 x y     = { x ; y }
   let v2_zero       = mk_v2 0 0
   let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
   let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
-
-  let (<+>) t1 t2 = v2_add t1 t2
-  let (<->) t1 t2 = v2_sub t1 t2
 
   (* Check if second v2 argument is inside the implicit rectangle woth topleft (0,0)
    * and first v2 argument as bottomright corner. *)
@@ -525,7 +518,7 @@ module Keys = struct
     | Escape_Z              (* esc[Z: shift + tab *)
     | ArrowUp               (* esc[A *)
     | ArrowDown             (* esc[B *)
-    | ArrowRight            (* esc[C *) 
+    | ArrowRight            (* esc[C *)
     | ArrowLeft             (* esc[D *)
     | EINTR                 (* usually happen when terminal is resized *)
 
@@ -536,7 +529,7 @@ module Keys = struct
       | Escape_Z              -> "Escape_z"
       | ArrowUp               -> "ArrowUp"
       | ArrowDown             -> "ArrowDown"
-      | ArrowRight            -> "ArrowRight" 
+      | ArrowRight            -> "ArrowRight"
       | ArrowLeft             -> "ArrowLeft"
       | EINTR                 -> "Interrupt"
       | Key '\x00'            -> "^@"
@@ -576,6 +569,7 @@ module Keys = struct
       | Key '\''              -> "'"
       | Key k                 ->  Char.escaped k
 
+  (* Terminal input needs to be read 3 bytes at a time to detect escape sequences *)
   let input_buffer_len = 3
 
   (* Buffer inputs across next_key calls in order to correclty segment escape key codes *)
@@ -585,12 +579,6 @@ module Keys = struct
     mutable lastread : int ;
   }
 
-  let mk_input_buffer () = {
-    buffer    = Bytes.make input_buffer_len '\000' ;
-    cursor    = 0 ;
-    lastread  = 0;
-  }
-
   let rec next_key input_buffer () =
     let { buffer ; cursor ; lastread } = input_buffer in
     if cursor > 0 then
@@ -598,7 +586,6 @@ module Keys = struct
       input_buffer.cursor <- (cursor + 1) mod lastread ;
       Key c
     else
-    let { buffer ; cursor } = input_buffer in
     match
       Unix.read Unix.stdin buffer 0 input_buffer_len
     with
@@ -626,7 +613,8 @@ module Keys = struct
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
             ->
               Unix.read Unix.stdin buffer 0 input_buffer_len |> ignore ;
-              (* x10 mouse click mode. TODO: add support for other xterm-262 *)
+              (* x10 mouse click mode. *)
+              (* TODO: add support for other modes: xterm-262, ... *)
               let x10_position_reader c =
                 let c' = (Char.code c) - 33 in
                 if c' < 0 then c' + 255 else c'
@@ -643,11 +631,18 @@ module Keys = struct
                   | 2   ->  Click (mk_v2 cx cy)
                   | 3   ->  ClickRelease (mk_v2 cx cy)
                   | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
-      (* this happens when typing  CTRL + [ followed by another key *)
+      (* This happens when typing CTRL + [ followed by another key *)
       | n  ->
           input_buffer.cursor <- 1 ;
           input_buffer.lastread <- n ;
           Key (Bytes.get buffer 0)
+
+  let make_next_key_fn () =
+    {
+      buffer    = Bytes.make input_buffer_len '\000' ;
+      cursor    = 0 ;
+      lastread  = 0;
+    } |> next_key
 
 end
 
@@ -3225,7 +3220,7 @@ module Ciseau = struct
         Term.set_raw_mode () ;
         file
           |> init_editor
-          |> (Keys.mk_input_buffer () |> Keys.next_key |> loop) ;
+          |> loop (Keys.make_next_key_fn ()) ;
         Term.restore_initial_state ()
     with
       e ->  Term.restore_initial_state () ;
