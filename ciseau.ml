@@ -3282,16 +3282,13 @@ module Fuzzer = struct
 end
 
 
-let log_sigwinch sig_n =
-  (* Nothing to do: when SIGWINCH is handled, the read pending on keyboard input is interrupted.
-   * The EINTR interrupt codepath there will trigger the resizing *)
-  ()
-
-let sigwinch = 28 (* That's for OSX *)
-
-
 let () =
-  Sys.Signal_handle log_sigwinch |> Sys.set_signal sigwinch ;
+  (* Automatic resize support requires requesting SIFWINCH events from the terminal.
+   * No handling is needed as SGIWINCH events interrupt blocking reads on input,
+   * which is detected and processed in the input parser. *)
+  let handler sig_n = () in
+  let sigwinch_code = 28 in
+  Sys.set_signal sigwinch_code (Sys.Signal_handle handler) ;
   (*
   Fuzzer.main 5000 ;
    *)
