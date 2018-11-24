@@ -1438,15 +1438,8 @@ module type TokenFinder = sig
 end
 
 
-(* CLEANUP: don't forget to delete me once all movement code is migrated to cursor *)
-let cursor_position_bridge fn filebuffer p =
-  let c = Filebuffer.cursor filebuffer p in
-  fn c ;
-  Cursor.pos c
-
-
 module TokenMovement (T : TokenFinder) : sig
-  val movement        : Move.t -> Filebuffer.t -> v2 -> v2
+  val movement        : Move.t -> Cursor.t -> unit
 end = struct
   open Token
   open OptionCombinators
@@ -1564,6 +1557,7 @@ end = struct
     in
       find_token_nth (Cursor.x cursor) (Cursor.line_get cursor)
         |> map (loop cursor)
+        |> ignore
 
   let go_token_up cursor =
     let rec loop cursor n =
@@ -1576,16 +1570,17 @@ end = struct
     in
       find_token_nth (Cursor.x cursor) (Cursor.line_get cursor)
         |> map (loop cursor)
+        |> ignore
 
   let movement =
     let open Move in
     function
-      | Left    -> cursor_position_bridge go_token_left
-      | Right   -> cursor_position_bridge go_token_right
-      | Up      -> cursor_position_bridge go_token_up
-      | Down    -> cursor_position_bridge go_token_down
-      | Start   -> cursor_position_bridge go_token_start
-      | End     -> cursor_position_bridge go_token_end
+      | Left    -> go_token_left
+      | Right   -> go_token_right
+      | Up      -> go_token_up
+      | Down    -> go_token_down
+      | Start   -> go_token_start
+      | End     -> go_token_end
 end
 
 
@@ -1652,52 +1647,36 @@ module WordMovement = TokenMovement(WordFinder)
 
 module LineMovement = struct
 
-  let go_line_start'  = Cursor.char_zero
-  let go_line_end'    = Cursor.char_last
-  let go_line_up'     = Cursor.line_prev
-  let go_line_down'   = Cursor.line_next
-
-  let go_line_left' cursor =
+  let go_line_left cursor =
     Cursor.line_prev cursor |> ignore ;
     Cursor.char_first cursor
 
-  let go_line_right' cursor =
+  let go_line_right cursor =
     Cursor.line_next cursor |> ignore ;
     Cursor.char_last cursor
-
-  let go_line_start = cursor_position_bridge go_line_start'
-  let go_line_end   = cursor_position_bridge go_line_end'
-  let go_line_up    = cursor_position_bridge go_line_up'
-  let go_line_down  = cursor_position_bridge go_line_down'
-  let go_line_left  = cursor_position_bridge go_line_left'
-  let go_line_right = cursor_position_bridge go_line_right'
 
   let movement =
     let open Move in
     function
       | Left    -> go_line_left
       | Right   -> go_line_right
-      | Up      -> go_line_up
-      | Down    -> go_line_down
-      | Start   -> go_line_start
-      | End     -> go_line_end
+      | Up      -> Cursor.line_prev >> ignore
+      | Down    -> Cursor.line_next >> ignore
+      | Start   -> Cursor.char_zero
+      | End     -> Cursor.char_last
 end
-
 
 module CharMovement = struct
 
-  let go_char_left = cursor_position_bridge Cursor.char_prev
-  let go_char_right = cursor_position_bridge Cursor.char_next
-
-  let noop any cursor = cursor
+  let noop any cursor = ()
 
   let movement =
     let open Move in
     function
       | Start
       | End     -> noop
-      | Left    -> go_char_left
-      | Right   -> go_char_right
+      | Left    -> Cursor.char_prev >> ignore
+      | Right   -> Cursor.char_next >> ignore
                    (* TODO: consider changing behavior to go to first above/below line with at
                     *       least a length > to cursor.x *)
       | Up      -> LineMovement.go_line_up
@@ -1755,12 +1734,12 @@ module ParagraphMovement = struct
   let movement =
     let open Move in
     function
-      | Start   -> cursor_position_bridge go_para_start
-      | End     -> cursor_position_bridge go_para_end
-      | Left    -> cursor_position_bridge go_para_left
-      | Right   -> cursor_position_bridge go_para_right
-      | Up      -> cursor_position_bridge go_para_up
-      | Down    -> cursor_position_bridge go_para_down
+      | Start   -> go_para_start
+      | End     -> go_para_end
+      | Left    -> go_para_left
+      | Right   -> go_para_right
+      | Up      -> go_para_up
+      | Down    -> go_para_down
 end
 
 
@@ -1847,12 +1826,12 @@ module DelimMovement(K : DelimiterKind) = struct
   let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
     let open Move in
     function
-      | Left    -> cursor_position_bridge go_delim_left
-      | Right   -> cursor_position_bridge go_delim_right
-      | Up      -> cursor_position_bridge go_delim_up
-      | Down    -> cursor_position_bridge go_delim_down
-      | Start   -> cursor_position_bridge go_delim_start
-      | End     -> cursor_position_bridge go_delim_end
+      | Left    -> go_delim_left
+      | Right   -> go_delim_right
+      | Up      -> go_delim_up
+      | Down    -> go_delim_down
+      | Start   -> go_delim_start
+      | End     -> go_delim_end
 end
 
 
@@ -2019,15 +1998,15 @@ module Movement (* TODO: formalize module signature *) = struct
 
   let move movement_context =
     function
-      | Blocks        -> BlockMovement.movement
-      | Words         -> WordMovement.movement
-      | Digits        -> DigitMovement.movement
-      | Lines         -> LineMovement.movement
-      | Chars         -> CharMovement.movement
-      | Paragraphs    -> ParagraphMovement.movement
-      | Parens        -> ParenMovement.movement
-      | Brackets      -> BracketMovement.movement
-      | Braces        -> BraceMovement.movement
+      | Blocks        -> BlockMovement.movement       (* *)
+      | Words         -> WordMovement.movement        (* *)
+      | Digits        -> DigitMovement.movement       (*  *)
+      | Lines         -> LineMovement.movement        (* *)
+      | Chars         -> CharMovement.movement        (* *)
+      | Paragraphs    -> ParagraphMovement.movement   (* *)
+      | Parens        -> ParenMovement.movement       (* *)
+      | Brackets      -> BracketMovement.movement     (* *)
+      | Braces        -> BraceMovement.movement       (* *)
       | Selection     -> SelectionMovement.movement movement_context
 
   let compute_movement movement_context mode =
@@ -2038,10 +2017,10 @@ module Movement (* TODO: formalize module signature *) = struct
       | Down          -> move movement_context mode Move.Down
       | Start         -> move movement_context mode Move.Start
       | End           -> move movement_context mode Move.End
-      | PageUp        -> cursor_position_bridge move_page_up
-      | PageDown      -> cursor_position_bridge move_page_down
-      | FileStart     -> cursor_position_bridge move_file_start
-      | FileEnd       -> cursor_position_bridge move_file_end
+      | PageUp        -> move_page_up
+      | PageDown      -> move_page_down
+      | FileStart     -> move_file_start
+      | FileEnd       -> move_file_end
 end
 
 
@@ -2130,7 +2109,7 @@ module Fileview : sig
   val init_fileview           : Filebuffer.t -> t
   val set_mov_mode            : Movement.mode -> t -> t
   val apply_movement          : Movement.movement -> v2 -> t -> t
-  val cursor                  : t -> v2
+  val cursor                  : t -> Cursor.t
   val adjust_view             : v2 -> t -> t
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
@@ -2171,7 +2150,7 @@ end = struct
 
   type t = {
     filebuffer        : filebuffer ;
-    cursor            : v2 ;       (* current position in file space: x = column index, y = row index *)
+    cursor            : Cursor.t ;       (* current position in file space: x = column index, y = row index *)
     view              : v2 ;       (* x,y offset of the rectangle view into the text *)
     numbering         : numbering_mode ;
     mov_mode          : Movement.mode ;
@@ -2183,7 +2162,7 @@ end = struct
 
   let init_fileview filebuffer = {
     filebuffer        = filebuffer ;
-    cursor            = v2_zero ;
+    cursor            = Filebuffer.cursor filebuffer 0 0 ;
     view              = v2_zero ;
     numbering         = CursorRelative ;
     mov_mode          = Movement.Chars ;
@@ -2232,16 +2211,21 @@ end = struct
   let apply_movement mov screen_size t =
     let cursor' = Movement.compute_movement t.context t.mov_mode mov t.filebuffer t.cursor in
 
+    let x = Cursor.x t.cursor in
+    let y = Cursor.y t.cursor in
+    let x' = Cursor.x cursor' in
+    let y' = Cursor.y cursor' in
+
     if kDEBUG then (
       let msg =
         Printf.sprintf"apply_movement after mode=%s mov=%s %d,%d -> %d,%d\n"
           (Movement.mode_to_string t.mov_mode)
           (Movement.movement_to_string mov)
-          t.cursor.y t.cursor.x
-          cursor'.y cursor'.x
+          y x
+          y' x'
       in
-      assert_that (cursor'.y >= 0) ~msg:msg ;
-      assert_that (cursor'.y < Filebuffer.file_length t.filebuffer) ~msg:msg
+      assert_that (y' >= 0) ~msg:msg ;
+      assert_that (y' < Filebuffer.file_length t.filebuffer) ~msg:msg
     ) ;
 
     adjust_view screen_size { t with cursor = cursor' }
@@ -2342,8 +2326,8 @@ end = struct
 
     (* Show token where cursor currently is *)
     if t.show_token then (
-      let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor in
-      let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s in
+      let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor |> Cursor.pos in
+      let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s |> Cursor.pos in
       let y_start = token_s.y - t.view.y in
       let y_end   = token_e.y - t.view.y in
       (* The current token can leak out of the current screen: bound start and stop to the screen *)
@@ -2388,12 +2372,16 @@ end = struct
       in
 
       Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
+        |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
       Movement.compute_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
+        |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
       Movement.compute_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
+        |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
       Movement.compute_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
+        |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
     ) ;
 
