@@ -1668,7 +1668,7 @@ end
 
 module CharMovement = struct
 
-  let noop any cursor = ()
+  let noop cursor = ()
 
   let movement =
     let open Move in
@@ -1679,8 +1679,8 @@ module CharMovement = struct
       | Right   -> Cursor.char_next >> ignore
                    (* TODO: consider changing behavior to go to first above/below line with at
                     *       least a length > to cursor.x *)
-      | Up      -> LineMovement.go_line_up
-      | Down    -> LineMovement.go_line_down
+      | Up      -> Cursor.line_prev >> ignore
+      | Down    -> Cursor.line_next >> ignore
 end
 
 
@@ -1823,7 +1823,7 @@ module DelimMovement(K : DelimiterKind) = struct
     go_delim_end cursor ;
     go_delim_right cursor
 
-  let movement : Move.t -> Filebuffer.t -> v2 -> v2 =
+  let movement : Move.t -> Cursor.t -> unit =
     let open Move in
     function
       | Left    -> go_delim_left
@@ -1870,6 +1870,7 @@ module MovementContext = struct
 end
 
 (* TODO: migrate to Cursor *)
+(*
 module SelectionMovement = struct
   open MovementContext
 
@@ -1930,6 +1931,7 @@ module SelectionMovement = struct
       | Left    -> selection_prev movement_context
       | Right   -> selection_next movement_context
 end
+*)
 
 module Movement (* TODO: formalize module signature *) = struct
 
@@ -1998,16 +2000,19 @@ module Movement (* TODO: formalize module signature *) = struct
 
   let move movement_context =
     function
-      | Blocks        -> BlockMovement.movement       (* *)
-      | Words         -> WordMovement.movement        (* *)
-      | Digits        -> DigitMovement.movement       (*  *)
-      | Lines         -> LineMovement.movement        (* *)
-      | Chars         -> CharMovement.movement        (* *)
-      | Paragraphs    -> ParagraphMovement.movement   (* *)
-      | Parens        -> ParenMovement.movement       (* *)
-      | Brackets      -> BracketMovement.movement     (* *)
-      | Braces        -> BraceMovement.movement       (* *)
+      | Blocks        -> BlockMovement.movement
+      | Words         -> WordMovement.movement
+      | Digits        -> DigitMovement.movement
+      | Lines         -> LineMovement.movement
+      | Chars         -> CharMovement.movement
+      | Paragraphs    -> ParagraphMovement.movement
+      | Parens        -> ParenMovement.movement
+      | Brackets      -> BracketMovement.movement
+      | Braces        -> BraceMovement.movement
+      | Selection     -> BraceMovement.movement
+      (* TODO: move Selection to cursor too
       | Selection     -> SelectionMovement.movement movement_context
+      *)
 
   let compute_movement movement_context mode =
     function
@@ -2162,7 +2167,7 @@ end = struct
 
   let init_fileview filebuffer = {
     filebuffer        = filebuffer ;
-    cursor            = Filebuffer.cursor filebuffer 0 0 ;
+    cursor            = Filebuffer.cursor filebuffer v2_zero ;
     view              = v2_zero ;
     numbering         = CursorRelative ;
     mov_mode          = Movement.Chars ;
@@ -2189,18 +2194,20 @@ end = struct
     let text_height = y - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     let text_width  = x - 6 in (* -6 for line numbering CLEANUP: remove this hardcoded offset *)
     let view_x =
-      if t.cursor.x < t.view.x then
+      let x = Cursor.x t.cursor in
+      if x < t.view.x then
         0
-      else if t.cursor.x > t.view.x + text_width then
-        t.cursor.x - text_width
+      else if x > t.view.x + text_width then
+        x - text_width
       else
         t.view.x
     in
     let view_y =
-      if t.cursor.y < t.view.y then
-        t.cursor.y
-      else if t.cursor.y > t.view.y + text_height then
-        t.cursor.y - text_height
+      let y = Cursor.y t.cursor in
+      if y < t.view.y then
+        y
+      else if y > t.view.y + text_height then
+        y - text_height
       else
         t.view.y
     in {
@@ -2209,12 +2216,12 @@ end = struct
     }
 
   let apply_movement mov screen_size t =
-    let cursor' = Movement.compute_movement t.context t.mov_mode mov t.filebuffer t.cursor in
-
     let x = Cursor.x t.cursor in
     let y = Cursor.y t.cursor in
-    let x' = Cursor.x cursor' in
-    let y' = Cursor.y cursor' in
+    (* CLEANUP: it is mayne not a good diea to have cursor mutation in place right here *)
+    let _ = Movement.compute_movement t.context t.mov_mode mov t.cursor in
+    let x' = Cursor.x t.cursor in
+    let y' = Cursor.y t.cursor in
 
     if kDEBUG then (
       let msg =
@@ -2228,7 +2235,7 @@ end = struct
       assert_that (y' < Filebuffer.file_length t.filebuffer) ~msg:msg
     ) ;
 
-    adjust_view screen_size { t with cursor = cursor' }
+    adjust_view screen_size { t with cursor = t.cursor }
 
   let swap_line_number_mode t =
     let new_mode = match t.numbering with
@@ -2258,8 +2265,8 @@ end = struct
 
   (* TODO: should y_recenter and x_recenter together or separately ? *)
   let recenter_view { x ; y } t =
-    let view_x = t.cursor.x - x / 2 in
-    let view_y = t.cursor.y - y / 2 in {
+    let view_x = (Cursor.x t.cursor) - x / 2 in
+    let view_y = (Cursor.y t.cursor) - y / 2 in {
       t with
         view = mk_v2 (max view_x 0) (max view_y 0) ;
     }
@@ -2278,21 +2285,23 @@ end = struct
     let text_width  = screen_size.x in
     let text_height = screen_size.y in
     let text_stop_y = min text_height (view_height t) in
+    let text_cursor_x = Cursor.x t.cursor in
+    let text_cursor_y = Cursor.y t.cursor in
 
     let line_number_offset =
       match t.numbering with
         | Absolute        -> 1
-        | CursorRelative  -> -t.cursor.y
+        | CursorRelative  -> - (Cursor.y t.cursor)
     in
 
     let last_x_index = text_width - 6 in
     let base_scrolling_offset = last_x_index - 1 in
-    let (cursor_x, scrolling_offset) =
-      if t.cursor.x < last_x_index
-        then (t.cursor.x, 0)
+    let (screen_cursor_x, scrolling_offset) =
+      if text_cursor_x < last_x_index
+        then (text_cursor_x, 0)
         else (base_scrolling_offset, t.view.x) (* t.cursor.x - base_scrolling_offset) *)
     in
-    let cursor = mk_v2 (cursor_x + 6) (t.cursor.y - t.view.y) in
+    let cursor = mk_v2 (screen_cursor_x + 6) (text_cursor_y - t.view.y) in
     if is_focused then
       Screen.put_cursor screen cursor ;
 
@@ -2318,13 +2327,15 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
-      (mk_rect 6 (t.cursor.y - t.view.y) text_width (t.cursor.y - t.view.y)) ;
+      (mk_rect 6 (text_cursor_y - t.view.y) text_width (text_cursor_y - t.view.y)) ;
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
-      (mk_rect (t.cursor.x + 6 - x_scrolling_offset) 0 (t.cursor.x + 7 - x_scrolling_offset) text_height) ;
+      (mk_rect (text_cursor_x + 6 - x_scrolling_offset) 0 (text_cursor_x + 7 - x_scrolling_offset) text_height) ;
 
     (* Show token where cursor currently is *)
+(*
+ * FIXME
     if t.show_token then (
       let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor |> Cursor.pos in
       let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s |> Cursor.pos in
@@ -2346,6 +2357,7 @@ end = struct
             framebuffer Config.default.colors.current_token (mk_rect x0' y x1' y)
       done ;
     ) ;
+*)
 
     (* Show selection *)
     if t.show_selection then (
@@ -2362,6 +2374,8 @@ end = struct
       Array.iter show_selection t.context.selection ;
     ) ;
 
+(*
+ * FIXME
     (* Show Left/Right/Up/Down tokens relatively to where current token is *)
     if t.show_neighbor then (
       let lightup_pixel t framebuffer colors pos =
@@ -2384,6 +2398,7 @@ end = struct
         |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
     ) ;
+*)
 
     (* No-text area *)
     for y = text_stop_y to text_height do
@@ -2405,7 +2420,7 @@ end = struct
       (Printf.sprintf
         "%s %d,%d  mode=%s"
         (Filebuffer.header t.filebuffer)
-        t.cursor.y t.cursor.x
+        (Cursor.y t.cursor) (Cursor.x t.cursor)
         (Movement.mode_to_string t.mov_mode)) ;
     (* header *)
     Screen.put_color_rect
