@@ -1656,31 +1656,28 @@ end
 
 
 module DelimMovement(K : DelimiterKind) = struct
-  open OptionCombinators
+  let is_left = (=) 1
+  let is_right = (=) (-1)
 
-  let is_left k = (k = 1)
-  let is_right k = (k = -1)
-
-  (* Returns kind score of char at x,y position, or 0 if x,y is not valid *)
   let get_kind_at = Cursor.char_get >> K.get_kind
 
   (* Go to first 'left' delimiter on the left of current position. *)
-  let rec go_first_left cursor skip =
+  let rec go_first_left skip cursor =
     if not skip && cursor |> get_kind_at |> is_left || Cursor.prev cursor = Nomore
       then ()
-      else go_first_left cursor false
+      else go_first_left false cursor
 
   (* Go to first 'left' delimiter on the right of current position *)
-  let rec go_first_right cursor skip =
+  let rec go_first_right skip cursor =
     if not skip && cursor |> get_kind_at |> is_left || Cursor.next cursor = Nomore
       then ()
-      else go_first_right cursor false
+      else go_first_right false cursor
 
   (* Go to first 'right' delimiter on the left of current position *)
-  let rec go_first_end_left cursor skip =
+  let rec go_first_end_left skip cursor =
     if not skip && cursor |> get_kind_at |> is_right || Cursor.prev cursor = Nomore
       then ()
-      else go_first_end_left cursor false
+      else go_first_end_left false cursor
 
   (* Move cursor left until balance is 0 *)
   let rec go_left cursor b =
@@ -1696,15 +1693,6 @@ module DelimMovement(K : DelimiterKind) = struct
       then ()
       else go_right cursor b'
 
-  let go_delim_left cursor =
-    go_first_left cursor true
-
-  let go_delim_end_left cursor =
-    go_first_end_left cursor true
-
-  let go_delim_right cursor =
-    go_first_right cursor true
-
   let go_delim_start cursor =
     let k = get_kind_at cursor in
     if not (is_left k)
@@ -1717,51 +1705,24 @@ module DelimMovement(K : DelimiterKind) = struct
 
   let go_delim_up cursor =
     go_delim_start cursor ;
-    go_delim_end_left cursor ;
+    go_first_end_left true cursor ;
     go_delim_start cursor
 
   let go_delim_down cursor =
     go_delim_start cursor ;
     go_delim_end cursor ;
-    go_delim_right cursor
+    go_first_right true cursor
 
   let movement : Move.t -> Cursor.t -> unit =
     let open Move in
     function
-      | Left    -> go_delim_left
-      | Right   -> go_delim_right
+      | Left    -> go_first_left true
+      | Right   -> go_first_right true
       | Up      -> go_delim_up
       | Down    -> go_delim_down
       | Start   -> go_delim_start
       | End     -> go_delim_end
 end
-
-
-module ParenMovement = DelimMovement(struct
-  let get_kind =
-    function
-    | '('   ->  1
-    | ')'   -> -1
-    | _     ->  0
-end)
-
-
-module BracketMovement = DelimMovement(struct
-  let get_kind =
-    function
-    | '['   ->  1
-    | ']'   -> -1
-    | _     ->  0
-end)
-
-
-module BraceMovement = DelimMovement(struct
-  let get_kind =
-    function
-    | '{'   ->  1
-    | '}'   -> -1
-    | _     ->  0
-end)
 
 
 module MovementContext = struct
@@ -1980,6 +1941,30 @@ module Movement (* TODO: formalize module signature *) = struct
       | Right   -> move_para_right
       | Up      -> move_para_up
       | Down    -> move_para_down
+
+  module ParenMovement = DelimMovement(struct
+    let get_kind =
+      function
+      | '('   ->  1
+      | ')'   -> -1
+      | _     ->  0
+  end)
+
+  module BracketMovement = DelimMovement(struct
+    let get_kind =
+      function
+      | '['   ->  1
+      | ']'   -> -1
+      | _     ->  0
+  end)
+
+  module BraceMovement = DelimMovement(struct
+    let get_kind =
+      function
+      | '{'   ->  1
+      | '}'   -> -1
+      | _     ->  0
+  end)
 
   let selection_movement mov_context direction cursor =
     let { x ; y } = SelectionMovement.movement mov_context direction cursor in
