@@ -1645,104 +1645,6 @@ end)
 module WordMovement = TokenMovement(WordFinder)
 
 
-module LineMovement = struct
-
-  let go_line_left cursor =
-    Cursor.line_prev cursor |> ignore ;
-    Cursor.char_first cursor
-
-  let go_line_right cursor =
-    Cursor.line_next cursor |> ignore ;
-    Cursor.char_last cursor
-
-  let movement =
-    let open Move in
-    function
-      | Left    -> go_line_left
-      | Right   -> go_line_right
-      | Up      -> Cursor.line_prev >> ignore
-      | Down    -> Cursor.line_next >> ignore
-      | Start   -> Cursor.char_zero
-      | End     -> Cursor.char_last
-end
-
-module CharMovement = struct
-
-  let noop cursor = ()
-
-  let movement =
-    let open Move in
-    function
-      | Start
-      | End     -> noop
-      | Left    -> Cursor.char_prev >> ignore
-      | Right   -> Cursor.char_next >> ignore
-                   (* TODO: consider changing behavior to go to first above/below line with at
-                    *       least a length > to cursor.x *)
-      | Up      -> Cursor.line_prev >> ignore
-      | Down    -> Cursor.line_next >> ignore
-end
-
-
-module ParagraphMovement = struct
-
-  open Cursor
-
-  let go_while cursor_condition cursor_step_fn cursor =
-    let c = ref Continue in
-    let m = ref false in
-    while !c = Continue && cursor_condition cursor do
-      c := cursor_step_fn cursor ;
-      m := !m || ( !c = Continue )
-    done ;
-    !m
-
-  let go_para_start cursor =
-    if go_while line_not_empty line_prev cursor
-      then line_next cursor |> ignore ;
-    char_first cursor
-
-  let go_para_end cursor =
-    if go_while line_not_empty line_next cursor
-      then line_prev cursor |> ignore ;
-    char_last cursor
-
-  let go_para_up cursor =
-    go_para_start cursor ;
-    line_prev cursor |> ignore ;
-    if go_while line_is_empty line_prev cursor
-      then go_para_start cursor
-
-  let go_para_down cursor =
-    go_para_end cursor ;
-    line_next cursor |> ignore ;
-    if go_while line_is_empty line_next cursor
-      then go_para_start cursor
-
-  let go_para_left cursor =
-    go_para_start cursor ;
-    line_prev cursor |> ignore ;
-    if go_while line_is_empty line_prev cursor
-      then go_para_end cursor
-
-  let go_para_right cursor =
-    go_para_end cursor ;
-    line_next cursor |> ignore ;
-    if go_while line_is_empty line_next cursor
-      then go_para_end cursor
-
-  let movement =
-    let open Move in
-    function
-      | Start   -> go_para_start
-      | End     -> go_para_end
-      | Left    -> go_para_left
-      | Right   -> go_para_right
-      | Up      -> go_para_up
-      | Down    -> go_para_down
-end
-
-
 (* TODO: migrate to Cursor *)
 module type DelimiterKind = sig
   (* Returns:
@@ -1996,6 +1898,89 @@ module Movement (* TODO: formalize module signature *) = struct
     let y'' = max 0 y' in
     Cursor.goto ~y:y'' cursor
 
+  let move_line_left cursor =
+    Cursor.line_prev cursor |> ignore ;
+    Cursor.char_first cursor
+
+  let move_line_right cursor =
+    Cursor.line_next cursor |> ignore ;
+    Cursor.char_last cursor
+
+  let move_while cursor_condition cursor_step_fn cursor =
+    let c = ref Continue in
+    let m = ref false in
+    while !c = Continue && cursor_condition cursor do
+      c := cursor_step_fn cursor ;
+      m := !m || ( !c = Continue )
+    done ;
+    !m
+
+  let move_para_start cursor =
+    if move_while Cursor.line_not_empty Cursor.line_prev cursor
+      then Cursor.line_next cursor |> ignore ;
+    Cursor.char_first cursor
+
+  let move_para_end cursor =
+    if move_while Cursor.line_not_empty Cursor.line_next cursor
+      then Cursor.line_prev cursor |> ignore ;
+    Cursor.char_last cursor
+
+  let move_para_up cursor =
+    move_para_start cursor ;
+    Cursor.line_prev cursor |> ignore ;
+    if move_while Cursor.line_is_empty Cursor.line_prev cursor
+      then move_para_start cursor
+
+  let move_para_down cursor =
+    move_para_end cursor ;
+    Cursor.line_next cursor |> ignore ;
+    if move_while Cursor.line_is_empty Cursor.line_next cursor
+      then move_para_start cursor
+
+  let move_para_left cursor =
+    move_para_start cursor ;
+    Cursor.line_prev cursor |> ignore ;
+    if move_while Cursor.line_is_empty Cursor.line_prev cursor
+      then move_para_end cursor
+
+  let move_para_right cursor =
+    move_para_end cursor ;
+    Cursor.line_next cursor |> ignore ;
+    if move_while Cursor.line_is_empty Cursor.line_next cursor
+      then move_para_end cursor
+
+  let movement_char =
+    let open Move in
+    function
+      | Start
+      | End     -> ignore
+      | Left    -> Cursor.char_prev >> ignore
+      | Right   -> Cursor.char_next >> ignore
+                   (* TODO: consider changing behavior to go to first above/below line with at
+                    *       least a length > to cursor.x *)
+      | Up      -> Cursor.line_prev >> ignore
+      | Down    -> Cursor.line_next >> ignore
+
+  let movement_line =
+    let open Move in
+    function
+      | Left    -> move_line_left
+      | Right   -> move_line_right
+      | Up      -> Cursor.line_prev >> ignore
+      | Down    -> Cursor.line_next >> ignore
+      | Start   -> Cursor.char_zero
+      | End     -> Cursor.char_last
+
+  let movement_paragraph =
+    let open Move in
+    function
+      | Start   -> move_para_start
+      | End     -> move_para_end
+      | Left    -> move_para_left
+      | Right   -> move_para_right
+      | Up      -> move_para_up
+      | Down    -> move_para_down
+
   let selection_movement mov_context direction cursor =
     let { x ; y } = SelectionMovement.movement mov_context direction cursor in
     Cursor.goto ~x:x ~y:y cursor
@@ -2005,9 +1990,9 @@ module Movement (* TODO: formalize module signature *) = struct
       | Blocks        -> BlockMovement.movement
       | Words         -> WordMovement.movement
       | Digits        -> DigitMovement.movement
-      | Lines         -> LineMovement.movement
-      | Chars         -> CharMovement.movement
-      | Paragraphs    -> ParagraphMovement.movement
+      | Lines         -> movement_line
+      | Chars         -> movement_char
+      | Paragraphs    -> movement_paragraph
       | Parens        -> ParenMovement.movement
       | Brackets      -> BracketMovement.movement
       | Braces        -> BraceMovement.movement
