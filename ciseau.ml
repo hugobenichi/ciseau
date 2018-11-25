@@ -1645,6 +1645,37 @@ end)
 module WordMovement = TokenMovement(WordFinder)
 
 
+module Block2 = struct
+
+  let is_block c = c <> ' ' && is_printable c
+  let is_not_block = is_block >> not
+
+  let go_token_start cursor =
+    if Cursor.line_not_empty cursor && Cursor.x cursor > 0 && is_block (Cursor.char_get cursor)
+    then
+      (* Cursor is inside a block and there is one or more char on the left: detect the edge. *)
+      while is_block (Cursor.char_get cursor) && Cursor.char_prev cursor = Continue do
+        ()
+      done ;
+      (* Adjust one char to the right unless cursor hit the beginning of line *)
+      if (Cursor.x cursor) > 0
+        then Cursor.char_next cursor |> ignore
+
+  let movement =
+    let open Move in
+    function
+      | Start   -> go_token_start
+      | other   -> BlockMovement.movement other
+      (*
+      | Left    -> go_token_left
+      | Right   -> go_token_right
+      | Up      -> go_token_up
+      | Down    -> go_token_down
+      | End     -> go_token_end
+      *)
+end
+
+
 (* TODO: migrate to Cursor *)
 module type DelimiterKind = sig
   (* Returns:
@@ -1972,7 +2003,7 @@ module Movement (* TODO: formalize module signature *) = struct
 
   let move movement_context =
     function
-      | Blocks        -> BlockMovement.movement
+      | Blocks        -> Block2.movement (*BlockMovement.movement*)
       | Words         -> WordMovement.movement
       | Digits        -> DigitMovement.movement
       | Lines         -> movement_line
