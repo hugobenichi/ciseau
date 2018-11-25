@@ -1869,42 +1869,40 @@ module MovementContext = struct
   }
 end
 
-(* TODO: migrate to Cursor *)
-(*
 module SelectionMovement = struct
   open MovementContext
 
   let is_v2_less_or_equal va vb = (va.y < vb.y) || (va.y = vb.y) && (va.x <= vb.x)
   let is_v2_less          va vb = (va.y < vb.y) || (va.y = vb.y) && (va.x < vb.x)
 
-  let noop any cursor = cursor
-
   (* PERF: do binary search instead *)
-  let selection_prev { selection } any v2 =
+  let selection_prev { selection } cursor =
     let rec loop s c i =
       if i = alen s || is_v2_less_or_equal c (array_get s i |> rect_offset)
         then (i - 1 + (alen s)) mod alen s (* mod == remainder *)
         else loop s c (i + 1)
     in
+    let v2 = Cursor.pos cursor in
     if alen selection = 0
       then v2
       else loop selection v2 0
             |> array_get selection
             |> rect_offset
 
-  let selection_next { selection } any v2 =
+  let selection_next { selection } cursor =
     let rec loop s c i =
       if i = alen s || is_v2_less c (array_get s i |> rect_offset)
         then i mod alen s
         else loop s c (i + 1)
     in
+    let v2 = Cursor.pos cursor in
     if alen selection = 0
       then v2
       else loop selection v2 0
             |> array_get selection
             |> rect_offset
 
-  let select_current_rect fn { selection } any v2 =
+  let select_current_rect fn { selection } cursor =
     let rec loop s c i =
       if i = alen s
         then c
@@ -1914,6 +1912,7 @@ module SelectionMovement = struct
             then fn r
             else loop s c (i + 1))
     in
+    let v2 = Cursor.pos cursor in
     if alen selection = 0
       then v2
       else loop selection v2 0
@@ -1925,13 +1924,12 @@ module SelectionMovement = struct
     let open Move in
     function
       | Up
-      | Down    -> noop
+      | Down    -> Cursor.pos
       | Start   -> selection_start movement_context
       | End     -> selection_end movement_context
       | Left    -> selection_prev movement_context
       | Right   -> selection_next movement_context
 end
-*)
 
 module Movement (* TODO: formalize module signature *) = struct
 
@@ -1998,6 +1996,10 @@ module Movement (* TODO: formalize module signature *) = struct
     let y'' = max 0 y' in
     Cursor.goto ~y:y'' cursor
 
+  let selection_movement mov_context direction cursor =
+    let { x ; y } = SelectionMovement.movement mov_context direction cursor in
+    Cursor.goto ~x:x ~y:y cursor
+
   let move movement_context =
     function
       | Blocks        -> BlockMovement.movement
@@ -2009,10 +2011,7 @@ module Movement (* TODO: formalize module signature *) = struct
       | Parens        -> ParenMovement.movement
       | Brackets      -> BracketMovement.movement
       | Braces        -> BraceMovement.movement
-      | Selection     -> BraceMovement.movement
-      (* TODO: move Selection to cursor too
-      | Selection     -> SelectionMovement.movement movement_context
-      *)
+      | Selection     -> selection_movement movement_context
 
   let compute_movement movement_context mode =
     function
