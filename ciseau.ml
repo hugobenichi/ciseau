@@ -1,6 +1,6 @@
 let starttime = Sys.time ()
 
-let logs = open_out "/tmp/ciseau.log"
+ let logs = open_out "/tmp/ciseau.log"
 
 (* Debugging flags *)
 let kLOG_STATS    = true
@@ -1162,6 +1162,7 @@ module type TextCursor = sig
   val goto            : ?x:int -> ?y:int -> t -> unit
 
   val line_get        : t -> string
+  val line_len        : t -> int
   val line_is_empty   : t -> bool
   val line_not_empty  : t -> bool
   val line_next       : t -> step
@@ -1169,6 +1170,8 @@ module type TextCursor = sig
   val line_first      : t -> unit
   val line_last       : t -> unit
 
+  val char_is_first   : t -> bool
+  val char_is_last    : t -> bool
   val char_get        : t -> char       (* TODO: what to do for empty lines ?? *)
   val char_next       : t -> step       (* move to next char, or return Nomore if cursor is at end of line *)
   val char_prev       : t -> step       (* move to previous char, or return Nomore if cursor is at beginning of line *)
@@ -1228,9 +1231,11 @@ end = struct
 
   let line_get { text ; y } = array_get text y
 
-  let line_is_empty cursor = cursor |> line_get |> slen |> (=) 0
+  let line_len cursor = slen (line_get cursor)
 
-  let line_not_empty cursor = cursor |> line_get |> slen |> (<) 0
+  let line_is_empty cursor = line_len cursor = 0
+
+  let line_not_empty cursor = line_len cursor > 0
 
   let line_next cursor =
     let y' = cursor.y + 1 in
@@ -1251,6 +1256,12 @@ end = struct
         Continue
       )
       else Nomore
+
+  let char_is_first { x } = x = 0
+
+  (* For empty line, the cursor is never on the "last" char *)
+  let char_is_last cursor =
+    line_len cursor = cursor.x + 1
 
   let char_get { text ; x ; y } = string_at (array_get text y) x
 
@@ -1650,28 +1661,41 @@ module Block2 = struct
   let is_block c = c <> ' ' && is_printable c
   let is_not_block = is_block >> not
 
-  let go_token_start cursor =
+  let go_block_start cursor =
     if Cursor.line_not_empty cursor && Cursor.x cursor > 0 && is_block (Cursor.char_get cursor)
     then
+      let continue = ref true in
       (* Cursor is inside a block and there is one or more char on the left: detect the edge. *)
-      while is_block (Cursor.char_get cursor) && Cursor.char_prev cursor = Continue do
-        ()
+      while is_block (Cursor.char_get cursor) && !continue do
+        continue := Cursor.char_prev cursor = Continue
       done ;
       (* Adjust one char to the right unless cursor hit the beginning of line *)
-      if (Cursor.x cursor) > 0
+      if !continue
         then Cursor.char_next cursor |> ignore
+
+  let go_block_end cursor =
+    if Cursor.line_not_empty cursor && not (Cursor.char_is_last cursor) && is_block (Cursor.char_get cursor)
+    then
+      let continue = ref true in
+      (* Cursor is inside a block and there is one or more char on the left: detect the edge. *)
+      while is_block (Cursor.char_get cursor) && !continue do
+        continue := Cursor.char_next cursor = Continue
+      done ;
+      (* Adjust one char to the left unless cursor hit the end of line *)
+      if !continue
+        then Cursor.char_prev cursor |> ignore
 
   let movement =
     let open Move in
     function
-      | Start   -> go_token_start
+      | Start   -> go_block_start
+      | End     -> go_block_end
       | other   -> BlockMovement.movement other
       (*
       | Left    -> go_token_left
       | Right   -> go_token_right
       | Up      -> go_token_up
       | Down    -> go_token_down
-      | End     -> go_token_end
       *)
 end
 
