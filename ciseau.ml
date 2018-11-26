@@ -1169,6 +1169,7 @@ module type TextCursor = sig
   val line_prev       : t -> step
   val line_first      : t -> unit
   val line_last       : t -> unit
+  val line_is_last    : t -> bool
 
   val char_is_first   : t -> bool
   val char_is_last    : t -> bool
@@ -1296,6 +1297,7 @@ end = struct
 
   let line_first cursor = goto ~y:0 cursor
   let line_last cursor = goto ~y:max_int cursor
+  let line_is_last { text ; y } = alen text = y + 1
 
   let do_if_no_more fn cursor =
     function
@@ -1658,15 +1660,16 @@ module WordMovement = TokenMovement(WordFinder)
 
 module Block2 = struct
 
-  let is_block c = c <> ' ' && is_printable c
+  let is_block cursor =
+    let c = Cursor.char_get cursor in c <> ' ' && is_printable c
   let is_not_block = is_block >> not
 
   let go_block_start cursor =
-    if Cursor.line_not_empty cursor && Cursor.x cursor > 0 && is_block (Cursor.char_get cursor)
+    if Cursor.line_not_empty cursor && Cursor.x cursor > 0 && is_block cursor
     then
       let continue = ref true in
       (* Cursor is inside a block and there is one or more char on the left: detect the edge. *)
-      while is_block (Cursor.char_get cursor) && !continue do
+      while is_block cursor && !continue do
         continue := Cursor.char_prev cursor = Continue
       done ;
       (* Adjust one char to the right unless cursor hit the beginning of line *)
@@ -1674,26 +1677,43 @@ module Block2 = struct
         then Cursor.char_next cursor |> ignore
 
   let go_block_end cursor =
-    if Cursor.line_not_empty cursor && not (Cursor.char_is_last cursor) && is_block (Cursor.char_get cursor)
+    if Cursor.line_not_empty cursor && not (Cursor.char_is_last cursor) && is_block cursor
     then
       let continue = ref true in
       (* Cursor is inside a block and there is one or more char on the left: detect the edge. *)
-      while is_block (Cursor.char_get cursor) && !continue do
+      while is_block cursor && !continue do
         continue := Cursor.char_next cursor = Continue
       done ;
       (* Adjust one char to the left unless cursor hit the end of line *)
       if !continue
         then Cursor.char_prev cursor |> ignore
 
+  let go_block_right cursor =
+    go_block_end cursor ;
+    (* If cursor is on very last block of the file, go instead to that block beginning *)
+    if Cursor.line_is_last cursor && Cursor.char_is_last cursor
+      then go_block_start cursor
+      else
+        while Cursor.next cursor = Continue && is_not_block cursor do
+          ()
+        done
+
+  let go_block_left cursor =
+    go_block_start cursor ;
+    while Cursor.prev cursor = Continue && is_not_block cursor do
+      ()
+    done ;
+    go_block_start cursor
+
   let movement =
     let open Move in
     function
+      | Left    -> go_block_left
+      | Right   -> go_block_right
       | Start   -> go_block_start
       | End     -> go_block_end
       | other   -> BlockMovement.movement other
       (*
-      | Left    -> go_token_left
-      | Right   -> go_token_right
       | Up      -> go_token_up
       | Down    -> go_token_down
       *)
