@@ -1157,9 +1157,11 @@ module Cursor : sig
   val mk_cursor       : string array -> int -> int -> t
   val x               : t -> int        (* current column index *)
   val y               : t -> int        (* current line index *)
+  val xmem            : t -> int
   val pos             : t -> v2         (* current column and line indexes as a vec *)
   val save            : t -> t
   val goto            : ?x:int -> ?y:int -> t -> unit
+  val xmem_set        : t -> int -> unit
 
   val line_get        : t -> string
   val line_len        : t -> int
@@ -1186,24 +1188,29 @@ module Cursor : sig
 end = struct
 
   type t = {
-    text          : string array ;
+    text          : string array ;  (* TODO: change to Filebuffer *)
     mutable x     : int ;
     mutable y     : int ;
+    mutable xmem  : int ;           (* Ideal 'x' the cursor wants to be at when moving up/down.
+                                     * Interpretation depends on current movement mode. *)
   }
 
   let mk_cursor t x y = {
     text  = t ;
     x     = x ;
     y     = y ;
+    xmem  = x ;
   }
 
   let x { x } = x
 
   let y { y } = y
 
+  let xmem { xmem } = xmem
+
   let pos { x ; y } = mk_v2 x y
 
-  let save { text ; x ; y } = { text ; x ; y }
+  let save { text ; x ; y ; xmem } = { text ; x ; y ; xmem }
 
   let goto_y y cursor =
     let y' = min y ((alen cursor.text) - 1) in
@@ -1219,6 +1226,9 @@ end = struct
     let y_want' = if y_want < 0 then cursor.y else y_want in
     goto_y y_want' cursor ;
     goto_x x_want' cursor
+
+  let xmem_set cursor xmem =
+    cursor.xmem <- xmem
 
   let line_get { text ; y } = array_get text y
 
@@ -1329,7 +1339,6 @@ end = struct
   let next cursor =
     char_next cursor
       |> do_if_no_more line_next_non_empty cursor
-
 
   (* Conversion plan for introducing cursors little by little:
    *  1) add a vec -> cursor and cursor -> vec conversion fns
@@ -1969,6 +1978,28 @@ module Movement (* TODO: formalize module signature *) = struct
     Cursor.line_next cursor |> ignore ;
     Cursor.char_last cursor
 
+  let move_char_left cursor =
+    Cursor.char_prev cursor |> ignore ;
+    Cursor.xmem_set cursor (Cursor.x cursor)
+
+  let move_char_right cursor =
+    Cursor.char_next cursor |> ignore ;
+    Cursor.xmem_set cursor (Cursor.x cursor)
+
+  let move_char_up cursor =
+    let xmem = Cursor.xmem cursor in
+    Cursor.line_prev cursor |> ignore ;
+    if Cursor.x cursor < xmem
+    then
+      Cursor.goto ~x:xmem cursor
+
+  let move_char_down cursor =
+    let xmem = Cursor.xmem cursor in
+    Cursor.line_next cursor |> ignore ;
+    if Cursor.x cursor < xmem
+    then
+      Cursor.goto ~x:xmem cursor
+
   let move_while cursor_condition cursor_step_fn cursor =
     let c = ref Continue in
     let m = ref false in
@@ -2017,12 +2048,12 @@ module Movement (* TODO: formalize module signature *) = struct
     function
       | Start
       | End     -> ignore
-      | Left    -> Cursor.char_prev >> ignore
-      | Right   -> Cursor.char_next >> ignore
+      | Left    -> move_char_left
+      | Right   -> move_char_right
                    (* TODO: consider changing behavior to go to first above/below line with at
                     *       least a length > to cursor.x *)
-      | Up      -> Cursor.line_prev >> ignore
-      | Down    -> Cursor.line_next >> ignore
+      | Up      -> move_char_up
+      | Down    -> move_char_down
 
   let movement_line =
     let open Move in
