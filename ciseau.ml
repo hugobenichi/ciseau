@@ -1705,6 +1705,43 @@ module Block2 = struct
     done ;
     go_block_start cursor
 
+  (* CLEANUP: this is a reimplementation of token_up for blocks, but should the behavior be different:
+   *          when the line above is not empty, then go to the rightnmost block that match the same position
+   *          and remember the "wished" position
+   *          this also deals with saving the wished char position when jumping across short line
+   *)
+  let go_block_up cursor =
+    if is_block cursor && Cursor.y cursor > 0
+    then
+      let x = Cursor.x cursor in
+      let y = Cursor.y cursor in
+      let n = ref 0 in
+      go_block_start cursor ;
+      (* count the number of block to skip until current cursor block *)
+      while Cursor.y cursor = y do
+        go_block_left cursor ;
+        incr n
+      done ;
+      (* readjust cursor to start line *)
+      Cursor.goto ~x:0 ~y:y cursor ;
+      (* find the first line with at least as many blocks *)
+      let found = ref false in
+      let yseek = ref y in
+      while !yseek > 0 do
+        (* go to next line until there is a next line, attem *)
+        decr yseek ;
+        Cursor.goto ~x:0 ~y:!yseek cursor ;
+        let m = ref !n in
+        while !m > 0 && Cursor.y cursor = !yseek do
+          go_block_right cursor ;
+          decr m
+        done ;
+        found := Cursor.y cursor = !yseek
+      done ;
+      if not !found
+      then
+        Cursor.goto ~x:x ~y:y cursor
+
   let movement =
     let open Move in
     function
@@ -1712,9 +1749,9 @@ module Block2 = struct
       | Right   -> go_block_right
       | Start   -> go_block_start
       | End     -> go_block_end
+      | Up      -> go_block_up
       | other   -> BlockMovement.movement other
       (*
-      | Up      -> go_token_up
       | Down    -> go_token_down
       *)
 end
