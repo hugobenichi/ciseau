@@ -1716,18 +1716,14 @@ module Block2 = struct
       let y = Cursor.y cursor in
       let n = ref 0 in
       go_block_start cursor ;
-      (* count the number of block to skip until current cursor block *)
-      while Cursor.y cursor = y do
+      while Cursor.y cursor = y do        (* count the number of block to skip until current cursor block *)
         go_block_left cursor ;
         incr n
       done ;
-      (* readjust cursor to start line *)
-      Cursor.goto ~x:0 ~y:y cursor ;
-      (* find the first line with at least as many blocks *)
-      let found = ref false in
+      Cursor.goto ~x:0 ~y:y cursor ;      (* readjust cursor to start of line *)
+      let found = ref false in            (* find the first line with at least as many blocks *)
       let yseek = ref y in
-      while !yseek > 0 do
-        (* go to next line until there is a next line, attem *)
+      while not !found && !yseek > 0 do
         decr yseek ;
         Cursor.goto ~x:0 ~y:!yseek cursor ;
         let m = ref !n in
@@ -1737,7 +1733,7 @@ module Block2 = struct
         done ;
         found := Cursor.y cursor = !yseek
       done ;
-      if not !found
+      if not !found                       (* reset cursor if no block was found *)
       then
         Cursor.goto ~x:x ~y:y cursor
 
