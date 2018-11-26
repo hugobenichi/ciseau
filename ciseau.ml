@@ -1150,11 +1150,11 @@ type step = Nomore
           | Continue
 
 
-(* A 4-directional text cursor: can move up/down one line at a time or left/right one char at a time
- * No constructor specified: Text impls provide their own TextCursor *)
-module type TextCursor = sig
+(* 4-directional text cursor *)
+module Cursor : sig
   type t
 
+  val mk_cursor       : string array -> int -> int -> t
   val x               : t -> int        (* current column index *)
   val y               : t -> int        (* current line index *)
   val pos             : t -> v2         (* current column and line indexes as a vec *)
@@ -1182,16 +1182,6 @@ module type TextCursor = sig
 
   val prev            : t -> step
   val next            : t -> step
-
-end
-
-(* TextCursor impl for an array of strings *)
-module Cursor : sig
-
-  type t
-  include TextCursor with type t := t
-
-  val mk_cursor : string array -> int -> int -> t
 
 end = struct
 
