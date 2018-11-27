@@ -268,23 +268,6 @@ end
 open Rect
 
 
-module Token = struct
-  (* TODO: flatten with option ?? *)
-  type token = {
-    start : int ;
-    stop  : int ;
-  }
-
-  let mk_tok i j = {
-    start = i ;
-    stop  = j ;
-  }
-
-  let token_contains x { start ; stop } =
-    start <= x && x < stop
-end
-
-
 module Color = struct
 
   type color  = (* First 8 ansi colors *)
@@ -1445,223 +1428,11 @@ module Move = struct
 end
 
 
-module type TokenFinder = sig
-  val next : string -> Token.token option -> Token.token option
-end
-
-
-module TokenMovement (T : TokenFinder) : sig
-  val movement        : Move.t -> Cursor.t -> unit
-end = struct
-  open Token
-  open OptionCombinators
-
-  let find_token x line =
-    let rec loop line x =
-      function
-        | None                        -> None
-        | Some tok when tok.start > x -> None
-        | Some tok when x < tok.stop  -> Some tok
-        | tok_opt                     -> tok_opt
-                                          |> T.next line
-                                          |> loop line x
-    in
-      loop line x (T.next line None)
-
-  let token_start_to_cursor y { start } = mk_v2 start y
-  let token_stop_to_cursor y { stop }   = mk_v2 (stop - 1) y
-
-  let go_token_start cursor =
-    Cursor.line_get cursor
-      |> find_token (Cursor.x cursor)
-      |> function
-          | None -> ()
-          | Some { start } -> Cursor.goto ~x:start cursor
-
-  let go_token_end cursor =
-    Cursor.line_get cursor
-      |> find_token (Cursor.x cursor)
-      |> function
-          | None -> ()
-          | Some { stop } -> Cursor.goto ~x:(stop - 1) cursor
-
-  let rec go_token_first cursor =
-    Cursor.char_zero cursor ;
-    T.next (Cursor.line_get cursor) None
-      |> function
-        | Some { start } -> Cursor.goto ~x:start cursor
-        | None           -> if Cursor.line_next cursor = Continue
-                              then go_token_first cursor
-
-  let go_token_right cursor =
-    let rec loop line x =
-      function
-        | None                        -> None
-        | Some tok when x < tok.start -> Some tok
-        | tok_opt                     -> tok_opt
-                                          |> T.next line
-                                          |> loop line x
-    in
-      let line = Cursor.line_get cursor in
-      loop line (Cursor.x cursor) (T.next line None)
-        |> function
-            | Some { start } -> Cursor.goto ~x:start cursor
-            | None           -> if Cursor.line_next cursor = Continue
-                                  then go_token_first cursor
-
-  let rec go_token_last cursor =
-    let rec loop line tok_opt =
-      match (tok_opt, T.next line tok_opt) with
-        | (None, None)         -> None
-        | (tok,  None)         -> tok
-        | (_,    next_tok_opt) -> loop line next_tok_opt
-    in
-      Cursor.char_last cursor ;
-      loop (Cursor.line_get cursor) None
-        |> function
-            | Some { start } -> Cursor.goto ~x:start cursor
-            | None           -> if Cursor.line_prev cursor = Continue
-                                  then go_token_last cursor
-
-  let go_token_left cursor =
-    let rec loop line x tok_opt =
-      T.next line tok_opt
-        |> function
-            | None                                -> None
-            | Some tok when token_contains x tok  -> tok_opt
-            | next_tok_opt                        -> loop line x next_tok_opt
-    in
-      loop (Cursor.line_get cursor) (Cursor.x cursor) None
-        |> function
-            | Some { start } -> Cursor.goto ~x:start cursor
-            | None           -> if Cursor.line_prev cursor = Continue
-                                  then go_token_last cursor
-
-  let find_token_nth x line =
-    let rec loop line x n =
-      function
-        | None                        -> None
-        | Some tok when tok.start > x -> None
-        | Some tok when x < tok.stop  -> Some n
-        | tok_opt                     -> tok_opt
-                                          |> T.next line
-                                          |> loop line x (n + 1)
-    in
-      loop line x 0 (T.next line None)
-
-  let go_token_nth n line =
-    let rec loop line n =
-      function
-        | None                -> None
-        | tok_opt when n = 0  -> tok_opt
-        | tok_opt             -> loop line (n - 1) (T.next line tok_opt)
-    in
-      loop line n (T.next line None)
-
-  let go_token_down cursor =
-    let rec loop cursor n =
-      if Cursor.line_next cursor = Continue
-        then
-          go_token_nth n (Cursor.line_get cursor)
-            |> function
-                | Some { start } -> Cursor.goto ~x:start cursor
-                | None           -> loop cursor n
-    in
-      find_token_nth (Cursor.x cursor) (Cursor.line_get cursor)
-        |> map (loop cursor)
-        |> ignore
-
-  let go_token_up cursor =
-    let rec loop cursor n =
-      if Cursor.line_prev cursor = Continue
-        then
-          go_token_nth n (Cursor.line_get cursor)
-            |> function
-              | Some { start } -> Cursor.goto ~x:start cursor
-              | None  -> loop cursor n
-    in
-      find_token_nth (Cursor.x cursor) (Cursor.line_get cursor)
-        |> map (loop cursor)
-        |> ignore
-
-  let movement =
-    let open Move in
-    function
-      | Left    -> go_token_left
-      | Right   -> go_token_right
-      | Up      -> go_token_up
-      | Down    -> go_token_down
-      | Start   -> go_token_start
-      | End     -> go_token_end
-end
-
-
-type kind = Include | Exclude
-
-
-module type TokenKind = sig
-  val kind_of : char -> kind
-end
-
-
-module BaseTokenFinder (T: TokenKind) : TokenFinder = struct
-  open Token
-
-  let rec find_token_start line i =
-    if i < slen line && string_at line i |> T.kind_of = Exclude
-      then find_token_start line (i + 1)
-      else i
-
-  let rec find_token_stop line i =
-    if i < slen line && string_at line i |> T.kind_of = Include
-      then find_token_stop line (i + 1)
-      else i
-
-  let next line tok_opt =
-    let i = match tok_opt with
-      | None      -> 0
-      | Some tok  -> tok.stop
-    in
-      let start = find_token_start line i in
-      let stop  = find_token_stop line start in
-      if start = slen line
-        then None
-        else Some (Token.mk_tok start stop)
-end
-
-
-module BlockFinder = BaseTokenFinder(struct
-  let kind_of c =
-    if c <> ' ' && is_printable c
-      then Include
-      else Exclude
-end)
-module BlockMovement = TokenMovement(BlockFinder)
-
-
-module DigitFinder = BaseTokenFinder(struct
-  let kind_of c =
-    if is_digit c
-      then Include
-      else Exclude
-end)
-module DigitMovement = TokenMovement(DigitFinder)
-
-
-module WordFinder = BaseTokenFinder(struct
-  let kind_of c =
-    if is_alphanum c || c = '_'
-      then Include
-      else Exclude
-end)
-module WordMovement = TokenMovement(WordFinder)
-
-
 module type IsBlock = sig
   val is_char_inside_block : char -> bool
 end
 
-module BlockMovement2(B : IsBlock) = struct
+module BlockMovement(B : IsBlock) = struct
 
   let is_block cursor =
     B.is_char_inside_block (Cursor.char_get cursor)
@@ -2096,15 +1867,15 @@ module Movement (* TODO: formalize module signature *) = struct
       | _     ->  0
   end)
 
-  module Block = BlockMovement2(struct
+  module Block = BlockMovement(struct
     let is_char_inside_block c = c <> ' ' && is_printable c
   end)
 
-  module Word = BlockMovement2(struct
+  module Word = BlockMovement(struct
     let is_char_inside_block c = is_alphanum c || c = '_'
   end)
 
-  module Digit = BlockMovement2(struct
+  module Digit = BlockMovement(struct
     let is_char_inside_block = is_digit
   end)
 
@@ -3427,7 +3198,6 @@ let () =
  *
  *  perfs:
  *  - memory optimization for
- *      TokenMovement
  *      DelimMovement
  *  - add put_color_segment to avoid many rect creation
  *
