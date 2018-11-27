@@ -1657,10 +1657,15 @@ end)
 module WordMovement = TokenMovement(WordFinder)
 
 
-module Block2 = struct
+module type IsBlock = sig
+  val is_char_inside_block : char -> bool
+end
+
+module BlockMovement2(B : IsBlock) = struct
 
   let is_block cursor =
-    let c = Cursor.char_get cursor in c <> ' ' && is_printable c
+    B.is_char_inside_block (Cursor.char_get cursor)
+
   let is_not_block = is_block >> not
 
   let go_block_start cursor =
@@ -1745,12 +1750,8 @@ module Block2 = struct
       | Start   -> go_block_start
       | End     -> go_block_end
       | Up      -> go_block_up
-      | other   -> BlockMovement.movement other
-      (*
-      | Down    -> go_token_down
-      *)
+      | Down    -> ignore (* TODO *)
 end
-
 
 (* TODO: migrate to Cursor *)
 module type DelimiterKind = sig
@@ -2095,15 +2096,27 @@ module Movement (* TODO: formalize module signature *) = struct
       | _     ->  0
   end)
 
+  module Block = BlockMovement2(struct
+    let is_char_inside_block c = c <> ' ' && is_printable c
+  end)
+
+  module Word = BlockMovement2(struct
+    let is_char_inside_block c = is_alphanum c || c = '_'
+  end)
+
+  module Digit = BlockMovement2(struct
+    let is_char_inside_block = is_digit
+  end)
+
   let selection_movement mov_context direction cursor =
     let { x ; y } = SelectionMovement.movement mov_context direction cursor in
     Cursor.goto ~x:x ~y:y cursor
 
   let move movement_context =
     function
-      | Blocks        -> Block2.movement (*BlockMovement.movement*)
-      | Words         -> WordMovement.movement
-      | Digits        -> DigitMovement.movement
+      | Blocks        -> Block.movement
+      | Words         -> Word.movement
+      | Digits        -> Digit.movement
       | Lines         -> movement_line
       | Chars         -> movement_char
       | Paragraphs    -> movement_paragraph
