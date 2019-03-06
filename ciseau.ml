@@ -72,7 +72,6 @@ let write fd buffer len =
   if n <> len
     then fail "fd write failed"
 
-
 (* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
 module ArrayOperations = struct
 
@@ -194,6 +193,7 @@ module Arraybuffer = struct
 end
 
 
+(* TODO: consider renaming to just 'Vec' *)
 module Vec2 = struct
 
   type v2 = {
@@ -203,6 +203,8 @@ module Vec2 = struct
 
   let mk_v2 x y     = { x ; y }
   let v2_zero       = mk_v2 0 0
+  let v2_x { x ; y }  = x
+  let v2_y { x ; y }  = y
   let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
   let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
 
@@ -223,6 +225,7 @@ end
 open Vec2
 
 
+(* Revisit bounding rules for right and bottom corners *)
 module Rect = struct
 
   type rect = {
@@ -744,8 +747,8 @@ module Term = struct
   let newline                     = "\r\n"
 
   (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
-  let cursor_control_string vec2 =
-    Printf.sprintf "\027[%d;%dH" (vec2.y + 1) (vec2.x + 1)
+  let cursor_control_string { x ; y } =
+    Printf.sprintf "\027[%d;%dH" (x + 1) (y + 1)
 
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
@@ -2434,7 +2437,7 @@ module Stats = struct
     output_string f (Keys.descr_of stats.last_key_input) ;
     let open Keys in
     match stats.last_key_input with
-      | Key c -> 
+      | Key c ->
           output_string f " " ;
           output_int f (Char.code c)
       | _ -> () ;
@@ -2596,14 +2599,14 @@ module Tileset = struct
             array_set t'.redrawing focus_index' Redraw ;
             t'
       | Selection pos ->
-          let pos_in_tile {x ; y } r =
-            let x0 = rect_x r in
-            let y0 = rect_y r in
-            let x1 = rect_x_end r in
-            let y1 = rect_y_end r in
+          let is_pos_inside_tile { x ; y } tile_bouding_rec =
+            let x0 = rect_x tile_bouding_rec in
+            let y0 = rect_y tile_bouding_rec in
+            let x1 = rect_x_end tile_bouding_rec in
+            let y1 = rect_y_end tile_bouding_rec in
             x0 <= x && x < x1 && y0 <= y && y < y1
           in
-          let i = array_find (pos_in_tile pos) t.screen_tiles in
+          let i = array_find (is_pos_inside_tile pos) t.screen_tiles in
           Printf.fprintf logs "selecting tile %d for pos %d,%d\n" i pos.x pos.y ;
           flush logs ;
           if i < 0
