@@ -72,6 +72,7 @@ let write fd buffer len =
   if n <> len
     then fail "fd write failed"
 
+
 (* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
 module ArrayOperations = struct
 
@@ -193,7 +194,6 @@ module Arraybuffer = struct
 end
 
 
-(* TODO: consider renaming to just 'Vec' *)
 module Vec2 = struct
 
   type v2 = {
@@ -203,8 +203,6 @@ module Vec2 = struct
 
   let mk_v2 x y     = { x ; y }
   let v2_zero       = mk_v2 0 0
-  let v2_x { x ; y }  = x
-  let v2_y { x ; y }  = y
   let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
   let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
 
@@ -225,7 +223,6 @@ end
 open Vec2
 
 
-(* Revisit bounding rules for right and bottom corners *)
 module Rect = struct
 
   type rect = {
@@ -746,10 +743,6 @@ module Term = struct
   (* TODO: this should be platform specific *)
   let newline                     = "\r\n"
 
-  (* ANSI escape codes weirdness: cursor positions are 1 based in the terminal referential *)
-  let cursor_control_string { x ; y } =
-    Printf.sprintf "\027[%d;%dH" (x + 1) (y + 1)
-
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
   let get_terminal_dimensions () =
@@ -787,8 +780,8 @@ module Term = struct
     want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
     want.c_csize   <- 8;        (* 8 bit chars *)
 
-    stdout_write_string "\027[s" ; (* cursor save *)
-    stdout_write_string "\027[?47h" ; (* switch offscreen *)
+    stdout_write_string "\027[s" ;      (* cursor save *)
+    stdout_write_string "\027[?47h" ;   (* switch offscreen *)
     stdout_write_string "\027[?1000h" ; (* mouse event on *)
     stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
     (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
@@ -836,59 +829,32 @@ end = struct
 
   module Rendering = struct
     let colors_equal t i j =
-      let open Color in
-      (t.fg_colors.(i) = t.fg_colors.(j)) && (t.bg_colors.(i) = t.bg_colors.(j))
+      (array_get t.fg_colors i) = (array_get t.fg_colors j) && (array_get t.bg_colors i) = (array_get t.bg_colors j)
 
-    let next_contiguous_color_section t start =
-      let rec loop t start stop =
-        (* memory opt: all arguments passed explicitly *)
-        if stop < t.len && colors_equal t start stop
-        then loop t start (stop + 1)
-        else stop
-      in loop t start (start + 1)
+    let render t =
+      let x = ref 0 in
+      let start = ref 0 in
+      let stop = ref (!start + 1) in
+      while !start < t.len do
+        (* TODO: more simplification: get the fg and bg colors as local variables here, and eliminate colors_equal *)
+        (* Render a color section if: 1) end of line, 2) end of last line, 3) color switch *)
+        if !x = t.window.x || !stop = t.len || not (colors_equal t !start !stop) then (
+          Buffer.add_string buffer "\027[" ;
+          Buffer.add_string buffer (!start |> array_get t.fg_colors |> array_get Color.fg_color_control_strings) ;
+          Buffer.add_string buffer (!start |> array_get t.bg_colors |> array_get Color.bg_color_control_strings) ;
+          Buffer.add_subbytes buffer t.text !start (!stop - !start) ;
+          Buffer.add_string buffer "\027[0m" ;
+          start := !stop ;
+          (* FIXME: don't append newline for the very last line ! *)
+          if !x = t.window.x && !stop < t.len then (
+            Buffer.add_string buffer Term.newline ;
+            x := 0
+          )
+        ) ;
+        incr x ;
+        incr stop
+      done
 
-    let next_line_len t start stop =
-      min (t.window.x - (start mod t.window.x)) (stop - start)
-
-    let render_section start stop t =
-      (* append lines one at a time starting from start offset, ending at stop offset *)
-      let append_newline_if_needed t position =
-        let is_end_of_line        = (position mod t.window.x) = 0 in
-        let is_not_end_of_buffer  = position < t.len in (* Do not append newline at the very end *)
-        if is_end_of_line && is_not_end_of_buffer
-          then Buffer.add_string buffer Term.newline
-      in
-      let rec loop t start stop colorbuffer_idx =
-        (* memory opt: all arguments passed explicitly *)
-        if start < stop
-          then
-            let len = next_line_len t start stop in
-            Buffer.add_string buffer "\027[" ;
-            colorbuffer_idx
-              |> array_get t.fg_colors
-              |> array_get Color.fg_color_control_strings
-              |> Buffer.add_string buffer ;
-            colorbuffer_idx
-              |> array_get t.bg_colors
-              |> array_get Color.bg_color_control_strings
-              |> Buffer.add_string buffer ;
-            Buffer.add_subbytes buffer t.text start len ;
-            Buffer.add_string buffer "\027[0m" ; (* finish sequence for colored strings *)
-            (* Last newline need to be appened *after* the terminating control command for colors *)
-            append_newline_if_needed t (start + len) ;
-            loop t (start + len) stop colorbuffer_idx
-      in
-        loop t start stop start
-
-    let render_all_sections t =
-      let rec loop start =
-        if start < t.len
-          then
-            let stop = next_contiguous_color_section t start in
-            render_section start stop t;
-            loop stop
-      in
-        loop 0
   end
 
   let init_framebuffer vec2 =
@@ -953,11 +919,16 @@ end = struct
 
   let render frame_buffer =
     Buffer.clear buffer ;
-    (* Buffer.add_string buffer "\027c" ; *) (* TODO: delete ? *)
+    (* Buffer.add_string buffer "\027c" ; *) (* clear terminal TODO: delete ? *)
     Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
     Buffer.add_string buffer "\027[H" ;       (* go home *)
-    Rendering.render_all_sections frame_buffer ;
-    Buffer.add_string buffer (Term.cursor_control_string frame_buffer.cursor) ;
+    Rendering.render frame_buffer ;
+    (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
+    Buffer.add_string buffer "\027[" ;
+    Buffer.add_string buffer (string_of_int (frame_buffer.cursor.y + 1)) ;
+    Buffer.add_string buffer ";" ;
+    Buffer.add_string buffer (string_of_int (frame_buffer.cursor.x + 1)) ;
+    Buffer.add_string buffer "H" ;
     Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
     if kDRAW_SCREEN then (
       Buffer.output_buffer stdout buffer ;
@@ -2437,7 +2408,7 @@ module Stats = struct
     output_string f (Keys.descr_of stats.last_key_input) ;
     let open Keys in
     match stats.last_key_input with
-      | Key c ->
+      | Key c -> 
           output_string f " " ;
           output_int f (Char.code c)
       | _ -> () ;
@@ -2599,14 +2570,14 @@ module Tileset = struct
             array_set t'.redrawing focus_index' Redraw ;
             t'
       | Selection pos ->
-          let is_pos_inside_tile { x ; y } tile_bouding_rec =
-            let x0 = rect_x tile_bouding_rec in
-            let y0 = rect_y tile_bouding_rec in
-            let x1 = rect_x_end tile_bouding_rec in
-            let y1 = rect_y_end tile_bouding_rec in
+          let pos_in_tile {x ; y } r =
+            let x0 = rect_x r in
+            let y0 = rect_y r in
+            let x1 = rect_x_end r in
+            let y1 = rect_y_end r in
             x0 <= x && x < x1 && y0 <= y && y < y1
           in
-          let i = array_find (is_pos_inside_tile pos) t.screen_tiles in
+          let i = array_find (pos_in_tile pos) t.screen_tiles in
           Printf.fprintf logs "selecting tile %d for pos %d,%d\n" i pos.x pos.y ;
           flush logs ;
           if i < 0
