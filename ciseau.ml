@@ -827,36 +827,6 @@ end = struct
     mutable cursor : v2 ;
   }
 
-  module Rendering = struct
-    let colors_equal t i j =
-      (array_get t.fg_colors i) = (array_get t.fg_colors j) && (array_get t.bg_colors i) = (array_get t.bg_colors j)
-
-    let render t =
-      let x = ref 0 in
-      let start = ref 0 in
-      let stop = ref (!start + 1) in
-      while !start < t.len do
-        (* TODO: more simplification: get the fg and bg colors as local variables here, and eliminate colors_equal *)
-        (* Render a color section if: 1) end of line, 2) end of last line, 3) color switch *)
-        if !x = t.window.x || !stop = t.len || not (colors_equal t !start !stop) then (
-          Buffer.add_string buffer "\027[" ;
-          Buffer.add_string buffer (!start |> array_get t.fg_colors |> array_get Color.fg_color_control_strings) ;
-          Buffer.add_string buffer (!start |> array_get t.bg_colors |> array_get Color.bg_color_control_strings) ;
-          Buffer.add_subbytes buffer t.text !start (!stop - !start) ;
-          Buffer.add_string buffer "\027[0m" ;
-          start := !stop ;
-          (* FIXME: don't append newline for the very last line ! *)
-          if !x = t.window.x && !stop < t.len then (
-            Buffer.add_string buffer Term.newline ;
-            x := 0
-          )
-        ) ;
-        incr x ;
-        incr stop
-      done
-
-  end
-
   let init_framebuffer vec2 =
     let len = vec2.x * vec2.y
     in {
@@ -917,19 +887,48 @@ end = struct
     array_blit default_fg_colors 0 t.fg_colors offset len ;
     array_blit default_bg_colors 0 t.bg_colors offset len
 
-  let render frame_buffer =
+  let render framebuffer =
+    (* Prep buffer *)
     Buffer.clear buffer ;
     (* Buffer.add_string buffer "\027c" ; *) (* clear terminal TODO: delete ? *)
     Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
     Buffer.add_string buffer "\027[H" ;       (* go home *)
-    Rendering.render frame_buffer ;
+
+    (* Push lines one by one, one color segment at a time *)
+    let x = ref 0 in
+    let start = ref 0 in
+    let stop = ref 1 in
+    while !start < framebuffer.len do
+      (* Try not to read that all the time ! *)
+      let fg = ref (array_get framebuffer.fg_colors !start) in
+      let bg = ref (array_get framebuffer.bg_colors !start) in
+      (* Render a color section if: 1) end of line, 2) end of last line, 3) color switch *)
+      if !x = framebuffer.window.x || !stop = framebuffer.len || not (!fg = (array_get framebuffer.fg_colors !stop)) || not (!bg = (array_get framebuffer.bg_colors !stop)) then (
+        Buffer.add_string buffer "\027[" ;
+        Buffer.add_string buffer (array_get Color.fg_color_control_strings !fg) ;
+        Buffer.add_string buffer (array_get Color.bg_color_control_strings !bg) ;
+        Buffer.add_subbytes buffer framebuffer.text !start (!stop - !start) ;
+        Buffer.add_string buffer "\027[0m" ;
+        start := !stop ;
+        (* FIXME: don't append newline for the very last line ! *)
+        if !x = framebuffer.window.x && !stop < framebuffer.len then (
+          Buffer.add_string buffer Term.newline ;
+          x := 0
+        )
+      ) ;
+      incr x ;
+      incr stop
+    done ;
+
     (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
     Buffer.add_string buffer "\027[" ;
-    Buffer.add_string buffer (string_of_int (frame_buffer.cursor.y + 1)) ;
+    Buffer.add_string buffer (string_of_int (framebuffer.cursor.y + 1)) ;
     Buffer.add_string buffer ";" ;
-    Buffer.add_string buffer (string_of_int (frame_buffer.cursor.x + 1)) ;
+    Buffer.add_string buffer (string_of_int (framebuffer.cursor.x + 1)) ;
     Buffer.add_string buffer "H" ;
     Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
+
+    (* and finally, push to terminal *)
     if kDRAW_SCREEN then (
       Buffer.output_buffer stdout buffer ;
       flush stdout
