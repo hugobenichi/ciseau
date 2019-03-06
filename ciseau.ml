@@ -890,44 +890,46 @@ end = struct
   let render framebuffer =
     (* Prep buffer *)
     Buffer.clear buffer ;
-    (* Buffer.add_string buffer "\027c" ; *) (* clear terminal TODO: delete ? *)
+    (* Do not clear the screen with \027c as it causes flickering *)
     Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
     Buffer.add_string buffer "\027[H" ;       (* go home *)
 
     (* Push lines one by one, one color segment at a time *)
-    let x = ref 0 in
+    let linestop = ref framebuffer.window.x in
     let start = ref 0 in
-    (* TODO: remove stop and use start + x instead, rename x to len *)
-    let stop = ref 1 in
+    let len = ref 0 in
+    let fg = ref 0 in
+    let bg = ref 0 in
     while !start < framebuffer.len do
-      (* Try not to read that all the time ! *)
-      let fg = ref (array_get framebuffer.fg_colors !start) in
-      let bg = ref (array_get framebuffer.bg_colors !start) in
-      (* Render a color section if: 1) end of line, 2) color switch *)
+      if !len = 0 then (
+        fg := array_get framebuffer.fg_colors !start ;
+        bg := array_get framebuffer.bg_colors !start
+      ) ;
+      incr len ;
+      let stop = !start + !len in
+      (* Push a color segment if: 1) end of line, 2) color switch *)
       let should_draw_line =
-        if !stop = framebuffer.len then (
+        if stop = framebuffer.len then (
+          (* End of last line, do no append new line, do not read colors *)
           true
-        ) else if !x = framebuffer.window.x then (
-          (* avoid adding newline after last line *)
+        ) else if stop > !linestop then (
+          (* End of line, also put new line control characters for previous line *)
           Buffer.add_string buffer Term.newline ;
-          x := 0 ;
+          linestop += framebuffer.window.x ;
           true
-        ) else (
-          let fg_stop = array_get framebuffer.fg_colors !stop in
-          let bg_stop = array_get framebuffer.bg_colors !stop in
-          not (!fg = fg_stop) || not (!bg = bg_stop)
-        )
+        ) else
+          (* Otherwise, just check colors *)
+          !fg <> (array_get framebuffer.fg_colors stop) || !bg <> (array_get framebuffer.bg_colors stop)
       in
       if should_draw_line then (
         Buffer.add_string buffer "\027[" ;
         Buffer.add_string buffer (array_get Color.fg_color_control_strings !fg) ;
         Buffer.add_string buffer (array_get Color.bg_color_control_strings !bg) ;
-        Buffer.add_subbytes buffer framebuffer.text !start (!stop - !start) ;
+        Buffer.add_subbytes buffer framebuffer.text !start !len ;
         Buffer.add_string buffer "\027[0m" ;
-        start := !stop ;
-      ) ;
-      incr x ;
-      incr stop
+        start += !len ;
+        len := 0
+      )
     done ;
 
     (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
