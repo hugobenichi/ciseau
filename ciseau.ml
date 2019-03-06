@@ -897,24 +897,34 @@ end = struct
     (* Push lines one by one, one color segment at a time *)
     let x = ref 0 in
     let start = ref 0 in
+    (* TODO: remove stop and use start + x instead, rename x to len *)
     let stop = ref 1 in
     while !start < framebuffer.len do
       (* Try not to read that all the time ! *)
       let fg = ref (array_get framebuffer.fg_colors !start) in
       let bg = ref (array_get framebuffer.bg_colors !start) in
-      (* Render a color section if: 1) end of line, 2) end of last line, 3) color switch *)
-      if !x = framebuffer.window.x || !stop = framebuffer.len || not (!fg = (array_get framebuffer.fg_colors !stop)) || not (!bg = (array_get framebuffer.bg_colors !stop)) then (
+      (* Render a color section if: 1) end of line, 2) color switch *)
+      let should_draw_line =
+        if !stop = framebuffer.len then (
+          true
+        ) else if !x = framebuffer.window.x then (
+          (* avoid adding newline after last line *)
+          Buffer.add_string buffer Term.newline ;
+          x := 0 ;
+          true
+        ) else (
+          let fg_stop = array_get framebuffer.fg_colors !stop in
+          let bg_stop = array_get framebuffer.bg_colors !stop in
+          not (!fg = fg_stop) || not (!bg = bg_stop)
+        )
+      in
+      if should_draw_line then (
         Buffer.add_string buffer "\027[" ;
         Buffer.add_string buffer (array_get Color.fg_color_control_strings !fg) ;
         Buffer.add_string buffer (array_get Color.bg_color_control_strings !bg) ;
         Buffer.add_subbytes buffer framebuffer.text !start (!stop - !start) ;
         Buffer.add_string buffer "\027[0m" ;
         start := !stop ;
-        (* FIXME: don't append newline for the very last line ! *)
-        if !x = framebuffer.window.x && !stop < framebuffer.len then (
-          Buffer.add_string buffer Term.newline ;
-          x := 0
-        )
       ) ;
       incr x ;
       incr stop
