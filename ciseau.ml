@@ -739,10 +739,11 @@ end
 
 
 (* main module for interacting with the terminal *)
-module Term = struct
-  (* TODO: this should be platform specific *)
-  let newline                     = "\r\n"
-
+module Term : sig
+  val restore_initial_state   : unit -> unit
+  val set_raw_mode            : unit -> unit
+  val get_terminal_dimensions : unit -> v2
+end = struct
   external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
   let get_terminal_dimensions () =
@@ -779,14 +780,12 @@ module Term = struct
     want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
     want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
     want.c_csize   <- 8;        (* 8 bit chars *)
-
     stdout_write_string "\027[s" ;      (* cursor save *)
     stdout_write_string "\027[?47h" ;   (* switch offscreen *)
     stdout_write_string "\027[?1000h" ; (* mouse event on *)
     stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
     (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
     Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
-
 end
 
 
@@ -807,6 +806,9 @@ module Framebuffer : sig
 end = struct
 
   let buffer = Buffer.create 4096
+
+  (* TODO: this should be platform specific *)
+  let newline = "\r\n"
 
   module Default = struct
     let fg    = Color.White
@@ -914,7 +916,7 @@ end = struct
           true
         ) else if stop > !linestop then (
           (* End of line, also put new line control characters for previous line *)
-          Buffer.add_string buffer Term.newline ;
+          Buffer.add_string buffer newline ;
           linestop += framebuffer.window.x ;
           true
         ) else
