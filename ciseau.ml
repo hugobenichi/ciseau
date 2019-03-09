@@ -80,6 +80,7 @@ module ArrayOperations = struct
   let blen = Bytes.length
   let slen = String.length
 
+  (* Useful for writing for loops *)
   let astop ary = (alen ary) - 1
 
   let check_bounds src_offset src_len =
@@ -155,42 +156,45 @@ end
 open ArrayOperations
 
 
+(* Wraps a vanilla array with a cursor to provide a convenient append operation. Used by value. *)
+(* TODO: change to be used by ref with mutation ? *)
 module Arraybuffer = struct
+(* TODO: add signature *)
   type 'a t = {
-    data : 'a array ;
-    next : int ;
+    mutable data  : 'a array ;
+    mutable next  : int ;
+    zero          : 'a ;
   }
 
-  let empty () = {
+  let empty zero_elem = {
     data = [||] ;
     next = 0 ;
+    zero = zero_elem ;
   }
 
   let reserve n zero_elem = {
     data = Array.make n zero_elem ;
     next = 0 ;
+    zero = zero_elem ;
   }
 
   let to_array { data ; next } =
     Array.sub data 0 next
 
-  let grow e data =
+  let grow_array e data =
+    (* Better way to do this to avoid the initialization to 0 ? *)
     let len = alen data in
     let len' = max 10 (2 * len) in
     let data' = Array.make len' e in
     array_blit data 0 data' 0 len ;
     data'
 
-  let append { data ; next } elem =
-    let r = {
-      data  = if next < alen data
-                then data
-                else grow elem data ;
-      next  = next + 1 ;
-    }
-    in
-      array_set r.data next elem ;
-      r
+  let append b e =
+    b.next <- b.next + 1 ;
+    if b.next > alen b.data then
+      b.data <- grow_array b.zero b.data ;
+    array_set b.data b.next e ;
+    b
 end
 
 
@@ -2600,58 +2604,58 @@ module Tileset = struct
 end
 
 
-module Navigator = struct
+module Navigator : sig
+  val dir_ls                : ?recursive:bool -> string -> string array
+  val dir_ls_rec            : string -> string array
+  val dir_to_filebuffer     : string -> Filebuffer.t
+  val dir_rec_to_filebuffer : string -> Filebuffer.t
+end = struct
 
-  let read_dir is_rec prefix path e =
-    let rec read_dir_handle is_rec prefix h e =
+  let read_dir recursive prefix path entry_buffer =
+    let rec read_dir_handle recursive prefix dir_handle entry_buffer =
       try
-        let s = Unix.readdir h in
-        let e' =
-          if is_rec && s = "." || s = ".."
-            then e
-            else Arraybuffer.append e (prefix ^ s)
+        let s = Unix.readdir dir_handle in
+        let entry_buffer' =
+          if recursive && s = "." || s = ".."
+            then entry_buffer
+            else Arraybuffer.append entry_buffer (prefix ^ s)
         in
-          read_dir_handle is_rec prefix h e'
+          read_dir_handle recursive prefix dir_handle entry_buffer'
       with
-        _ -> e
+        _ -> entry_buffer
     in
+    let dir_handle = Unix.opendir path in
     try
-      let h = Unix.opendir path in
-      let e' = read_dir_handle is_rec prefix h e in
-      Unix.closedir h ;
-      e'
+      read_dir_handle recursive prefix dir_handle entry_buffer |> ignore
     with
-      _ -> e
+      _ -> () ;
+    Unix.closedir dir_handle
 
   let path_to_prefix p =
     if p = "." then "" else p ^ "/"
 
-  let rec read_dir_rec p e =
-    let open Arraybuffer in
-    let e' = ref (read_dir true (path_to_prefix p) p e) in
-    for i = e.next to !e'.next - 1 do
+  let rec read_dir_rec path (entries : string Arraybuffer.t) =
+    let next_before = entries.next in
+    read_dir true (path_to_prefix path) path entries ;
+    let next_after = entries.next in
+    for i = next_before to next_after - 1 do
       (* BUG: do not follow links, infinite loop risks otherwise ! *)
-      e' := read_dir_rec (array_get !e'.data i) !e'
-    done ;
-    !e'
+      read_dir_rec (array_get entries.data i) entries
+    done
 
   let dir_ls_rec path =
-    let e =
-      Arraybuffer.empty ()
-        |> read_dir_rec path
-        |> Arraybuffer.to_array
-    in
-      Array.sort String.compare e ;
-      e
+    let buffer = Arraybuffer.empty "" in
+    read_dir_rec path buffer ;
+    let entries = Arraybuffer.to_array buffer in
+    Array.sort String.compare entries ;
+    entries
 
-  let dir_ls path =
-    let e =
-      Arraybuffer.empty ()
-        |> read_dir false (path_to_prefix path) path
-        |> Arraybuffer.to_array
-    in
-      Array.sort String.compare e ;
-      e
+  let dir_ls ?recursive:(recur=false) path =
+    let buffer = Arraybuffer.empty "" in
+    read_dir recur (path_to_prefix path) path buffer ;
+    let entries = Arraybuffer.to_array buffer in
+    Array.sort String.compare entries ;
+    entries
 
   let dir_to_filebuffer     p = p |> dir_ls |> Filebuffer.from_lines p
   let dir_rec_to_filebuffer p = p |> dir_ls_rec |> Filebuffer.from_lines p
@@ -3098,6 +3102,13 @@ module Ciseau = struct
       e ->  Term.restore_initial_state () ;
             Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
+
+  let main () =
+    let dir_entries = Navigator.dir_ls ~recursive:true "." in
+    for i = 0 to astop dir_entries do
+      print_string dir_entries.(i) ;
+      print_newline ()
+    done
 
 end
 
