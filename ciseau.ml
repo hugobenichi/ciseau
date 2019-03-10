@@ -157,14 +157,25 @@ open ArrayOperations
 
 
 (* Wraps a vanilla array with a cursor to provide a convenient append operation. Used by value. *)
-(* TODO: change to be used by ref with mutation ? *)
-module Arraybuffer = struct
-(* TODO: add signature *)
+module Arraybuffer : sig
+  type 'a t
+  val len       : 'a t -> int
+  val get       : 'a t -> int -> 'a
+  val empty     : 'a -> 'a t
+  val reserve   : int -> 'a -> 'a t
+  val to_array  : 'a t -> 'a array
+  val append    : 'a t -> 'a -> unit
+end = struct
+
   type 'a t = {
     mutable data  : 'a array ;
     mutable next  : int ;
     zero          : 'a ;
   }
+
+  let len { next } = next
+
+  let get { data } index = array_get data index
 
   let empty zero_elem = {
     data = [||] ;
@@ -190,11 +201,10 @@ module Arraybuffer = struct
     data'
 
   let append b e =
-    b.next <- b.next + 1 ;
-    if b.next > alen b.data then
+    if alen b.data <= b.next then
       b.data <- grow_array b.zero b.data ;
     array_set b.data b.next e ;
-    b
+    b.next <- b.next + 1
 end
 
 
@@ -1352,7 +1362,7 @@ end = struct
   let read_file f =
     let rec loop lines ch =
       match input_line ch with
-      | s                     -> loop (Arraybuffer.append lines s) ch
+      | s                     -> Arraybuffer.append lines s ; loop lines ch
       | exception End_of_file -> lines
     in
     let ch = open_in f in
@@ -2605,60 +2615,37 @@ end
 
 
 module Navigator : sig
-  val dir_ls                : ?recursive:bool -> string -> string array
-  val dir_ls_rec            : string -> string array
-  val dir_to_filebuffer     : string -> Filebuffer.t
-  val dir_rec_to_filebuffer : string -> Filebuffer.t
+  (* IMPROVEMENT: pass a filter function to avoid some directories like for instance .git/ *)
+  val list_directory : ?recursive:bool -> string -> string array
 end = struct
 
-  let read_dir recursive prefix path entry_buffer =
-    let rec read_dir_handle recursive prefix dir_handle entry_buffer =
+  let rec read_dir_rec recursive path entries =
+    let len = Arraybuffer.len entries in
+    if Sys.is_directory path then (
+      let dir_handle = Unix.opendir path in
       try
-        let s = Unix.readdir dir_handle in
-        let entry_buffer' =
-          if recursive && s = "." || s = ".."
-            then entry_buffer
-            else Arraybuffer.append entry_buffer (prefix ^ s)
-        in
-          read_dir_handle recursive prefix dir_handle entry_buffer'
+        while true do
+          let item = Unix.readdir dir_handle in   (* throws End_of_file when done, breaking the loop *)
+          if item <> "." && item <> ".."
+            then Arraybuffer.append entries (path ^ "/" ^ item)
+        done
       with
-        _ -> entry_buffer
-    in
-    let dir_handle = Unix.opendir path in
-    try
-      read_dir_handle recursive prefix dir_handle entry_buffer |> ignore
-    with
-      _ -> () ;
-    Unix.closedir dir_handle
+        End_of_file -> () ;
+      Unix.closedir dir_handle
+    ) ;
+    let len' = Arraybuffer.len entries in
+    if recursive then
+      for i = len to len' - 1 do
+        (* BUG: do not follow links, infinite loop risks otherwise ! *)
+        read_dir_rec recursive (Arraybuffer.get entries i) entries
+      done
 
-  let path_to_prefix p =
-    if p = "." then "" else p ^ "/"
-
-  let rec read_dir_rec path (entries : string Arraybuffer.t) =
-    let next_before = entries.next in
-    read_dir true (path_to_prefix path) path entries ;
-    let next_after = entries.next in
-    for i = next_before to next_after - 1 do
-      (* BUG: do not follow links, infinite loop risks otherwise ! *)
-      read_dir_rec (array_get entries.data i) entries
-    done
-
-  let dir_ls_rec path =
+  let list_directory ?recursive:(recur=false) path =
     let buffer = Arraybuffer.empty "" in
-    read_dir_rec path buffer ;
+    read_dir_rec recur path buffer ;
     let entries = Arraybuffer.to_array buffer in
     Array.sort String.compare entries ;
     entries
-
-  let dir_ls ?recursive:(recur=false) path =
-    let buffer = Arraybuffer.empty "" in
-    read_dir recur (path_to_prefix path) path buffer ;
-    let entries = Arraybuffer.to_array buffer in
-    Array.sort String.compare entries ;
-    entries
-
-  let dir_to_filebuffer     p = p |> dir_ls |> Filebuffer.from_lines p
-  let dir_rec_to_filebuffer p = p |> dir_ls_rec |> Filebuffer.from_lines p
 
 end
 
@@ -2786,10 +2773,6 @@ module Ciseau = struct
       Filebuffer.init_filebuffer "./ioctl.c" ;
       (*
       Filebuffer.init_filebuffer "./Makefile" ; (* FIX tabs *)
-      *)
-      (*
-      Navigator.dir_rec_to_filebuffer "." ;
-      Navigator.dir_to_filebuffer (Sys.getcwd ()) ;
       *)
     |]
 
@@ -3104,7 +3087,7 @@ module Ciseau = struct
             Printexc.print_backtrace stdout
 
   let main () =
-    let dir_entries = Navigator.dir_ls ~recursive:true "." in
+    let dir_entries = Navigator.list_directory ~recursive:true "." in
     for i = 0 to astop dir_entries do
       print_string dir_entries.(i) ;
       print_newline ()
