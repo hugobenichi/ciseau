@@ -1674,8 +1674,37 @@ module SelectionMovement = struct
       | Right   -> selection_next movement_context
 end
 
-module Movement (* TODO: formalize module signature *) = struct
+module Movement : sig
 
+  type mode = Blocks
+            | Words
+            | Digits
+            | Lines
+            | Chars
+            | Paragraphs
+            | Parens
+            | Brackets
+            | Braces
+            | Selection
+
+  type movement = Left
+                | Right
+                | Up
+                | Down
+                | Start
+                | End
+                | PageUp
+                | PageDown
+                | FileStart
+                | FileEnd
+
+  val mode_to_string      : mode -> string
+  val movement_to_string  : movement -> string
+  val apply_movement      : MovementContext.t -> mode -> movement -> Cursor.t -> unit
+
+end = struct
+
+  (* TODO: do not repeat this type *)
   type mode = Blocks
             | Words
             | Digits
@@ -1897,7 +1926,7 @@ module Movement (* TODO: formalize module signature *) = struct
       | Braces        -> BraceMovement.movement
       | Selection     -> selection_movement movement_context
 
-  let compute_movement movement_context mode =
+  let apply_movement movement_context mode =
     function
       | Left          -> move movement_context mode Move.Left
       | Right         -> move movement_context mode Move.Right
@@ -1996,6 +2025,9 @@ module Fileview : sig
 
   val init_fileview           : Filebuffer.t -> t
   val set_mov_mode            : Movement.mode -> t -> t
+(* FIXME: remove the v2 for viewport rectangle size used for recomputing the adjusted view rectangle around the cursor
+ * Instead, remember in the fileview the view offset of the previous fileview draw and recompute the new view offset when drawing
+ * Benefit: this removes the extra argument in apply_movement and will facilitate the refactoring afterwards *)
   val apply_movement          : Movement.movement -> v2 -> t -> t
   val cursor                  : t -> Cursor.t
   val adjust_view             : v2 -> t -> t
@@ -2102,7 +2134,7 @@ end = struct
     let x = Cursor.x t.cursor in
     let y = Cursor.y t.cursor in
     (* CLEANUP: it is mayne not a good diea to have cursor mutation in place right here *)
-    let _ = Movement.compute_movement t.context t.mov_mode mov t.cursor in
+    let _ = Movement.apply_movement t.context t.mov_mode mov t.cursor in
     let x' = Cursor.x t.cursor in
     let y' = Cursor.y t.cursor in
 
@@ -2220,8 +2252,8 @@ end = struct
 (*
  * FIXME
     if t.show_token then (
-      let token_s = Movement.compute_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor |> Cursor.pos in
-      let token_e = Movement.compute_movement t.context t.mov_mode Movement.End t.filebuffer token_s |> Cursor.pos in
+      let token_s = Movement.apply_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor |> Cursor.pos in
+      let token_e = Movement.apply_movement t.context t.mov_mode Movement.End t.filebuffer token_s |> Cursor.pos in
       let y_start = token_s.y - t.view.y in
       let y_end   = token_e.y - t.view.y in
       (* The current token can leak out of the current screen: bound start and stop to the screen *)
@@ -2268,16 +2300,16 @@ end = struct
             Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
       in
 
-      Movement.compute_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
+      Movement.apply_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
         |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
-      Movement.compute_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
+      Movement.apply_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
         |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
-      Movement.compute_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
+      Movement.apply_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
         |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
-      Movement.compute_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
+      Movement.apply_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
         |> Cursor.pos
         |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
     ) ;
