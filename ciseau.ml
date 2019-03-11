@@ -2647,18 +2647,25 @@ end
 
 
 module Navigator : sig
-  (* IMPROVEMENT: pass a filter function to avoid some directories like for instance .git/ *)
-  val list_directory : ?recursive:bool -> string -> string array
+  (* Filter function for excluding directories or files from listing
+   * 1st arg: directory being listed
+   * 2nd arg: item found in the directory
+   * return value: true if the item should be listed *)
+  type filter_fn = string -> string -> bool
+
+  val list_directory : ?recursive:bool -> ?filter:filter_fn -> string -> string array
 end = struct
 
-  let rec read_dir_rec recursive path entries =
+  type filter_fn = string -> string -> bool
+
+  let rec read_dir_rec recursive filter path entries =
     let len = Arraybuffer.len entries in
     if Sys.is_directory path then (
       let dir_handle = Unix.opendir path in
       try
         while true do
           let item = Unix.readdir dir_handle in   (* throws End_of_file when done, breaking the loop *)
-          if item <> "." && item <> ".."
+          if item <> "." && item <> ".." && filter path item
             then Arraybuffer.append entries (path ^ "/" ^ item)
         done
       with
@@ -2669,12 +2676,14 @@ end = struct
     if recursive then
       for i = len to len' - 1 do
         (* BUG: do not follow links, infinite loop risks otherwise ! *)
-        read_dir_rec recursive (Arraybuffer.get entries i) entries
+        read_dir_rec recursive filter (Arraybuffer.get entries i) entries
       done
 
-  let list_directory ?recursive:(recur=false) path =
+  let nofilter anydir anyname = true
+
+  let list_directory ?recursive:(recur=false) ?filter:(filter=nofilter) path =
     let buffer = Arraybuffer.empty "" in
-    read_dir_rec recur path buffer ;
+    read_dir_rec recur filter path buffer ;
     let entries = Arraybuffer.to_array buffer in
     Array.sort String.compare entries ;
     entries
@@ -3119,7 +3128,8 @@ module Ciseau = struct
             Printexc.print_backtrace stdout
 
   let main () =
-    let dir_entries = Navigator.list_directory ~recursive:true "." in
+    let filter anydir item = item <> ".git" in
+    let dir_entries = Navigator.list_directory ~recursive:true ~filter:filter "." in
     for i = 0 to astop dir_entries do
       print_string dir_entries.(i) ;
       print_newline ()
