@@ -2646,6 +2646,57 @@ module Tileset = struct
 end
 
 
+module Suffixarray : sig
+
+(* can we just simplify to store strings as keys ? *)
+  (* array of string suffixes *)
+  type t
+
+  (* range in a Suffixarray.t of all entries matching a prefix *)
+  type range
+
+  val empty : unit -> t
+  val add : t -> string -> unit
+  val prepare : t -> string -> unit
+  val to_range : t -> string -> range
+  val refine_range : range -> string -> range
+  val to_list : range -> string array
+
+end = struct
+
+  type stringview = {
+    s : string ;
+    o : int ;
+  }
+
+  type t = stringview Arraybuffer.t
+
+  type range = {
+    suffixarray : t ;
+    start       : int ;
+    stop        : int ;
+  }
+
+  let empty () = Arraybuffer.empty { s = "empty" ; o = 0 }
+
+  let add suffixarray entrie =
+    for i = 0 to (slen entrie) - 1 do
+      Arraybuffer.append suffixarray { s = entrie ; o = i }
+    done
+
+  let prepare suffixarray entrie = ()
+    (*TODO: sort the array by doing a string compare using offsets, maybe with native strcmp *)
+
+  let refine_range range moreprefix = range
+    (*TODO: do a binary search to find the edges of the range, with the same string compare *)
+
+  let to_range suffixarray prefix =
+    refine_range { suffixarray ; start = 0 ; stop = 0 } prefix
+
+  let to_list range = [| "hello" |]
+
+end
+
 module Navigator : sig
   (* Filter function for excluding directories or files from listing
    * 1st arg: directory being listed
@@ -2687,7 +2738,6 @@ end = struct
     let entries = Arraybuffer.to_array buffer in
     Array.sort String.compare entries ;
     entries
-
 end
 
 
