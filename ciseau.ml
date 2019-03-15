@@ -2648,28 +2648,69 @@ end
 
 module Suffixarray : sig
 
-(* can we just simplify to store strings as keys ? *)
   (* array of string suffixes *)
   type t
 
   (* range in a Suffixarray.t of all entries matching a prefix *)
   type range
 
-  val empty : unit -> t
-  val add : t -> string -> unit
-  val prepare : t -> string -> unit
+  val mk_suffixarray : string array -> t
   val to_range : t -> string -> range
   val refine_range : range -> string -> range
   val to_list : range -> string array
 
 end = struct
 
+  (* Is this reasonable for real input
+   *
+   *  strategy 1): a suffix array whose entries are the full path of every files found in a subtree of the filesystem
+   *
+   *  linux kernel 4.14: 67057 entries, total char length is 2452128
+   *    overhead of index array made of int offset + int index into an array of string would be:
+   *      all string entries:         67k * block header + 67k null byte + 2.4Mb ~= 3Mb
+   *      array of string entries:    67k * ptr + array overhead ~= 67k
+   *      array of int tuples:        2.4M * ptr + 2.4M * block header + 8B * 2 = 76Mb !!
+   *      array of packed int tuples: 2.4M * 2 * 8B = 38.4Mb
+   *
+   *  framework/
+   *    total entries: 69446
+   *    total string length: 4215909
+   *
+   *  strategy 2): break down all paths in intermediary token (directory names) and make a suffix array with tokens
+   *
+   *  If I build a in-memory tree of all entries with just tokens
+   *    I can consolidate all tokens for directories
+   *    index all tokens in the suffix array (maybe using just real substrings to begin with)
+   *    create a map where all existing tokens are pointing to a list of all paths that contains just tokens
+   *      for all path
+   *        for all token in path
+   *          index in the map that path as value for that token
+   *      this can be used as a jump table, from token key, find list of all tokens
+   *    range creation:
+   *      get user input, do a search for all tokens matching this
+   *      for all such tokens, get all paths
+   *      sort paths, eliminate duplicates
+   *
+   *   linux kernel 4.14:
+   *      48266 unique token when separating with /
+   *      total string length: 607081
+   *        the suffix array would be around:
+   *          48k * (ptr + string block header) + 607kb
+   *          + 607k * 2 * 8b ~= 10 Mb
+   *        the path set would be around 2.4Mb + linked list overhead
+   *        the token to path map would be around 48k
+   *)
+
   type stringview = {
     s : string ;
     o : int ;
   }
 
-  type t = stringview Arraybuffer.t
+  type t = {
+    entries           : string array ;  (* All string entries in the suffix array *)
+    substrings        : int array ;     (* A packed flattened (int, int) array of (entries index, entries offset) for defining all substrings in entries *)
+    substrings_index  : int array ;     (* array of indexes into substrings, intended to be sorted with library sort *)
+  }
 
   type range = {
     suffixarray : t ;
@@ -2677,15 +2718,41 @@ end = struct
     stop        : int ;
   }
 
-  let empty () = Arraybuffer.empty { s = "empty" ; o = 0 }
+  (* PERF: use native strcmp instead *)
+  let rec compare_substrings left i right j =
+    let lenleft = slen left in
+    let lenright = slen right in
+    if lenleft = i && lenright = j
+      then 0
+    else if lenleft = i
+      then 1
+    else if lenright = j
+      then -1
+    else
+    let x = Char.compare (String.get left i) (String.get right j) in
+    if x = 0
+      then compare_substrings left (i + 1) right (j + 1)
+    else
+      x
 
-  let add suffixarray entrie =
-    for i = 0 to (slen entrie) - 1 do
-      Arraybuffer.append suffixarray { s = entrie ; o = i }
-    done
+  let mk_suffixarray entries_original =
+    let entries = Array.copy entries_original in
+    let substrings_buffer = Arraybuffer.empty 0 in
+    for i = 0 to astop entries do
+      for j = 0 to (slen entries.(i)) - 1 do
+        Arraybuffer.append substrings_buffer i ;
+        Arraybuffer.append substrings_buffer j
+      done
+    done ;
+    let substrings = Arraybuffer.to_array substrings_buffer in
+    let substrings_index = Array.init ((alen substrings) / 2) id in
+    let compare_substrings i j =
+      compare_substrings entries.(substrings.(2*i)) substrings.(2*i + 1) entries.(substrings.(2*j)) substrings.(2*j + 1)
+    in
+    Array.sort compare_substrings substrings_index ;
+    { entries ; substrings ; substrings_index }
 
   let prepare suffixarray entrie = ()
-    (*TODO: sort the array by doing a string compare using offsets, maybe with native strcmp *)
 
   let refine_range range moreprefix = range
     (*TODO: do a binary search to find the edges of the range, with the same string compare *)
@@ -2704,10 +2771,33 @@ module Navigator : sig
    * return value: true if the item should be listed *)
   type filter_fn = string -> string -> bool
 
-  val list_directory : ?recursive:bool -> ?filter:filter_fn -> string -> string array
+  type file_index
+
+  val mk_file_index : ?recursive:bool -> ?filter:filter_fn -> string -> file_index
+  val index_to_entries : file_index -> string array
+
 end = struct
 
   type filter_fn = string -> string -> bool
+
+  type file_index = {
+    entries : string array ;
+  }
+
+  type filepath = string list
+
+  let rec filepath_blit_to_buffer buffer =
+    function
+      | [] -> ()
+      | node :: tail ->
+          filepath_blit_to_buffer buffer tail ;
+          Buffer.add_char buffer '/' ;
+          Buffer.add_string buffer node
+
+  let filepath_to_string filepath =
+    let buffer = Buffer.create 16 in
+    filepath_blit_to_buffer buffer filepath ;
+    Buffer.contents buffer
 
   let rec read_dir_rec recursive filter path entries =
     let len = Arraybuffer.len entries in
@@ -2732,12 +2822,14 @@ end = struct
 
   let nofilter anydir anyname = true
 
-  let list_directory ?recursive:(recur=false) ?filter:(filter=nofilter) path =
+  let mk_file_index ?recursive:(recur=false) ?filter:(filter=nofilter) path =
     let buffer = Arraybuffer.empty "" in
     read_dir_rec recur filter path buffer ;
     let entries = Arraybuffer.to_array buffer in
     Array.sort String.compare entries ;
-    entries
+    { entries }
+
+  let index_to_entries { entries } = entries
 end
 
 
@@ -3179,7 +3271,8 @@ module Ciseau = struct
 
   let main () =
     let filter anydir item = item <> ".git" in
-    let dir_entries = Navigator.list_directory ~recursive:true ~filter:filter "." in
+    let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter "." in
+    let dir_entries = Navigator.index_to_entries file_index in
     for i = 0 to astop dir_entries do
       print_string dir_entries.(i) ;
       print_newline ()
