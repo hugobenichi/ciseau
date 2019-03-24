@@ -53,7 +53,6 @@ let fail msg = raise (Error.E msg)
 
 let assert_that ?msg:(m="failed assert") condition = if not condition then fail m
 
-
 let output_int f    = string_of_int >> output_string f
 let output_float f  = string_of_float >> output_string f
 
@@ -150,10 +149,30 @@ module ArrayOperations = struct
           else loop fn a (i + 1))
     in
       loop fn a 0
+
+  
+  let array_unsafe_alloc n = Array.make n "" |> Obj.magic
+
 end
 
 
 open ArrayOperations
+
+
+let list_to_string fn =
+  List.fold_left (fun s x -> (fn x) ^ " :: " ^ s) ""
+
+
+(* Returns an array containing the keys in the given Hashtbl.t *)
+let hashtbl_keys tbl =
+  let len = Hashtbl.length tbl in
+  if len = 0
+    then [||]
+    else
+      let keys = array_unsafe_alloc len in
+      let i = ref 0 in
+      Hashtbl.iter (fun k v -> array_set keys !i k ; incr i) tbl ;
+      keys
 
 
 (* Wraps a vanilla array with a cursor to provide a convenient append operation. Used by value. *)
@@ -2655,9 +2674,9 @@ module Suffixarray : sig
   type range
 
   val mk_suffixarray : string array -> t
-  val to_range : t -> string -> range
+  val mk_range : t -> string -> range
   val refine_range : range -> string -> range
-  val to_list : range -> string array
+  val range_to_array : range -> string array
 
 end = struct
 
@@ -2718,8 +2737,14 @@ end = struct
     stop        : int ;
   }
 
-  (* PERF: use native strcmp instead *)
-  let rec compare_substrings left i right j =
+  let get_entry { entries ; substrings } i =
+    2 * i |> array_get substrings |> array_get entries
+
+  let get_offset { entries ; substrings } i =
+    2 * i + 1 |> array_get substrings
+
+  (* PERF: use native strcmp instead ! *)
+  let rec compare_substrings ~left:left ~left_offset:i ~right:right ~right_offset:j =
     let lenleft = slen left in
     let lenright = slen right in
     if lenleft = i && lenright = j
@@ -2731,7 +2756,7 @@ end = struct
     else
     let x = Char.compare (String.get left i) (String.get right j) in
     if x = 0
-      then compare_substrings left (i + 1) right (j + 1)
+      then compare_substrings ~left:left ~left_offset:(i + 1) ~right:right ~right_offset:(j + 1)
     else
       x
 
@@ -2746,21 +2771,44 @@ end = struct
     done ;
     let substrings = Arraybuffer.to_array substrings_buffer in
     let substrings_index = Array.init ((alen substrings) / 2) id in
-    let compare_substrings i j =
-      compare_substrings entries.(substrings.(2*i)) substrings.(2*i + 1) entries.(substrings.(2*j)) substrings.(2*j + 1)
+    let compare_suffixes i j =
+      compare_substrings
+        ~left:entries.(substrings.(2*i)) ~left_offset:substrings.(2*i + 1)
+        ~right:entries.(substrings.(2*j)) ~right_offset:substrings.(2*j + 1)
     in
-    Array.sort compare_substrings substrings_index ;
+    Array.sort compare_suffixes substrings_index ;
     { entries ; substrings ; substrings_index }
 
   let prepare suffixarray entrie = ()
 
-  let refine_range range moreprefix = range
-    (*TODO: do a binary search to find the edges of the range, with the same string compare *)
+  let refine_range { suffixarray ; start ; stop } prefix =
+    let compare_with_prefix i =
+      compare_substrings
+        ~left:(get_entry suffixarray i) ~left_offset:(get_offset suffixarray i)
+        ~right:prefix ~right_offset:0
+    in
+    let start' = ref start in
+    let stop' = ref stop in
+    (* TODO: replace by proper binary search *)
+    while compare_with_prefix !start' < 0 do
+      incr start'
+    done ;
+    while compare_with_prefix !stop' > 0 do
+      decr stop'
+    done ;
+    { suffixarray ; start = !start' ; stop = !stop' }
 
-  let to_range suffixarray prefix =
-    refine_range { suffixarray ; start = 0 ; stop = 0 } prefix
+  let mk_range suffixarray prefix =
+    refine_range { suffixarray ; start = 0 ; stop = 0 (* FIXME ! *) } prefix
 
-  let to_list range = [| "hello" |]
+  let range_to_array { suffixarray ; start ; stop } =
+    let range_entries = Array.make (stop - start) "" in
+    for i = 0 to astop range_entries do
+      start + i |> get_entry suffixarray |> array_set range_entries i
+    done ;
+    Array.sort String.compare range_entries ;
+    (* TODO: eliminate possible duplicates *)
+    range_entries
 
 end
 
@@ -2775,44 +2823,35 @@ module Navigator : sig
 
   val mk_file_index : ?recursive:bool -> ?filter:filter_fn -> string -> file_index
   val index_to_entries : file_index -> string array
+  val mk_range : file_index -> Suffixarray.range
 
 end = struct
 
   type filter_fn = string -> string -> bool
 
   type file_index = {
-    entries : string array ;
+    entries       : string array ;
+    token_map     : (string, string list) Hashtbl.t ;
+    token_index   : Suffixarray.t
   }
-
-  type filepath = string list
-
-  let rec filepath_blit_to_buffer buffer =
-    function
-      | [] -> ()
-      | node :: tail ->
-          filepath_blit_to_buffer buffer tail ;
-          Buffer.add_char buffer '/' ;
-          Buffer.add_string buffer node
-
-  let filepath_to_string filepath =
-    let buffer = Buffer.create 16 in
-    filepath_blit_to_buffer buffer filepath ;
-    Buffer.contents buffer
 
   let rec read_dir_rec recursive filter path entries =
     let len = Arraybuffer.len entries in
-    if Sys.is_directory path then (
-      let dir_handle = Unix.opendir path in
-      try
-        while true do
-          let item = Unix.readdir dir_handle in   (* throws End_of_file when done, breaking the loop *)
-          if item <> "." && item <> ".." && filter path item
-            then Arraybuffer.append entries (path ^ "/" ^ item)
-        done
-      with
-        End_of_file -> () ;
-      Unix.closedir dir_handle
-    ) ;
+    match Unix.opendir path with
+      | dir_handle -> (
+          try
+            while true do
+              let item = Unix.readdir dir_handle in   (* throws End_of_file when done, breaking the loop *)
+              if item <> "." && item <> ".." && filter path item
+                then Arraybuffer.append entries (path ^ "/" ^ item)
+            done
+          with
+            End_of_file -> () ;
+          Unix.closedir dir_handle
+      )
+      | exception Unix.Unix_error (Unix.EACCES, _, _) -> ()
+      | exception Unix.Unix_error (Unix.ENOTDIR, _, _) -> ()
+      ;
     let len' = Arraybuffer.len entries in
     if recursive then
       for i = len to len' - 1 do
@@ -2822,14 +2861,29 @@ end = struct
 
   let nofilter anydir anyname = true
 
+  let token_index_insert tbl path token =
+    Hashtbl.find_opt tbl token
+      |> OptionCombinators.get_or []
+      |> List.cons token
+      |> Hashtbl.replace tbl token
+
   let mk_file_index ?recursive:(recur=false) ?filter:(filter=nofilter) path =
-    let buffer = Arraybuffer.empty "" in
+    let buffer = Arraybuffer.empty "?" in
     read_dir_rec recur filter path buffer ;
     let entries = Arraybuffer.to_array buffer in
     Array.sort String.compare entries ;
-    { entries }
+    let token_map = Hashtbl.create 128 in
+    for i = 0 to astop entries do
+      let path = array_get entries i in
+      path |> String.split_on_char '/'
+           |> List.iter (token_index_insert token_map path)
+    done ;
+    let token_index = Suffixarray.mk_suffixarray (hashtbl_keys token_map) in
+    { entries ; token_map ; token_index }
 
   let index_to_entries { entries } = entries
+
+  let mk_range { token_index } = Suffixarray.mk_range token_index ""
 end
 
 
@@ -3269,12 +3323,20 @@ module Ciseau = struct
             Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
 
+  let print_entries entries =
+    for i = 0 to astop entries do
+      print_string entries.(i) ;
+      print_newline ()
+    done
+
   let main () =
     let filter anydir item = item <> ".git" in
-    let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter "." in
-    let dir_entries = Navigator.index_to_entries file_index in
-    for i = 0 to astop dir_entries do
-      print_string dir_entries.(i) ;
+    let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter "/etc" in
+    print_entries (Navigator.index_to_entries file_index) ;
+    print_newline () ;
+    let prefix = ref "" in
+    while true do
+      Navigator.mk_range file_index |> Suffixarray.range_to_array |> print_entries ;
       print_newline ()
     done
 
