@@ -75,18 +75,22 @@ let write fd buffer len =
 (* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
 module ArrayOperations = struct
 
+  let kBOUNDCHECK = true
+
   let alen = Array.length
   let blen = Bytes.length
   let slen = String.length
 
-  (* Useful for writing for loops *)
+  (* Useful for writing loop conditions *)
   let astop ary = (alen ary) - 1
 
   let check_bounds src_offset src_len =
+    if kBOUNDCHECK then
     if src_offset < 0 || src_len <= src_offset
       then fail (Printf.sprintf "set/get out of bounds: offset %d for range 0..%d" src_offset src_len)
 
   let check_range range_len src_offset src_len =
+    if kBOUNDCHECK then
     if range_len < 0 || src_offset < 0 || src_len < src_offset + range_len
       then fail (Printf.sprintf "invalid blit/fill for range %d..%d+%d on len=%d item" src_offset src_offset range_len src_len)
 
@@ -150,8 +154,22 @@ module ArrayOperations = struct
     in
       loop fn a 0
 
-  
   let array_unsafe_alloc n = Array.make n "" |> Obj.magic
+
+  (*
+  let array_remove_duplicate a comp_fn =
+    Array.sort comp_fn a ;
+    let cursor = ref 0 in
+    let last = ref (astop a) in
+    while !cursor < !last do
+      if a.(!cursor) == a.(!cursor + 1) then (
+        array_swap a (!cursor + 1) !last ;
+        decr last
+      ) else
+        incr cursor
+    done ;
+    !last + 1
+    *)
 
 end
 
@@ -2673,7 +2691,7 @@ module Suffixarray : sig
   (* range in a Suffixarray.t of all entries matching a prefix *)
   type range
 
-  val mk_suffixarray : string array -> t
+  val mk_suffixarray : string array -> (string, string list) Hashtbl.t -> t
   val mk_range : t -> string -> range
   val refine_range : range -> string -> range
   val range_to_array : range -> string array
@@ -2726,9 +2744,10 @@ end = struct
   }
 
   type t = {
-    entries           : string array ;  (* All string entries in the suffix array *)
+    entries           : string array ;  (* All string entries in the suffix array *) (* TODO: rename as keys *)
     substrings        : int array ;     (* A packed flattened (int, int) array of (entries index, entries offset) for defining all substrings in entries *)
     substrings_index  : int array ;     (* array of indexes into substrings, intended to be sorted with library sort *)
+    entry_to_values   : (string, string list) Hashtbl.t
   }
 
   type range = {
@@ -2736,6 +2755,9 @@ end = struct
     start       : int ;
     stop        : int ;
   }
+
+  let get_entry_index { entries ; substrings } i =
+    array_get substrings (2 * i)
 
   let get_entry { entries ; substrings } i =
     2 * i |> array_get substrings |> array_get entries
@@ -2760,7 +2782,7 @@ end = struct
     else
       x
 
-  let mk_suffixarray entries_original =
+  let mk_suffixarray entries_original entry_to_values =
     let entries = Array.copy entries_original in
     let substrings_buffer = Arraybuffer.empty 0 in
     for i = 0 to astop entries do
@@ -2777,38 +2799,53 @@ end = struct
         ~right:entries.(substrings.(2*j)) ~right_offset:substrings.(2*j + 1)
     in
     Array.sort compare_suffixes substrings_index ;
-    { entries ; substrings ; substrings_index }
+    { entries ; substrings ; substrings_index ; entry_to_values }
 
   let prepare suffixarray entrie = ()
 
   let refine_range { suffixarray ; start ; stop } prefix =
-    let compare_with_prefix i =
-      compare_substrings
-        ~left:(get_entry suffixarray i) ~left_offset:(get_offset suffixarray i)
-        ~right:prefix ~right_offset:0
-    in
     let start' = ref start in
     let stop' = ref stop in
-    (* TODO: replace by proper binary search *)
-    while compare_with_prefix !start' < 0 do
-      incr start'
-    done ;
-    while compare_with_prefix !stop' > 0 do
-      decr stop'
-    done ;
+    if slen prefix > 0 then (
+      let compare_with_prefix i =
+        compare_substrings
+          ~left:(get_entry suffixarray i) ~left_offset:(get_offset suffixarray i)
+          ~right:prefix ~right_offset:0
+      in
+      (* TODO: replace by proper binary search *)
+      while compare_with_prefix !start' < 0 do incr start' done ;
+      while compare_with_prefix !stop' > 0 do decr stop' done
+    ) ;
     { suffixarray ; start = !start' ; stop = !stop' }
 
   let mk_range suffixarray prefix =
-    refine_range { suffixarray ; start = 0 ; stop = 0 (* FIXME ! *) } prefix
+    refine_range { suffixarray ; start = 0 ; stop = alen suffixarray.substrings_index } prefix
 
   let range_to_array { suffixarray ; start ; stop } =
-    let range_entries = Array.make (stop - start) "" in
-    for i = 0 to astop range_entries do
-      start + i |> get_entry suffixarray |> array_set range_entries i
+    let dup_entries = Array.init (stop - start) ((+) start >> get_entry suffixarray) in
+    Array.sort String.compare dup_entries ;
+    let cursor = ref 0 in
+    for i = 1 to astop dup_entries do
+      if array_get dup_entries !cursor <> array_get dup_entries i then (
+        array_set dup_entries (!cursor + 1) (array_get dup_entries i) ;
+        incr cursor
+      )
     done ;
-    Array.sort String.compare range_entries ;
-    (* TODO: eliminate possible duplicates *)
-    range_entries
+    Array.init !cursor (array_get dup_entries)
+
+  (* This still does not return the original entries, only the token to the keys !! *)
+  let range_to_array_old { suffixarray ; start ; stop } =
+    let dup_entries = Array.init (stop - start) ((+) start >> get_entry suffixarray) in
+    Array.sort String.compare dup_entries ;
+    let cursor = ref 0 in
+    for i = 1 to astop dup_entries do
+      if array_get dup_entries !cursor <> array_get dup_entries i then (
+        array_set dup_entries (!cursor + 1) (array_get dup_entries i) ;
+        incr cursor
+      )
+    done ;
+    Array.init !cursor (array_get dup_entries)
+(* This still does not return the original entries, only the token to the keys !! *)
 
 end
 
@@ -2878,7 +2915,7 @@ end = struct
       path |> String.split_on_char '/'
            |> List.iter (token_index_insert token_map path)
     done ;
-    let token_index = Suffixarray.mk_suffixarray (hashtbl_keys token_map) in
+    let token_index = Suffixarray.mk_suffixarray (hashtbl_keys token_map) token_map in
     { entries ; token_map ; token_index }
 
   let index_to_entries { entries } = entries
@@ -3335,10 +3372,12 @@ module Ciseau = struct
     print_entries (Navigator.index_to_entries file_index) ;
     print_newline () ;
     let prefix = ref "" in
-    while true do
+    Navigator.mk_range file_index |> Suffixarray.range_to_array |> print_entries ;
+    (* while true do
       Navigator.mk_range file_index |> Suffixarray.range_to_array |> print_entries ;
       print_newline ()
     done
+    *)
 
 end
 
