@@ -156,21 +156,6 @@ module ArrayOperations = struct
 
   let array_unsafe_alloc n = Array.make n "" |> Obj.magic
 
-  (*
-  let array_remove_duplicate a comp_fn =
-    Array.sort comp_fn a ;
-    let cursor = ref 0 in
-    let last = ref (astop a) in
-    while !cursor < !last do
-      if a.(!cursor) == a.(!cursor + 1) then (
-        array_swap a (!cursor + 1) !last ;
-        decr last
-      ) else
-        incr cursor
-    done ;
-    !last + 1
-    *)
-
 end
 
 
@@ -192,16 +177,16 @@ let hashtbl_keys tbl =
       Hashtbl.iter (fun k v -> array_set keys !i k ; incr i) tbl ;
       keys
 
-
 (* Wraps a vanilla array with a cursor to provide a convenient append operation. Used by value. *)
 module Arraybuffer : sig
   type 'a t
-  val len       : 'a t -> int
-  val get       : 'a t -> int -> 'a
-  val empty     : 'a -> 'a t
-  val reserve   : int -> 'a -> 'a t
-  val to_array  : 'a t -> 'a array
-  val append    : 'a t -> 'a -> unit
+  val len             : 'a t -> int
+  val get             : 'a t -> int -> 'a
+  val empty           : 'a -> 'a t
+  val reserve         : int -> 'a -> 'a t
+  val to_array        : 'a t -> 'a array
+  val append          : 'a t -> 'a -> unit
+  val append_and_then : 'a t -> 'a -> 'a t
 end = struct
 
   type 'a t = {
@@ -242,6 +227,9 @@ end = struct
       b.data <- grow_array b.zero b.data ;
     array_set b.data b.next e ;
     b.next <- b.next + 1
+
+  let append_and_then b e =
+    append b e ; b
 end
 
 
@@ -2693,7 +2681,7 @@ module Suffixarray : sig
 
   val mk_suffixarray : string array -> (string, string list) Hashtbl.t -> t
   val mk_range : t -> string -> range
-  val refine_range : range -> string -> range
+  val refine_range : string -> range -> range
   val range_to_array : range -> string array
 
 end = struct
@@ -2756,6 +2744,8 @@ end = struct
     stop        : int ;
   }
 
+  (* TODO: cleanup all names to clarify what is entry and what is key/token *)
+
   let get_entry_index { entries ; substrings } i =
     array_get substrings (2 * i)
 
@@ -2803,7 +2793,7 @@ end = struct
 
   let prepare suffixarray entrie = ()
 
-  let refine_range { suffixarray ; start ; stop } prefix =
+  let refine_range prefix { suffixarray ; start ; stop } =
     let start' = ref start in
     let stop' = ref stop in
     if slen prefix > 0 then (
@@ -2813,25 +2803,26 @@ end = struct
           ~right:prefix ~right_offset:0
       in
       (* TODO: replace by proper binary search *)
-      while compare_with_prefix !start' < 0 do incr start' done ;
-      while compare_with_prefix !stop' > 0 do decr stop' done
+      while !start' <= !stop' && compare_with_prefix !start' < 0 do incr start' done ;
+      while !start' <= !stop' && compare_with_prefix !stop' > 0 do decr stop' done
     ) ;
     { suffixarray ; start = !start' ; stop = !stop' }
 
   let mk_range suffixarray prefix =
-    refine_range { suffixarray ; start = 0 ; stop = alen suffixarray.substrings_index } prefix
+    refine_range prefix { suffixarray ; start = 0 ; stop = alen suffixarray.substrings_index - 1 }
 
   let range_to_array { suffixarray ; start ; stop } =
-    let dup_entries = Array.init (stop - start) ((+) start >> get_entry suffixarray) in
-    Array.sort String.compare dup_entries ;
-    let cursor = ref 0 in
-    for i = 1 to astop dup_entries do
-      if array_get dup_entries !cursor <> array_get dup_entries i then (
-        array_set dup_entries (!cursor + 1) (array_get dup_entries i) ;
-        incr cursor
-      )
+    (* TODO: use standard Set instead *)
+    let entry_set = Hashtbl.create (min (stop - start) 32) in
+    for i = start to stop do
+      get_entry suffixarray start
+        |> Hashtbl.find suffixarray.entry_to_values
+        |> List.iter (fun entry -> Hashtbl.replace entry_set entry true)
     done ;
-    Array.init !cursor (array_get dup_entries)
+    Hashtbl.remove entry_set "" ;
+    let entries = hashtbl_keys entry_set in
+    Array.sort String.compare entries ;
+    entries
 
   (* This still does not return the original entries, only the token to the keys !! *)
   let range_to_array_old { suffixarray ; start ; stop } =
@@ -2858,9 +2849,29 @@ module Navigator : sig
 
   type file_index
 
+  type stats = {
+    total_entries         : int ;
+    total_tokens          : int ;
+    total_entries_length  : int ;
+    total_tokens_length   : int ;
+  }
+
   val mk_file_index : ?recursive:bool -> ?filter:filter_fn -> string -> file_index
   val index_to_entries : file_index -> string array
   val mk_range : file_index -> Suffixarray.range
+  val file_index_stats : file_index -> stats
+
+  (* Note on different interface into range search:
+   *  - Takes 5 seconds to index Linux, 99% of it is file system exploration
+   *      total_entries=72169     total_entries_length=3279113
+   *      total_tokens=50022      total_tokens_length=637316
+   *  - is it worthwhile to try to do iterative search narrowing ?
+   *    - requires keeping some kind of cursor and update it, use code has to care
+   *    - try remove visibility into Suffixarray
+   *  - could base function just be find find_all_paths_by_token: string -> string iter / string array
+   *  - actually, at which point is an index necessary in the first place ?
+   *  - just having all paths in memory and brute force searching them might be just good enough
+   *)
 
 end = struct
 
@@ -2869,45 +2880,61 @@ end = struct
   type file_index = {
     entries       : string array ;
     token_map     : (string, string list) Hashtbl.t ;
-    token_index   : Suffixarray.t
+    token_index   : Suffixarray.t ;
   }
 
-  let rec read_dir_rec recursive filter path entries =
-    let len = Arraybuffer.len entries in
+  type stats = {
+    total_entries         : int ;
+    total_tokens          : int ;
+    total_entries_length  : int ;
+    total_tokens_length   : int ;
+  }
+
+  let readdir path fn x =
+    let rec loop dir_handle fn acc =
+      match Unix.readdir dir_handle with
+        | y                     -> loop dir_handle fn (fn acc y)
+        | exception End_of_file -> Unix.closedir dir_handle ; acc
+    in
     match Unix.opendir path with
-      | dir_handle -> (
-          try
-            while true do
-              let item = Unix.readdir dir_handle in   (* throws End_of_file when done, breaking the loop *)
-              if item <> "." && item <> ".." && filter path item
-                then Arraybuffer.append entries (path ^ "/" ^ item)
-            done
-          with
-            End_of_file -> () ;
-          Unix.closedir dir_handle
-      )
-      | exception Unix.Unix_error (Unix.EACCES, _, _) -> ()
-      | exception Unix.Unix_error (Unix.ENOTDIR, _, _) -> ()
-      ;
-    let len' = Arraybuffer.len entries in
-    if recursive then
-      for i = len to len' - 1 do
-        (* BUG: do not follow links, infinite loop risks otherwise ! *)
-        read_dir_rec recursive filter (Arraybuffer.get entries i) entries
-      done
+      | dir_handle -> loop dir_handle fn x
+      | exception Unix.Unix_error (Unix.EACCES, _, _)   -> x
+      | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> x
+      | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> x
+
+  (* TODO: should directories be handled separately ? should they be included at all ? *)
+  let rec read_dir_rec_list path_buffer filter =
+    function
+      | [] -> ()
+      | path :: visit_list ->
+          let fn ls item = 
+            (* TODO: Move filter one layer up ? *)
+            if  item <> "." && item <> ".." && filter path item
+              then (
+                let new_entry = path ^ "/" ^ item in
+                Arraybuffer.append path_buffer new_entry ;
+                new_entry :: ls
+              )
+              else ls
+          in
+          readdir path fn visit_list |> read_dir_rec_list path_buffer filter
 
   let nofilter anydir anyname = true
 
   let token_index_insert tbl path token =
-    Hashtbl.find_opt tbl token
-      |> OptionCombinators.get_or []
-      |> List.cons token
-      |> Hashtbl.replace tbl token
+    if slen token > 0 then
+      Hashtbl.find_opt tbl token
+        |> OptionCombinators.get_or []
+        |> List.cons token
+        |> Hashtbl.replace tbl token
 
   let mk_file_index ?recursive:(recur=false) ?filter:(filter=nofilter) path =
-    let buffer = Arraybuffer.empty "?" in
-    read_dir_rec recur filter path buffer ;
-    let entries = Arraybuffer.to_array buffer in
+    let path_buffer = Arraybuffer.empty "?" in
+    if recur
+      then read_dir_rec_list path_buffer filter [path]
+      (* TODO: cleanup that second branch *)
+      else readdir path Arraybuffer.append_and_then path_buffer |> ignore ;
+    let entries = Arraybuffer.to_array path_buffer in
     Array.sort String.compare entries ;
     let token_map = Hashtbl.create 128 in
     for i = 0 to astop entries do
@@ -2921,6 +2948,18 @@ end = struct
   let index_to_entries { entries } = entries
 
   let mk_range { token_index } = Suffixarray.mk_range token_index ""
+
+  let string_byte_adder byte_count path = byte_count + (slen path)
+  let string_byte_adder2 token _ byte_count = string_byte_adder byte_count token
+
+  (* TODO *)
+  let file_index_stats { entries ; token_map ; token_index } =
+  {
+    total_entries         = alen entries ;
+    total_tokens          = Hashtbl.length token_map ;
+    total_entries_length  = Array.fold_left string_byte_adder 0 entries ;
+    total_tokens_length   = Hashtbl.fold string_byte_adder2 token_map 0 ;
+  }
 end
 
 
@@ -3367,17 +3406,35 @@ module Ciseau = struct
     done
 
   let main () =
+    let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
     let filter anydir item = item <> ".git" in
-    let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter "/etc" in
+    print_string base_path ; print_newline () ;
+    let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter base_path in
     print_entries (Navigator.index_to_entries file_index) ;
     print_newline () ;
-    let prefix = ref "" in
-    Navigator.mk_range file_index |> Suffixarray.range_to_array |> print_entries ;
-    (* while true do
-      Navigator.mk_range file_index |> Suffixarray.range_to_array |> print_entries ;
-      print_newline ()
-    done
-    *)
+(*
+*)
+    Navigator.mk_range file_index
+      (*
+      |> Suffixarray.refine_range  "cer"
+      *)
+      |> Suffixarray.range_to_array
+      |> ignore ;
+      (*
+      |> print_entries ;
+      *)
+    let {
+      Navigator.total_entries         ;
+      Navigator.total_tokens          ;
+      Navigator.total_entries_length  ;
+      Navigator.total_tokens_length   ;
+    } = Navigator.file_index_stats file_index in
+    Printf.printf
+      "total_entries=%d total_tokens=%d total_entries_length=%d total_tokens_length=%d\n"
+      total_entries
+      total_tokens
+      total_entries_length
+      total_tokens_length
 
 end
 
