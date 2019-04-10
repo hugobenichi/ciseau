@@ -1,15 +1,11 @@
-# TODO: check that ocaml is on $PATH or run `eval 'opam config env'`
-
 .DEFAULT_GOAL := build
-
 OUTDIR=build
 
 builddir:
 	mkdir -p $(OUTDIR)
 
-$(OUTDIR)/ciseau: ciseau.ml $(OUTDIR)/ioctl.o
-	ocamlopt -p -g -inline 0 $(OUTDIR)/ioctl.o str.cmxa unix.cmxa -o $@ $<
-#	ocamlc -custom $(OUTDIR)/ioctl.o unix.cma -o $@ $<
+$(OUTDIR)/ciseau: $(OUTDIR)/ioctl.o util.mli util.ml ciseau.ml
+	ocamlopt -p -g -inline 0 str.cmxa unix.cmxa -o $@ $^
 
 $(OUTDIR)/ioctl.o: ioctl.c
 	gcc -v -c -o $@ $< -I `ocamlc -where`

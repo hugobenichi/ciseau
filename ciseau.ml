@@ -1,3 +1,5 @@
+open Util
+
 let starttime = Sys.time ()
 
  let logs = open_out "/tmp/ciseau.log"
@@ -59,12 +61,6 @@ let output_float f  = string_of_float >> output_string f
 let (+=) r x = (r := !r + x)
 
 let string_of_char c = String.make 1 c
-
-let is_space      chr = (chr = ' ') || (chr = '\t') || (chr = '\r') || (chr = '\n')
-let is_letter     chr = (('A' <= chr) && (chr <= 'Z')) || (('a' <= chr) && (chr <= 'z'))
-let is_digit      chr = ('0' <= chr) && (chr <= '9')
-let is_alphanum   chr = (is_digit chr) || (is_letter chr)
-let is_printable  chr = (' ' <= chr) && (chr <= '~')
 
 let write fd buffer len =
   let n = Unix.write fd buffer 0 len in
