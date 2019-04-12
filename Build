@@ -1,0 +1,51 @@
+# eval me in a terminal
+
+eval `opam config env`
+export PATH=$PATH:$PWD
+
+[ -z "$CISEAU_BUILD_DIR" ]  && export CISEAU_BUILD_DIR=_build
+[ -z "$CISEAU_OUT" ]        && export CISEAU_OUT=$PWD/ciseau
+
+function ciseau_clean {
+  rm -rf $CISEAU_BUILD_DIR
+  rm $CISEAU_OUT
+}
+
+function ciseau_compile {
+  # Copy all sources to build dir
+  mkdir -p _build
+  for source_file in *.ml *.mli *.c
+  do
+    cp {,$CISEAU_BUILD_DIR/}$source_file
+  done
+
+  cd $CISEAU_BUILD_DIR
+
+  # Build native
+  gcc -v -c -o ioctl.o ioctl.c -I `ocamlc -where`
+
+  # Build ocaml
+  # How to order files correctly ?
+  #ocamlopt -p -g -inline 0 str.cmxa unix.cmxa -o *.mli *.ml *.o
+  ocamlopt -p -g -inline 0 str.cmxa unix.cmxa -o $CISEAU_OUT ioctl.o util.mli util.ml ciseau.ml
+
+  cd ..
+}
+
+function ciseau_run {
+  ciseau_compile
+  $CISEAU_OUT
+}
+
+function Build {
+  ARG=$1
+  [ -z "$1" ] && export ARG="comp"
+  case $ARG in
+      comp)     ciseau_compile   ;;
+      compile)  ciseau_compile   ;;
+      run)      ciseau_run       ;;
+      clean)    ciseau_clean     ;;
+      *)
+              echo $"Usage: $0 {comp(ile)|run|clean}"
+  esac
+}

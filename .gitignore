@@ -1,8 +1,5 @@
-*.cmi
-*.cmo
-*.cmx
-*.o
+ciseau
 *.xml
 spacetime*
 gmon.out
-build/*
+_build/*

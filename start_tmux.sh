@@ -12,7 +12,7 @@ tmux new-session -P -d -s $SESSION -n 'Editor' $EDITOR ciseau.ml
 tmux send-keys ':vs' C-m
 
 tmux new-window -P -n 'Build'
-tmux send-keys 'eval `opam config env`' C-m
+tmux send-keys '. Build' C-m
 
 [ - $LOGS ] || touch $LOGS
 
