@@ -27,16 +27,20 @@ module Color : sig
               | RGB216 of int * int * int
               | Gray of int
 
+  type color_layer = Foreground | Background
+
   type color_cell = {
     fg : color ;
     bg : color ;
   }
 
-  val color_control_code      : color -> int
+  val color_code              : color_layer -> color -> int
   val darkgray                : color
+
   val white_code              : int
   val darkgray_code           : int
   val black_code              : int
+
   (* TODO: unify this in single function and remap ints to not overlap *)
   val fg_color_command        : int -> string
   val bg_color_command        : int -> string

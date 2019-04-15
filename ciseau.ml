@@ -523,12 +523,12 @@ end = struct
 
   let fill_fg_color t offset len color =
     color
-      |> Color.color_control_code
+      |> Color.color_code Color.Foreground
       |> array_fill t.fg_colors offset len
 
   let fill_bg_color t offset len color =
     color
-      |> Color.color_control_code
+      |> Color.color_code Color.Background
       |> array_fill t.bg_colors offset len
 
   let clear t =
