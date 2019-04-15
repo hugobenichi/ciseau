@@ -33,6 +33,10 @@ let joiner fold sep fn        = fold (fun a x -> a ^ sep ^ (fn x)) ""
 let list_to_string fn         = joiner List.fold_left " :: " fn
 let array_to_string fn ary    = "[| " ^ (joiner Array.fold_left " ; " fn ary) ^ " |]"
 
+let alen = Array.length
+let blen = Bytes.length
+let slen = String.length
+
 module Options = struct
   let some x = Some x
 
@@ -49,12 +53,6 @@ module Options = struct
       | None    -> b
       | Some a  -> a
 end
-
-
-let alen = Array.length
-let blen = Bytes.length
-let slen = String.length
-
 
 module Arrays = struct
 
@@ -193,3 +191,25 @@ let keys tbl =
       Hashtbl.iter (fun k v -> Arrays.array_set keys !i k ; incr i) tbl ;
       keys
 
+module Vec2 = struct
+
+  type v2 = {
+    x : int ;
+    y : int ;
+  }
+
+  let mk_v2 x y     = { x ; y }
+  let v2_zero       = mk_v2 0 0
+  let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
+  let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
+
+  let is_v2_inside { x = xlim ; y = ylim } { x ; y } =
+    (0 <= x) && (0 <= y) && (x <= xlim) && (y <= ylim)
+
+  let is_v2_outside { x = xlim ; y = ylim } { x ; y } =
+    (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
+
+  let assert_v2_inside box_v2 v2 =
+    if is_v2_outside box_v2 v2
+      then fail (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y)
+end

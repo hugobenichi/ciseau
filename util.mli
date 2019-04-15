@@ -29,6 +29,11 @@ val string_of_char            : char -> string
 val list_to_string            : ('a -> string) -> 'a list -> string
 val array_to_string           : ('a -> string) -> 'a array -> string
 
+(* Convenient aliases *)
+val alen                      : 'a array -> int
+val blen                      : Bytes.t -> int
+val slen                      : string -> int
+
 (* Combinators for options *)
 module Options : sig
   val some                    : 'a -> 'a option
@@ -36,7 +41,6 @@ module Options : sig
   val map                     : ('a -> 'b) -> 'a option -> 'b option
   val get_or                  : 'a -> 'a option -> 'a
 end
-
 
 (* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
 module Arrays : sig
@@ -70,3 +74,19 @@ end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)
 val keys : ('a, 'b) Hashtbl.t -> 'a array
+
+module Vec2 : sig
+  type v2 = {
+    x : int ;
+    y : int ;
+  }
+  val mk_v2                   : int -> int -> v2
+  val v2_zero                 : v2
+  val v2_add                  : v2 -> v2 -> v2
+  val v2_sub                  : v2 -> v2 -> v2
+  (* Check if second v2 argument is inside the implicit rectangle woth topleft (0,0)
+   * and first v2 argument as bottomright corner. *)
+  val is_v2_inside            : v2 -> v2 -> bool
+  val is_v2_outside           : v2 -> v2 -> bool
+  val assert_v2_inside        : v2 -> v2 -> unit
+end

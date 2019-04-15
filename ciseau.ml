@@ -1,10 +1,8 @@
 open Util
 open Util.Arrays
+open Util.Vec2
+open Term
 open Navigation
-
-let alen = Array.length
-let blen = Bytes.length
-let slen = String.length
 
 let starttime = Sys.time ()
 
@@ -14,34 +12,6 @@ let logs = open_out "/tmp/ciseau.log"
 let kLOG_STATS    = true
 let kDRAW_SCREEN  = true
 let kDEBUG        = false
-
-module Vec2 = struct
-
-  type v2 = {
-    x : int ;
-    y : int ;
-  }
-
-  let mk_v2 x y     = { x ; y }
-  let v2_zero       = mk_v2 0 0
-  let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
-  let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
-
-  (* Check if second v2 argument is inside the implicit rectangle woth topleft (0,0)
-   * and first v2 argument as bottomright corner. *)
-  let is_v2_inside { x = xlim ; y = ylim } { x ; y } =
-    (0 <= x) && (0 <= y) && (x <= xlim) && (y <= ylim)
-
-  let is_v2_outside { x = xlim ; y = ylim } { x ; y } =
-    (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
-
-  let assert_v2_inside box_v2 v2 =
-    if is_v2_outside box_v2 v2
-      then fail (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y)
-end
-
-
-open Vec2
 
 
 module Rect = struct
@@ -87,72 +57,6 @@ end
 
 
 open Rect
-
-
-module Color = struct
-
-  type color  = (* First 8 ansi colors *)
-                Black
-              | Red
-              | Green
-              | Yellow
-              | Blue
-              | Magenta
-              | Cyan
-              | White
-                (* High contract 8 ansi colors *)
-              | Bold_Black
-              | Bold_Red
-              | Bold_Green
-              | Bold_Yellow
-              | Bold_Blue
-              | Bold_Magenta
-              | Bold_Cyan
-              | Bold_White
-                (* Remaining colors from extended 256 colors mode *)
-              | RGB216 of int * int * int
-              | Gray of int
-
-  let color_control_code =
-    function
-      | Black           -> 0
-      | Red             -> 1
-      | Green           -> 2
-      | Yellow          -> 3
-      | Blue            -> 4
-      | Magenta         -> 5
-      | Cyan            -> 6
-      | White           -> 7
-      | Bold_Black      -> 8
-      | Bold_Red        -> 9
-      | Bold_Green      -> 10
-      | Bold_Yellow     -> 11
-      | Bold_Blue       -> 12
-      | Bold_Magenta    -> 13
-      | Bold_Cyan       -> 14
-      | Bold_White      -> 15
-      | Gray g          -> assert_that (0 <= g && g < 24) ;
-                           232 + g
-      | RGB216 (r,g,b)  -> assert_that (0 <= r && r < 6) ;
-                           assert_that (0 <= g && g < 6) ;
-                           assert_that (0 <= b && b < 6) ;
-                           16 + 36 * r + 6 * g + b
-
-  type color_cell = {
-    fg : color ;
-    bg : color ;
-  }
-
-  let darkgray  = Gray 2
-
-  let white_code      = color_control_code White
-  let darkgray_code   = color_control_code (Gray 2)
-  let black_code      = color_control_code Black
-
-  let fg_color_control_strings = Array.init 256 (Printf.sprintf "38;5;%d")
-  let bg_color_control_strings = Array.init 256 (Printf.sprintf ";48;5;%dm")
-
-end
 
 
 (* this is a config module for storing all parameters *)
@@ -559,57 +463,6 @@ module ScreenConfiguration = struct
 end
 
 
-(* main module for interacting with the terminal *)
-module Term : sig
-  val restore_initial_state   : unit -> unit
-  val set_raw_mode            : unit -> unit
-  val get_terminal_dimensions : unit -> v2
-end = struct
-  external get_terminal_size : unit -> (int * int) = "get_terminal_size"
-
-  let get_terminal_dimensions () =
-    let (term_rows, term_cols) = get_terminal_size () in
-    mk_v2 term_cols term_rows
-
-  let stdout_write_string s =
-    let l = slen s in
-    let n = Unix.write_substring Unix.stdout s 0 l in
-    if l <> n then fail ("sdtout write failed for " ^ s)
-
-  (* Used for restoring terminal state at program exit *)
-  let terminal_initial = Unix.tcgetattr Unix.stdin
-
-  let restore_initial_state () =
-    Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH terminal_initial ;
-    stdout_write_string "\027[?1000l" ; (* mouse event off *)
-    stdout_write_string "\027[?1002l" ; (* mouse tracking off *)
-    stdout_write_string "\027[?1004l" ; (* switch focus event off *)
-    stdout_write_string "\027[?47l" ; (* switch back to main screen *)
-    stdout_write_string "\027[u" (* cursor restore *)
-
-  let set_raw_mode () =
-    let want = Unix.tcgetattr Unix.stdin in
-    want.c_brkint  <- false ;   (* no break *)
-    want.c_icrnl   <- false ;   (* no CR to NL *)
-    want.c_inpck   <- false ;   (* no parity check *)
-    want.c_istrip  <- false ;   (* no strip character *)
-    want.c_ixon    <- false ;
-    want.c_opost   <- false ;
-    want.c_echo    <- false ;
-    want.c_icanon  <- false ;
-    want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
-    want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-    want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
-    want.c_csize   <- 8;        (* 8 bit chars *)
-    stdout_write_string "\027[s" ;      (* cursor save *)
-    stdout_write_string "\027[?47h" ;   (* switch offscreen *)
-    stdout_write_string "\027[?1000h" ; (* mouse event on *)
-    stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
-    (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
-    Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
-end
-
-
 module Framebuffer : sig
   type t
 
@@ -746,8 +599,8 @@ end = struct
       in
       if should_draw_line then (
         Buffer.add_string buffer "\027[" ;
-        Buffer.add_string buffer (array_get Color.fg_color_control_strings !fg) ;
-        Buffer.add_string buffer (array_get Color.bg_color_control_strings !bg) ;
+        Buffer.add_string buffer (Color.fg_color_command !fg) ;
+        Buffer.add_string buffer (Color.fg_color_command !bg) ;
         Buffer.add_subbytes buffer framebuffer.text !start !len ;
         Buffer.add_string buffer "\027[0m" ;
         start += !len ;
@@ -2588,7 +2441,7 @@ module Ciseau = struct
       |> Tileset.mk_tileset 0 (main_screen_dimensions term_dim) ScreenConfiguration.Configs.columns
 
   let init_editor file =
-    let term_dim = Term.get_terminal_dimensions () in
+    let term_dim = Term.terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
     let filebuffers = test_mk_filebuffers file in
     {
@@ -2609,7 +2462,7 @@ module Ciseau = struct
     }
 
   let resize_editor editor =
-    let term_dim = Term.get_terminal_dimensions () in
+    let term_dim = Term.terminal_dimensions () in
     let frame_buffer = Framebuffer.init_framebuffer term_dim in
     {
       editor with
@@ -2879,13 +2732,13 @@ module Ciseau = struct
           then Sys.argv.(1)
           else __FILE__
       in
-        Term.set_raw_mode () ;
+        Term.terminal_set_raw () ;
         file
           |> init_editor
           |> loop (Keys.make_next_key_fn ()) ;
-        Term.restore_initial_state ()
+        Term.terminal_restore ()
     with
-      e ->  Term.restore_initial_state () ;
+      e ->  Term.terminal_restore () ;
             Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
 
@@ -2965,13 +2818,13 @@ module Fuzzer = struct
           then Sys.argv.(1)
           else __FILE__
       in
-        Term.set_raw_mode () ;
+        Term.terminal_set_raw () ;
         file
           |> Ciseau.init_editor
           |> Ciseau.loop (next_key (Random.State.make [| 0 ; 1 ; 2 |]) n) ;
-        Term.restore_initial_state ()
+        Term.terminal_restore ()
     with
-      e ->  Term.restore_initial_state () ;
+      e ->  Term.terminal_restore () ;
             Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
 

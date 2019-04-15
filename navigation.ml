@@ -1,9 +1,6 @@
 open Util
 open Util.Arrays
 
-let alen = Array.length
-let slen = String.length
-
 
 module Suffixarray = struct
   (* Is this reasonable for real input
