@@ -600,7 +600,7 @@ end = struct
       if should_draw_line then (
         Buffer.add_string buffer "\027[" ;
         Buffer.add_string buffer (Color.fg_color_command !fg) ;
-        Buffer.add_string buffer (Color.fg_color_command !bg) ;
+        Buffer.add_string buffer (Color.bg_color_command !bg) ;
         Buffer.add_subbytes buffer framebuffer.text !start !len ;
         Buffer.add_string buffer "\027[0m" ;
         start += !len ;
@@ -2748,7 +2748,7 @@ module Ciseau = struct
       print_newline ()
     done
 
-  let main () =
+  let main2 () =
     let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
     let filter anydir item = item <> ".git" in
     print_string base_path ; print_newline () ;
