@@ -91,6 +91,8 @@ module Config = struct
     page_size : int;
   }
 
+  let darkgray = Color.Gray 2
+
   let default : cfg = {
     colors = {
       operator = {
@@ -485,8 +487,8 @@ end = struct
   let newline = "\r\n"
 
   module Default = struct
-    let fg    = Color.White
-    let bg    = Color.darkgray
+    let fg_color_code    = Color.color_code Color.Foreground Color.White
+    let bg_color_code    = Color.color_code Color.Background (Color.Gray 2)
     let z     = 0
     let text  = ' '
   end
@@ -508,8 +510,8 @@ end = struct
     in {
       text        = Bytes.make len Default.text ;
       line_lengths = Array.make vec2.x 0 ; (* CLEANUP: rename me *)
-      fg_colors   = Array.make len Color.white_code ;
-      bg_colors   = Array.make len Color.darkgray_code ;
+      fg_colors   = Array.make len Default.fg_color_code ;
+      bg_colors   = Array.make len Default.bg_color_code ;
       z_index     = Array.make len Default.z ;
       len         = len ;
       window      = vec2 ;
@@ -517,8 +519,8 @@ end = struct
     }
 
   let default_fill_len    = 8192
-  let default_fg_colors   = Array.make default_fill_len Color.white_code
-  let default_bg_colors   = Array.make default_fill_len Color.darkgray_code
+  let default_fg_colors   = Array.make default_fill_len Default.fg_color_code
+  let default_bg_colors   = Array.make default_fill_len Default.bg_color_code
   let default_line_length = Array.make 256 0
 
   let fill_fg_color t offset len color =
@@ -599,8 +601,8 @@ end = struct
       in
       if should_draw_line then (
         Buffer.add_string buffer "\027[" ;
-        Buffer.add_string buffer (Color.fg_color_command !fg) ;
-        Buffer.add_string buffer (Color.bg_color_command !bg) ;
+        Buffer.add_string buffer (Color.color_code_to_string !fg) ;
+        Buffer.add_string buffer (Color.color_code_to_string !bg) ;
         Buffer.add_subbytes buffer framebuffer.text !start !len ;
         Buffer.add_string buffer "\027[0m" ;
         start += !len ;

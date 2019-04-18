@@ -35,15 +35,7 @@ module Color : sig
   }
 
   val color_code              : color_layer -> color -> int
-  val darkgray                : color
-
-  val white_code              : int
-  val darkgray_code           : int
-  val black_code              : int
-
-  (* TODO: unify this in single function and remap ints to not overlap *)
-  val fg_color_command        : int -> string
-  val bg_color_command        : int -> string
+  val color_code_to_string    : int -> string
 end
 
 (* TODO: add Framebuffer here *)

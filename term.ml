@@ -91,24 +91,28 @@ module Color = struct
                            assert_that (0 <= b && b < 6) ;
                            16 + 36 * r + 6 * g + b
 
-  let color_code =
-    function
-      | Foreground -> color_code_raw
-      | Background -> color_code_raw >> ((+) 0 (*256*))
+  let color_code_bg =  color_code_raw >> ((+) 256)
 
   type color_cell = {
     fg : color ;
     bg : color ;
   }
 
-  let darkgray  = Gray 2
-
-  let white_code      = color_code Foreground White
-  let darkgray_code   = color_code Foreground (Gray 2)
-  let black_code      = color_code Foreground Black
+  let color_code =
+    function
+      | Foreground -> color_code_raw
+      | Background -> color_code_bg
 
   let fg_color_control_strings = Array.init 256 (Printf.sprintf "38;5;%d")
   let bg_color_control_strings = Array.init 256 (Printf.sprintf ";48;5;%dm")
-  let fg_color_command = Arrays.array_get fg_color_control_strings
-  let bg_color_command = Arrays.array_get bg_color_control_strings
+
+  let color_control_strings = Array.make (2 * 256) ""
+
+  let _ =
+    for i = 0 to 255 do
+      Arrays.array_set color_control_strings (i)       (Printf.sprintf "38;5;%d" i) ;
+      Arrays.array_set color_control_strings (i + 256) (Printf.sprintf ";48;5;%dm" i)
+    done
+
+  let color_code_to_string = Arrays.array_get color_control_strings
 end
