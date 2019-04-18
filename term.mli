@@ -2,7 +2,7 @@
 
 val terminal_restore          : unit -> unit
 val terminal_set_raw          : unit -> unit
-val terminal_dimensions       : unit -> Util.Vec2.v2
+val terminal_dimensions       : unit -> Util.Vec.vec2
 
 module Color : sig
   type color  = (* First 8 ansi colors *)
@@ -38,4 +38,17 @@ module Color : sig
   val color_code_to_string    : int -> string
 end
 
-(* TODO: add Framebuffer here *)
+module Framebuffer : sig
+  open Util
+  type t
+  val init_framebuffer  : Vec.vec2 -> t
+  val clear             : t -> unit
+  val clear_rect        : t -> Rec.rec2 -> unit
+  val clear_line        : t -> x:int -> y:int -> len:int -> unit
+  val render            : t -> unit
+  val put_color_rect    : t -> Color.color_cell -> Rec.rec2 -> unit
+  (* TODO: add a put_color_segment function *)
+  val put_cursor        : t -> Vec.vec2 -> unit
+  val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
+  val put_framebuffer   : t -> Rec.rec2 -> t -> unit
+end

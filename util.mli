@@ -75,18 +75,42 @@ end
 (* Returns an array containing the keys in the given Hashtbl.t *)
 val keys : ('a, 'b) Hashtbl.t -> 'a array
 
-module Vec2 : sig
-  type v2 = {
+module Vec : sig
+  type vec2 = {
     x : int ;
     y : int ;
   }
-  val mk_v2                   : int -> int -> v2
-  val v2_zero                 : v2
-  val v2_add                  : v2 -> v2 -> v2
-  val v2_sub                  : v2 -> v2 -> v2
-  (* Check if second v2 argument is inside the implicit rectangle woth topleft (0,0)
-   * and first v2 argument as bottomright corner. *)
-  val is_v2_inside            : v2 -> v2 -> bool
-  val is_v2_outside           : v2 -> v2 -> bool
-  val assert_v2_inside        : v2 -> v2 -> unit
+  val mk_v2                   : int -> int -> vec2
+  val v2_zero                 : vec2
+  val v2_add                  : vec2 -> vec2 -> vec2
+  val v2_sub                  : vec2 -> vec2 -> vec2
+  (* Check if second vec2 argument is inside the implicit rectangle woth topleft (0,0)
+   * and first vec2 argument as bottomright corner. *)
+  val is_v2_inside            : vec2 -> vec2 -> bool
+  val is_v2_outside           : vec2 -> vec2 -> bool
+  val assert_v2_inside        : vec2 -> vec2 -> unit
+end
+
+module Rec : sig
+  type rec2 = {
+    x0  : int ;
+    y0  : int ;
+    x1  : int ;
+    y1  : int ;
+    w   : int ;
+    h   : int ;
+  }
+  val mk_rect                 : int -> int -> int -> int -> rec2 (* TODO: use named parameters *)
+  val rect_size               : rec2 -> Vec.vec2
+  val rect_offset             : rec2 -> Vec.vec2
+  val rect_end                : rec2 -> Vec.vec2
+  val rect_x                  : rec2 -> int
+  val rect_y                  : rec2 -> int
+  val rect_x_end              : rec2 -> int
+  val rect_y_end              : rec2 -> int
+  val rect_w                  : rec2 -> int
+  val rect_h                  : rec2 -> int
+  val rect_mv                 : Vec.vec2 -> rec2 -> rec2
+  val rect_to_string          : rec2 -> string
+  val assert_rect_inside      : Vec.vec2 -> rec2 -> unit
 end

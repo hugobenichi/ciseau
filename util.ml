@@ -191,9 +191,9 @@ let keys tbl =
       Hashtbl.iter (fun k v -> Arrays.array_set keys !i k ; incr i) tbl ;
       keys
 
-module Vec2 = struct
+module Vec = struct
 
-  type v2 = {
+  type vec2 = {
     x : int ;
     y : int ;
   }
@@ -212,4 +212,45 @@ module Vec2 = struct
   let assert_v2_inside box_v2 v2 =
     if is_v2_outside box_v2 v2
       then fail (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y)
+end
+
+module Rec = struct
+
+  type rec2 = {
+    x0  : int ;
+    y0  : int ;
+    x1  : int ;
+    y1  : int ;
+    w   : int ;
+    h   : int ;
+  }
+
+  let mk_rect tl_x tl_y br_x br_y = {
+    x0  = tl_x ;
+    y0  = tl_y ;
+    x1  = br_x ;
+    y1  = br_y ;
+    w   = br_x - tl_x ;
+    h   = br_y - tl_y ;
+  }
+
+  let rect_size   { w ; h}      = Vec.mk_v2 w h
+  let rect_offset { x0 ; y0 }   = Vec.mk_v2 x0 y0
+  let rect_end    { x1 ; y1 }   = Vec.mk_v2 x1 y1
+  let rect_x      { x0 }        = x0
+  let rect_y      { y0 }        = y0
+  let rect_x_end  { x1 }        = x1
+  let rect_y_end  { y1 }        = y1
+  let rect_w      { w }         = w
+  let rect_h      { h }         = h
+
+  let rect_mv { Vec.x ; Vec.y } {x0 ; y0 ; x1 ; y1 } =
+    mk_rect (x + x0) (y + y0) (x + x1) (y + y1)
+
+  let assert_rect_inside bounds r =
+    r |> rect_offset  |> Vec.assert_v2_inside bounds ;
+    r |> rect_end     |> Vec.assert_v2_inside bounds
+
+  let rect_to_string { x0 ; y0 ; w ; h } =
+    Printf.sprintf "(%d,%d)x%dx%d" x0 y0 w h
 end

@@ -1,10 +1,12 @@
 open Util
 
+let kDRAW_SCREEN  = true
+
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 
 let terminal_dimensions () =
   let (term_rows, term_cols) = get_terminal_size () in
-  Vec2.mk_v2 term_cols term_rows
+  Vec.mk_v2 term_cols term_rows
 
 let stdout_write_string s =
   let l = slen s in
@@ -115,4 +117,220 @@ module Color = struct
     done
 
   let color_code_to_string = Arrays.array_get color_control_strings
+end
+
+module Framebuffer = struct
+  open Util.Arrays
+  open Util.Vec
+  open Util.Rec
+
+  let buffer = Buffer.create 4096
+
+  (* TODO: this should be platform specific *)
+  let newline = "\r\n"
+
+  module Default = struct
+    let fg_color_code    = Color.color_code Color.Foreground Color.White
+    let bg_color_code    = Color.color_code Color.Background (Color.Gray 2)
+    let z     = 0
+    let text  = ' '
+  end
+
+  type t = {
+    text                      : Bytes.t ;
+    line_lengths              : int array ;
+    fg_colors                 : int array ;
+    bg_colors                 : int array ;
+    z_index                   : int array ;
+    len                       : int ;
+    window                    : vec2 ;
+    mutable cursor            : vec2 ;
+  }
+
+  let init_framebuffer v2 =
+    let len = v2.x * v2.y
+    in {
+      text        = Bytes.make len Default.text ;
+      line_lengths = Array.make v2.x 0 ; (* CLEANUP: rename me *)
+      fg_colors   = Array.make len Default.fg_color_code ;
+      bg_colors   = Array.make len Default.bg_color_code ;
+      z_index     = Array.make len Default.z ;
+      len         = len ;
+      window      = v2 ;
+      cursor      = v2_zero ;
+    }
+
+  let default_fill_len    = 8192
+  let default_fg_colors   = Array.make default_fill_len Default.fg_color_code
+  let default_bg_colors   = Array.make default_fill_len Default.bg_color_code
+  let default_line_length = Array.make 256 0
+
+  let fill_fg_color t offset len color =
+    color
+      |> Color.color_code Color.Foreground
+      |> array_fill t.fg_colors offset len
+
+  let fill_bg_color t offset len color =
+    color
+      |> Color.color_code Color.Background
+      |> array_fill t.bg_colors offset len
+
+  let clear t =
+    let rec loop t offset remaining =
+      if remaining > 0 then (
+        let len = min remaining default_fill_len in
+        array_blit default_fg_colors 0 t.fg_colors offset len ;
+        array_blit default_bg_colors 0 t.bg_colors offset len ;
+        (* TODO: also clear z_index if I ever start using it *)
+        loop t (offset + len) (remaining - len)
+      )
+    in
+      loop t 0 t.len ;
+      Bytes.fill t.text 0 t.len Default.text ;
+      array_blit default_line_length 0 t.line_lengths 0 t.window.y
+
+  let clear_rect t rect =
+    assert_rect_inside t.window rect ;
+    let len = rect_w rect in
+    for y = (rect_y rect) to (rect_y_end rect) - 1 do
+      let offset = y * t.window.x + (rect_x rect) in
+      Bytes.fill t.text offset len Default.text ;
+      array_blit default_fg_colors 0 t.fg_colors offset len ;
+      array_blit default_bg_colors 0 t.bg_colors offset len ;
+    done
+
+  let clear_line t ~x:x ~y:y ~len:len =
+    assert_that (0 <= y) ;
+    assert_that (y < t.window.y) ;
+    let offset = y * t.window.x + x in
+    Bytes.fill t.text offset len Default.text ;
+    array_blit default_fg_colors 0 t.fg_colors offset len ;
+    array_blit default_bg_colors 0 t.bg_colors offset len
+
+  let render framebuffer =
+    (* Prep buffer *)
+    Buffer.clear buffer ;
+    (* Do not clear the screen with \027c as it causes flickering *)
+    Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
+    Buffer.add_string buffer "\027[H" ;       (* go home *)
+
+    (* Push lines one by one, one color segment at a time *)
+    let linestop = ref framebuffer.window.x in
+    let start = ref 0 in
+    let len = ref 0 in
+    let fg = ref 0 in
+    let bg = ref 0 in
+    while !start < framebuffer.len do
+      if !len = 0 then (
+        fg := array_get framebuffer.fg_colors !start ;
+        bg := array_get framebuffer.bg_colors !start
+      ) ;
+      incr len ;
+      let stop = !start + !len in
+      (* Push a color segment if: 1) end of line, 2) color switch *)
+      let should_draw_line =
+        if stop = framebuffer.len then (
+          (* End of last line, do no append new line, do not read colors *)
+          true
+        ) else if stop > !linestop then (
+          (* End of line, also put new line control characters for previous line *)
+          Buffer.add_string buffer newline ;
+          linestop += framebuffer.window.x ;
+          true
+        ) else
+          (* Otherwise, just check colors *)
+          !fg <> (array_get framebuffer.fg_colors stop) || !bg <> (array_get framebuffer.bg_colors stop)
+      in
+      if should_draw_line then (
+        Buffer.add_string buffer "\027[" ;
+        Buffer.add_string buffer (Color.color_code_to_string !fg) ;
+        Buffer.add_string buffer (Color.color_code_to_string !bg) ;
+        Buffer.add_subbytes buffer framebuffer.text !start !len ;
+        Buffer.add_string buffer "\027[0m" ;
+        start += !len ;
+        len := 0
+      )
+    done ;
+
+    (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
+    Buffer.add_string buffer "\027[" ;
+    Buffer.add_string buffer (string_of_int (framebuffer.cursor.y + 1)) ;
+    Buffer.add_string buffer ";" ;
+    Buffer.add_string buffer (string_of_int (framebuffer.cursor.x + 1)) ;
+    Buffer.add_string buffer "H" ;
+    Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
+
+    (* and finally, push to terminal *)
+    if kDRAW_SCREEN then (
+      Buffer.output_buffer stdout buffer ;
+      flush stdout
+    )
+
+  let update_line_end t x y =
+    if (array_get t.line_lengths y) < x then
+      array_set t.line_lengths y x
+
+  let to_offset window x y =
+    assert (x <= window.x) ;
+    assert (y <= window.y) ;
+    y * window.x + x
+
+  let put_color_rect t { Color.fg ; Color.bg } rect =
+    (* Clip rectangle vertically to framebuffer's window *)
+    let x_start = max 0 (rect_x rect) in
+    let y_start = max 0 (rect_y rect) in
+    let x_end   = min t.window.x (rect_x_end rect) in
+    let y_end   = min (t.window.y - 1) (rect_y_end rect) in
+    let len     = x_end - x_start in
+    for y = y_start to y_end do
+      let offset = to_offset t.window x_start y in
+      fill_fg_color t offset len fg ;
+      fill_bg_color t offset len bg ;
+      update_line_end t x_end y
+    done
+
+  let put_cursor t cursor =
+    assert_that (is_v2_inside t.window cursor) ;
+    t.cursor <- cursor
+
+  let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
+    let bytes_offset = to_offset framebuffer.window x y in
+    let blitlen = if len < 0 then slen s else len in
+    if not (x + blitlen <= framebuffer.window.x) then
+      fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
+    update_line_end framebuffer (x + blitlen) y ;
+    bytes_blit_string s offset framebuffer.text bytes_offset blitlen
+
+  (* TODO: eliminate this once remains of Overflow mdoe is gone and Fileview draws directly to a screen
+   * Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
+   * Copy cursor in 'dst' if 'copy_cursor' is true. *)
+  let put_framebuffer dst dst_rect src =
+    assert_rect_inside dst.window dst_rect ;
+    assert_that (src.window.y >= rect_h dst_rect) ;
+
+    let w_dst = rect_w dst_rect in
+    let x_dst = ref (rect_x dst_rect) in
+    let y_dst = ref (rect_y dst_rect) in
+
+    let x_src = ref 0 in
+    let y_src = ref 0 in
+    let x_src_stop = ref 0 in
+
+    while !y_dst < (rect_y_end dst_rect) do
+      let o_dst = to_offset dst.window !x_dst !y_dst in
+      let o_src = to_offset src.window !x_src !y_src in
+
+      if 0 = !x_src then
+        x_src_stop := array_get src.line_lengths !y_src ;
+
+      let len = w_dst in
+
+      bytes_blit src.text o_src dst.text o_dst len ;
+      array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
+      array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
+
+      incr y_dst;
+      incr y_src
+    done
+
 end

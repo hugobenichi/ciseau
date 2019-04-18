@@ -1,6 +1,7 @@
 open Util
 open Util.Arrays
-open Util.Vec2
+open Util.Vec
+open Util.Rec
 open Term
 open Navigation
 
@@ -10,53 +11,7 @@ let logs = open_out "/tmp/ciseau.log"
 
 (* Debugging flags *)
 let kLOG_STATS    = true
-let kDRAW_SCREEN  = true
 let kDEBUG        = false
-
-
-module Rect = struct
-
-  type rect = {
-    x0  : int ;
-    y0  : int ;
-    x1  : int ;
-    y1  : int ;
-    w   : int ;
-    h   : int ;
-  }
-
-  let mk_rect tl_x tl_y br_x br_y = {
-    x0  = tl_x ;
-    y0  = tl_y ;
-    x1  = br_x ;
-    y1  = br_y ;
-    w   = br_x - tl_x ;
-    h   = br_y - tl_y ;
-  }
-
-  let rect_size   { w ; h}      = mk_v2 w h
-  let rect_offset { x0 ; y0 }   = mk_v2 x0 y0
-  let rect_end    { x1 ; y1 }   = mk_v2 x1 y1
-  let rect_x      { x0 }        = x0
-  let rect_y      { y0 }        = y0
-  let rect_x_end  { x1 }        = x1
-  let rect_y_end  { y1 }        = y1
-  let rect_w      { w }         = w
-  let rect_h      { h }         = h
-
-  let rect_mv { x ; y } {x0 ; y0 ; x1 ; y1 } =
-    mk_rect (x + x0) (y + y0) (x + x1) (y + y1)
-
-  let assert_rect_inside bounds r =
-    r |> rect_offset  |> assert_v2_inside bounds ;
-    r |> rect_end     |> assert_v2_inside bounds
-
-  let rect_to_string { x0 ; y0 ; w ; h } =
-    Printf.sprintf "(%d,%d)x%dx%d" x0 y0 w h
-end
-
-
-open Rect
 
 
 (* this is a config module for storing all parameters *)
@@ -223,8 +178,8 @@ module Keys = struct
 
   type key =
       Key of char
-    | Click of v2           (* esc[M + mod + mouse position *)
-    | ClickRelease of v2    (* esc[M + mod + mouse position *)
+    | Click of vec2         (* esc[M + mod + mouse position *)
+    | ClickRelease of vec2  (* esc[M + mod + mouse position *)
     | Escape_Z              (* esc[Z: shift + tab *)
     | ArrowUp               (* esc[A *)
     | ArrowDown             (* esc[B *)
@@ -465,235 +420,6 @@ module ScreenConfiguration = struct
 end
 
 
-module Framebuffer : sig
-  type t
-
-  val init_framebuffer  : v2 -> t
-  val clear             : t -> unit
-  val clear_rect        : t -> rect -> unit
-  val clear_line        : t -> x:int -> y:int -> len:int -> unit
-  val render            : t -> unit
-  val put_color_rect    : t -> Color.color_cell -> rect -> unit
-  (* TODO: add a put_color_segment function *)
-  val put_cursor        : t -> v2 -> unit
-  val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
-  val put_framebuffer   : t -> rect -> t -> unit
-
-end = struct
-
-  let buffer = Buffer.create 4096
-
-  (* TODO: this should be platform specific *)
-  let newline = "\r\n"
-
-  module Default = struct
-    let fg_color_code    = Color.color_code Color.Foreground Color.White
-    let bg_color_code    = Color.color_code Color.Background (Color.Gray 2)
-    let z     = 0
-    let text  = ' '
-  end
-
-  type t = {
-    text        : Bytes.t ;
-    line_lengths : int array ;
-    fg_colors   : int array ;
-    bg_colors   : int array ;
-    z_index     : int array ;
-    len         : int ;
-    window      : v2 ;
-
-    mutable cursor : v2 ;
-  }
-
-  let init_framebuffer vec2 =
-    let len = vec2.x * vec2.y
-    in {
-      text        = Bytes.make len Default.text ;
-      line_lengths = Array.make vec2.x 0 ; (* CLEANUP: rename me *)
-      fg_colors   = Array.make len Default.fg_color_code ;
-      bg_colors   = Array.make len Default.bg_color_code ;
-      z_index     = Array.make len Default.z ;
-      len         = len ;
-      window      = vec2 ;
-      cursor      = v2_zero ;
-    }
-
-  let default_fill_len    = 8192
-  let default_fg_colors   = Array.make default_fill_len Default.fg_color_code
-  let default_bg_colors   = Array.make default_fill_len Default.bg_color_code
-  let default_line_length = Array.make 256 0
-
-  let fill_fg_color t offset len color =
-    color
-      |> Color.color_code Color.Foreground
-      |> array_fill t.fg_colors offset len
-
-  let fill_bg_color t offset len color =
-    color
-      |> Color.color_code Color.Background
-      |> array_fill t.bg_colors offset len
-
-  let clear t =
-    let rec loop t offset remaining =
-      if remaining > 0 then (
-        let len = min remaining default_fill_len in
-        array_blit default_fg_colors 0 t.fg_colors offset len ;
-        array_blit default_bg_colors 0 t.bg_colors offset len ;
-        (* TODO: also clear z_index if I ever start using it *)
-        loop t (offset + len) (remaining - len)
-      )
-    in
-      loop t 0 t.len ;
-      Bytes.fill t.text 0 t.len Default.text ;
-      array_blit default_line_length 0 t.line_lengths 0 t.window.y
-
-  let clear_rect t rect =
-    assert_rect_inside t.window rect ;
-    let len = rect_w rect in
-    for y = (rect_y rect) to (rect_y_end rect) - 1 do
-      let offset = y * t.window.x + (rect_x rect) in
-      Bytes.fill t.text offset len Default.text ;
-      array_blit default_fg_colors 0 t.fg_colors offset len ;
-      array_blit default_bg_colors 0 t.bg_colors offset len ;
-    done
-
-  let clear_line t ~x:x ~y:y ~len:len =
-    assert_that (0 <= y) ;
-    assert_that (y < t.window.y) ;
-    let offset = y * t.window.x + x in
-    Bytes.fill t.text offset len Default.text ;
-    array_blit default_fg_colors 0 t.fg_colors offset len ;
-    array_blit default_bg_colors 0 t.bg_colors offset len
-
-  let render framebuffer =
-    (* Prep buffer *)
-    Buffer.clear buffer ;
-    (* Do not clear the screen with \027c as it causes flickering *)
-    Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
-    Buffer.add_string buffer "\027[H" ;       (* go home *)
-
-    (* Push lines one by one, one color segment at a time *)
-    let linestop = ref framebuffer.window.x in
-    let start = ref 0 in
-    let len = ref 0 in
-    let fg = ref 0 in
-    let bg = ref 0 in
-    while !start < framebuffer.len do
-      if !len = 0 then (
-        fg := array_get framebuffer.fg_colors !start ;
-        bg := array_get framebuffer.bg_colors !start
-      ) ;
-      incr len ;
-      let stop = !start + !len in
-      (* Push a color segment if: 1) end of line, 2) color switch *)
-      let should_draw_line =
-        if stop = framebuffer.len then (
-          (* End of last line, do no append new line, do not read colors *)
-          true
-        ) else if stop > !linestop then (
-          (* End of line, also put new line control characters for previous line *)
-          Buffer.add_string buffer newline ;
-          linestop += framebuffer.window.x ;
-          true
-        ) else
-          (* Otherwise, just check colors *)
-          !fg <> (array_get framebuffer.fg_colors stop) || !bg <> (array_get framebuffer.bg_colors stop)
-      in
-      if should_draw_line then (
-        Buffer.add_string buffer "\027[" ;
-        Buffer.add_string buffer (Color.color_code_to_string !fg) ;
-        Buffer.add_string buffer (Color.color_code_to_string !bg) ;
-        Buffer.add_subbytes buffer framebuffer.text !start !len ;
-        Buffer.add_string buffer "\027[0m" ;
-        start += !len ;
-        len := 0
-      )
-    done ;
-
-    (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
-    Buffer.add_string buffer "\027[" ;
-    Buffer.add_string buffer (string_of_int (framebuffer.cursor.y + 1)) ;
-    Buffer.add_string buffer ";" ;
-    Buffer.add_string buffer (string_of_int (framebuffer.cursor.x + 1)) ;
-    Buffer.add_string buffer "H" ;
-    Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
-
-    (* and finally, push to terminal *)
-    if kDRAW_SCREEN then (
-      Buffer.output_buffer stdout buffer ;
-      flush stdout
-    )
-
-  let update_line_end t x y =
-    if (array_get t.line_lengths y) < x then
-      array_set t.line_lengths y x
-
-  let to_offset window x y =
-    assert (x <= window.x) ;
-    assert (y <= window.y) ;
-    y * window.x + x
-
-  let put_color_rect t { Color.fg ; Color.bg } rect =
-    (* Clip rectangle vertically to framebuffer's window *)
-    let x_start = max 0 (rect_x rect) in
-    let y_start = max 0 (rect_y rect) in
-    let x_end   = min t.window.x (rect_x_end rect) in
-    let y_end   = min (t.window.y - 1) (rect_y_end rect) in
-    let len     = x_end - x_start in
-    for y = y_start to y_end do
-      let offset = to_offset t.window x_start y in
-      fill_fg_color t offset len fg ;
-      fill_bg_color t offset len bg ;
-      update_line_end t x_end y
-    done
-
-  let put_cursor t cursor =
-    assert_that (is_v2_inside t.window cursor) ;
-    t.cursor <- cursor
-
-  let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
-    let bytes_offset = to_offset framebuffer.window x y in
-    let blitlen = if len < 0 then slen s else len in
-    if not (x + blitlen <= framebuffer.window.x) then
-      fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
-    update_line_end framebuffer (x + blitlen) y ;
-    bytes_blit_string s offset framebuffer.text bytes_offset blitlen
-
-  (* TODO: eliminate this once remains of Overflow mdoe is gone and Fileview draws directly to a screen
-   * Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
-   * Copy cursor in 'dst' if 'copy_cursor' is true. *)
-  let put_framebuffer dst dst_rect src =
-    assert_rect_inside dst.window dst_rect ;
-    assert_that (src.window.y >= rect_h dst_rect) ;
-
-    let w_dst = rect_w dst_rect in
-    let x_dst = ref (rect_x dst_rect) in
-    let y_dst = ref (rect_y dst_rect) in
-
-    let x_src = ref 0 in
-    let y_src = ref 0 in
-    let x_src_stop = ref 0 in
-
-    while !y_dst < (rect_y_end dst_rect) do
-      let o_dst = to_offset dst.window !x_dst !y_dst in
-      let o_src = to_offset src.window !x_src !y_src in
-
-      if 0 = !x_src then
-        x_src_stop := array_get src.line_lengths !y_src ;
-
-      let len = w_dst in
-
-      bytes_blit src.text o_src dst.text o_dst len ;
-      array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
-      array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
-
-      incr y_dst;
-      incr y_src
-    done
-
-end
-
-
 (* A common buffer for filling Fileview content just before bliting into a backend rendering framebuffer *)
 (* TODO: Not threadsafe !! find better place to put that *)
 let fb = ref (Framebuffer.init_framebuffer (mk_v2 300 80))
@@ -703,24 +429,24 @@ let fb = ref (Framebuffer.init_framebuffer (mk_v2 300 80))
 module Screen : sig
   type t
 
-  val screen_size       : t -> v2
-  val screen_window     : t -> rect
-  val screen_offset     : t -> v2
+  val screen_size       : t -> vec2
+  val screen_window     : t -> rec2
+  val screen_offset     : t -> vec2
   val screen_width      : t -> int
   val screen_height     : t -> int
   val clear             : t -> unit
-  val mk_screen         : Framebuffer.t -> rect -> t
-  val mk_subscreen      : t -> rect -> t
-  val put_color_rect    : t -> Color.color_cell -> rect -> unit
+  val mk_screen         : Framebuffer.t -> rec2 -> t
+  val mk_subscreen      : t -> rec2 -> t
+  val put_color_rect    : t -> Color.color_cell -> rec2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
-  val put_cursor        : t -> v2 -> unit
+  val put_cursor        : t -> vec2 -> unit
   val put_framebuffer   : t -> Framebuffer.t -> unit
 
 end = struct
 
   type t = {
-    size            : v2 ;
-    window          : rect ;
+    size            : vec2 ;
+    window          : rec2 ;
     frame_buffer    : Framebuffer.t ;
   }
 
@@ -804,7 +530,7 @@ module Cursor : sig
   val x               : t -> int        (* current column index *)
   val y               : t -> int        (* current line index *)
   val xmem            : t -> int
-  val pos             : t -> v2         (* current column and line indexes as a vec *)
+  val pos             : t -> vec2       (* current column and line indexes as a vec *)
   val save            : t -> t
   val goto            : ?x:int -> ?y:int -> t -> unit
   val xmem_set        : t -> int -> unit
@@ -1002,8 +728,8 @@ module Filebuffer : sig
   val header              : t -> string
   val filename            : t -> string
   val file_length         : t -> int
-  val search              : t -> string -> rect array
-  val cursor              : t -> v2 -> Cursor.t
+  val search              : t -> string -> rec2 array
+  val cursor              : t -> vec2 -> Cursor.t
 
   (* TODO: migrate fill_framebuffer to text cursor and eliminate these two *)
   val line_at             : t -> int -> string
@@ -1270,7 +996,7 @@ end
 module MovementContext = struct
   type t = {
     (* TODO: a selected area cannot be a rect all the time when it covers multiple lines *)
-    selection : rect array ;
+    selection : rec2 array ;
   }
 end
 
@@ -1690,15 +1416,15 @@ module Fileview : sig
 (* FIXME: remove the v2 for viewport rectangle size used for recomputing the adjusted view rectangle around the cursor
  * Instead, remember in the fileview the view offset of the previous fileview draw and recompute the new view offset when drawing
  * Benefit: this removes the extra argument in apply_movement and will facilitate the refactoring afterwards *)
-  val apply_movement          : Movement.movement -> v2 -> t -> t
+  val apply_movement          : Movement.movement -> vec2 -> t -> t
   val cursor                  : t -> Cursor.t
-  val adjust_view             : v2 -> t -> t
+  val adjust_view             : vec2 -> t -> t
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
   val toggle_show_token       : t -> t
   val toggle_show_neighbor    : t -> t
   val toggle_show_selection   : t -> t
-  val recenter_view           : v2 -> t -> t
+  val recenter_view           : vec2 -> t -> t
   val draw                    : t -> Screen.t -> redraw_level -> bool -> unit
 
 end = struct
@@ -1732,8 +1458,8 @@ end = struct
 
   type t = {
     filebuffer        : filebuffer ;
-    cursor            : Cursor.t ;       (* current position in file space: x = column index, y = row index *)
-    view              : v2 ;       (* x,y offset of the rectangle view into the text *)
+    cursor            : Cursor.t ;        (* current position in file space: x = column index, y = row index *)
+    view              : vec2 ;            (* x,y offset of the rectangle view into the text *)
     numbering         : numbering_mode ;
     mov_mode          : Movement.mode ;
     show_token        : bool ;
@@ -2139,8 +1865,8 @@ end
 
 module Tileset = struct
 
-  type op = Resize of rect
-          | FileviewOp of (v2 -> Fileview.t -> Fileview.t)
+  type op = Resize of rec2
+          | FileviewOp of (vec2 -> Fileview.t -> Fileview.t)
           | RotateViewsLeft
           | RotateViewsRight
           | ScreenLayoutCycleNext
@@ -2150,12 +1876,12 @@ module Tileset = struct
           | FocusPrev
           | FocusMain
           | BringFocusToMain
-          | Selection of v2
+          | Selection of vec2
 
   type t = {
-    screen_size   : rect ;
+    screen_size   : rec2 ;
     screen_config : ScreenConfiguration.t ;
-    screen_tiles  : rect array ;
+    screen_tiles  : rec2 array ;
     focus_index   : int ;
     fileviews     : Fileview.t array ;
     redrawing     : redraw_level array ;
@@ -2399,7 +2125,7 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
-    term_dim        : v2 ;
+    term_dim        : vec2 ;
     term_dim_descr  : string ;
     frame_buffer    : Framebuffer.t ;
     running         : bool ;
