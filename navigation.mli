@@ -32,3 +32,5 @@ module Navigator : sig
   val mk_range                : file_index -> Suffixarray.range
   val file_index_stats        : file_index -> stats
 end
+
+val navigation_test           : unit -> unit

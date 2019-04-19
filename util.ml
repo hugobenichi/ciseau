@@ -28,6 +28,7 @@ let is_alphanum   chr         = (is_digit chr) || (is_letter chr)
 let is_printable  chr         = (' ' <= chr) && (chr <= '~')
 let output_int    f           = string_of_int >> output_string f
 let output_float  f           = string_of_float >> output_string f
+let print_stringln s          = print_string s ; print_newline ()
 let string_of_char c          = String.make 1 c
 let joiner fold sep fn        = fold (fun a x -> a ^ sep ^ (fn x)) ""
 let list_to_string fn         = joiner List.fold_left " :: " fn

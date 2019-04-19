@@ -2470,43 +2470,6 @@ module Ciseau = struct
             Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
             Printexc.print_backtrace stdout
 
-  let print_entries entries =
-    for i = 0 to astop entries do
-      print_string entries.(i) ;
-      print_newline ()
-    done
-
-  let main2 () =
-    let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
-    let filter anydir item = item <> ".git" in
-    print_string base_path ; print_newline () ;
-    let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter base_path in
-    print_entries (Navigator.index_to_entries file_index) ;
-    print_newline () ;
-(*
-*)
-    Navigator.mk_range file_index
-      (*
-      |> Suffixarray.refine_range  "cer"
-      *)
-      |> Suffixarray.range_to_array
-      |> ignore ;
-      (*
-      |> print_entries ;
-      *)
-    let {
-      Navigator.total_entries         ;
-      Navigator.total_tokens          ;
-      Navigator.total_entries_length  ;
-      Navigator.total_tokens_length   ;
-    } = Navigator.file_index_stats file_index in
-    Printf.printf
-      "total_entries=%d total_tokens=%d total_entries_length=%d total_tokens_length=%d\n"
-      total_entries
-      total_tokens
-      total_entries_length
-      total_tokens_length
-
 end
 
 
@@ -2568,8 +2531,9 @@ let () =
   Sys.set_signal sigwinch_code (Sys.Signal_handle handler) ;
   (*
   Fuzzer.main 5000 ;
-   *)
   Ciseau.main () ;
+   *)
+  navigation_test () ;
   close_out logs
 
 

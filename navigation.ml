@@ -257,3 +257,31 @@ module Navigator = struct
     total_tokens_length   = Hashtbl.fold string_byte_adder2 token_map 0 ;
   }
 end
+
+let print_entries = Array.iter print_stringln
+
+let navigation_test () =
+  let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
+  let filter anydir item = item <> ".git" in
+  print_string base_path ; print_newline () ;
+  let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter base_path in
+  print_entries (Navigator.index_to_entries file_index) ;
+  print_newline () ;
+  Navigator.mk_range file_index
+    |> Suffixarray.range_to_array
+    |> ignore ;
+    (*
+    |> print_entries ;
+    *)
+  let {
+    Navigator.total_entries         ;
+    Navigator.total_tokens          ;
+    Navigator.total_entries_length  ;
+    Navigator.total_tokens_length   ;
+  } = Navigator.file_index_stats file_index in
+  Printf.printf
+    "total_entries=%d total_tokens=%d total_entries_length=%d total_tokens_length=%d\n"
+    total_entries
+    total_tokens
+    total_entries_length
+    total_tokens_length
