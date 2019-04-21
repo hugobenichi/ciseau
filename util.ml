@@ -176,9 +176,6 @@ module Arraybuffer = struct
       b.data <- grow_array b.zero b.data ;
     Arrays.array_set b.data b.next e ;
     b.next <- b.next + 1
-
-  let append_and_then b e =
-    append b e ; b
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)

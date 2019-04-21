@@ -27,10 +27,10 @@ val is_printable              : char -> bool
 (* print utilities *)
 val output_int                : out_channel -> int -> unit
 val output_float              : out_channel -> float -> unit
+val print_stringln            : string -> unit
 val string_of_char            : char -> string
 val list_to_string            : ('a -> string) -> 'a list -> string
 val array_to_string           : ('a -> string) -> 'a array -> string
-val print_stringln            : string -> unit
 
 (* Convenient aliases *)
 val alen                      : 'a array -> int
@@ -72,7 +72,6 @@ module Arraybuffer : sig
   val reserve         : int -> 'a -> 'a t
   val to_array        : 'a t -> 'a array
   val append          : 'a t -> 'a -> unit
-  val append_and_then : 'a t -> 'a -> 'a t
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)

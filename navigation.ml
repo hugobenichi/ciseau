@@ -186,34 +186,36 @@ module Navigator = struct
     total_tokens_length   : int ;
   }
 
-  let readdir path fn x =
-    let rec loop dir_handle fn acc =
+  let readdir_foreach path fn =
+    let rec loop dir_handle fn =
       match Unix.readdir dir_handle with
-        | y                     -> loop dir_handle fn (fn acc y)
-        | exception End_of_file -> Unix.closedir dir_handle ; acc
+        | y                     -> (fn y) ; loop dir_handle fn
+        | exception End_of_file -> Unix.closedir dir_handle
     in
     match Unix.opendir path with
-      | dir_handle -> loop dir_handle fn x
-      | exception Unix.Unix_error (Unix.EACCES, _, _)   -> x
-      | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> x
-      | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> x
+      | dir_handle -> loop dir_handle fn
+      | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
+      | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
+      | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
   (* TODO: should directories be handled separately ? should they be included at all ? *)
-  let rec read_dir_rec_list path_buffer filter =
-    function
-      | [] -> ()
-      | path :: visit_list ->
-          let fn ls item = 
-            (* TODO: Move filter one layer up ? *)
-            if  item <> "." && item <> ".." && filter path item
-              then (
-                let new_entry = path ^ "/" ^ item in
-                Arraybuffer.append path_buffer new_entry ;
-                new_entry :: ls
-              )
-              else ls
-          in
-          readdir path fn visit_list |> read_dir_rec_list path_buffer filter
+  let rec readdir_recursive parallel path_buffer filter visit_queue =
+    let fn path item =
+      if  item <> "." && item <> ".." && filter path item
+        then (
+          let new_entry = path ^ "/" ^ item in
+          Arraybuffer.append path_buffer new_entry ;
+          Queue.push new_entry visit_queue
+        )
+    in
+    if not (Queue.is_empty visit_queue) then
+      let path = Queue.pop visit_queue in
+      readdir_foreach path (fn path) ;
+      (* TODO: find the right compiler flags to use this ...
+      if parallel > 0 then
+        Thread.create (readdir_recursive 0 path_buffer filter) visit_queue ;
+      *)
+      readdir_recursive (parallel - 1) path_buffer filter visit_queue
 
   let nofilter anydir anyname = true
 
@@ -227,9 +229,12 @@ module Navigator = struct
   let mk_file_index ?recursive:(recur=false) ?filter:(filter=nofilter) path =
     let path_buffer = Arraybuffer.empty "?" in
     if recur
-      then read_dir_rec_list path_buffer filter [path]
+      then
+        let queue = Queue.create () in
+        Queue.push path queue ;
+        readdir_recursive path_buffer filter queue
       (* TODO: cleanup that second branch *)
-      else readdir path Arraybuffer.append_and_then path_buffer |> ignore ;
+      else readdir_foreach path (Arraybuffer.append path_buffer) ;
     let entries = Arraybuffer.to_array path_buffer in
     Array.sort String.compare entries ;
     let token_map = Hashtbl.create 128 in
