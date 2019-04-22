@@ -158,6 +158,8 @@ module Suffixarray = struct
 end
 
 
+  let time_counter = ref 0.0
+
 module Navigator = struct
   (* Note on different interface into range search:
    *  - Takes 5 seconds to index Linux, 99% of it is file system exploration
@@ -188,8 +190,9 @@ module Navigator = struct
 
   let readdir_foreach path fn =
     let rec loop dir_handle fn =
+      let t1 = Sys.time () in
       match Unix.readdir dir_handle with
-        | y                     -> (fn y) ; loop dir_handle fn
+        | y                     -> (fn y) ; time_counter -=. t1 ; time_counter +=. Sys.time () ; loop dir_handle fn
         | exception End_of_file -> Unix.closedir dir_handle
     in
     match Unix.opendir path with
@@ -282,6 +285,8 @@ let navigation_test () =
     (*
     |> print_entries ;
     *)
+    print_float !time_counter ;
+  print_newline () ;
   let {
     Navigator.total_entries         ;
     Navigator.total_tokens          ;

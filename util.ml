@@ -6,6 +6,8 @@ let (>>) f g x    = g (f x)
 
 let (+=) r x = (r := !r + x)
 let (-=) r x = (r := !r - x)
+let (+=.) r x = (r := !r +. x)
+let (-=.) r x = (r := !r -. x)
 
 module Error = struct
 

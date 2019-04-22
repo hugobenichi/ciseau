@@ -10,8 +10,12 @@ val (>>)                      : ('a -> 'b) -> ('b -> 'c) -> 'a -> 'c
 val psi                       : ('b -> 'b -> 'c) -> ('a -> 'b) -> 'a -> 'a -> 'c
 
 (* Int ref increment/decrement *)
-val (+=) : int ref -> int -> unit
-val (-=) : int ref -> int -> unit
+val (+=)                      : int ref -> int -> unit
+val (-=)                      : int ref -> int -> unit
+
+(* Float ref increment/decrement *)
+val (+=.)                     : float ref -> float -> unit
+val (-=.)                     : float ref -> float -> unit
 
 (* Errors and asserts utililities *)
 val fail                      : string -> 'a
