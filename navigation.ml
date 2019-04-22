@@ -199,7 +199,7 @@ module Navigator = struct
       | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
   (* TODO: should directories be handled separately ? should they be included at all ? *)
-  let rec readdir_recursive parallel path_buffer filter visit_queue =
+  let rec readdir_recursive ?parallel:(n_thread=0) path_buffer filter visit_queue =
     let fn path item =
       if  item <> "." && item <> ".." && filter path item
         then (
@@ -211,11 +211,13 @@ module Navigator = struct
     if not (Queue.is_empty visit_queue) then
       let path = Queue.pop visit_queue in
       readdir_foreach path (fn path) ;
-      (* TODO: find the right compiler flags to use this ...
-      if parallel > 0 then
-        Thread.create (readdir_recursive 0 path_buffer filter) visit_queue ;
-      *)
-      readdir_recursive (parallel - 1) path_buffer filter visit_queue
+      if Queue.length visit_queue > 20 && n_thread > 0 then (
+        let t1 = Thread.create (readdir_recursive ~parallel:(n_thread - 2) path_buffer filter) visit_queue in
+        let t2 = Thread.create (readdir_recursive ~parallel:(n_thread - 2) path_buffer filter) visit_queue in
+        Thread.join t1 ;
+        Thread.join t2
+      ) ;
+      readdir_recursive ~parallel:(n_thread - 1) path_buffer filter visit_queue
 
   let nofilter anydir anyname = true
 
@@ -232,7 +234,7 @@ module Navigator = struct
       then
         let queue = Queue.create () in
         Queue.push path queue ;
-        readdir_recursive path_buffer filter queue
+        readdir_recursive ~parallel:4 path_buffer filter queue
       (* TODO: cleanup that second branch *)
       else readdir_foreach path (Arraybuffer.append path_buffer) ;
     let entries = Arraybuffer.to_array path_buffer in
@@ -270,8 +272,10 @@ let navigation_test () =
   let filter anydir item = item <> ".git" in
   print_string base_path ; print_newline () ;
   let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter base_path in
+  (*
   print_entries (Navigator.index_to_entries file_index) ;
   print_newline () ;
+  *)
   Navigator.mk_range file_index
     |> Suffixarray.range_to_array
     |> ignore ;

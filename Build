@@ -27,7 +27,7 @@ function ciseau_compile {
   # Build ocaml
   # How to order files correctly ?
   #ocamlopt -p -g -inline 0 str.cmxa unix.cmxa -o *.mli *.ml *.o
-  ocamlopt -p -g -inline 0 str.cmxa unix.cmxa -o $CISEAU_OUT ioctl.o util.ml{i,} term.ml{i,} navigation.ml{i,} ciseau.ml
+  ocamlopt -I +threads -p -g -inline 0 str.cmxa unix.cmxa threads.cmxa -o $CISEAU_OUT ioctl.o util.ml{i,} term.ml{i,} navigation.ml{i,} ciseau.ml
 
   cd ..
 }
