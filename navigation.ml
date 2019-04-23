@@ -158,7 +158,10 @@ module Suffixarray = struct
 end
 
 
-  let time_counter = ref 0.0
+let readdir_time = ref 0.0
+let opendir_time = ref 0.0
+let append_time = ref 0.0
+let index_time = ref 0.0
 
 module Navigator = struct
   (* Note on different interface into range search:
@@ -192,11 +195,12 @@ module Navigator = struct
     let rec loop dir_handle fn =
       let t1 = Sys.time () in
       match Unix.readdir dir_handle with
-        | y                     -> (fn y) ; time_counter -=. t1 ; time_counter +=. Sys.time () ; loop dir_handle fn
+        | y                     -> (fn y) ; readdir_time -=. t1 ; readdir_time +=. Sys.time () ; loop dir_handle fn
         | exception End_of_file -> Unix.closedir dir_handle
     in
+    let f1 = Sys.time () in
     match Unix.opendir path with
-      | dir_handle -> loop dir_handle fn
+      | dir_handle -> (opendir_time +=. ((Sys.time ()) -. f1) ; loop dir_handle fn)
       | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
       | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
       | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
@@ -206,9 +210,11 @@ module Navigator = struct
     let fn path item =
       if  item <> "." && item <> ".." && filter path item
         then (
+        let a1 = Sys.time () in
           let new_entry = path ^ "/" ^ item in
           Arraybuffer.append path_buffer new_entry ;
-          Queue.push new_entry visit_queue
+          Queue.push new_entry visit_queue ;
+          append_time +=. ((Sys.time ()) -. a1)
         )
     in
     if not (Queue.is_empty visit_queue) then
@@ -237,9 +243,10 @@ module Navigator = struct
       then
         let queue = Queue.create () in
         Queue.push path queue ;
-        readdir_recursive ~parallel:4 path_buffer filter queue
+        readdir_recursive ~parallel:0 path_buffer filter queue
       (* TODO: cleanup that second branch *)
       else readdir_foreach path (Arraybuffer.append path_buffer) ;
+let d1 = Sys.time () in
     let entries = Arraybuffer.to_array path_buffer in
     Array.sort String.compare entries ;
     let token_map = Hashtbl.create 128 in
@@ -249,6 +256,7 @@ module Navigator = struct
            |> List.iter (token_index_insert token_map path)
     done ;
     let token_index = Suffixarray.mk_suffixarray (keys token_map) token_map in
+index_time +=. ((Sys.time ()) -. d1) ;
     { entries ; token_map ; token_index }
 
   let index_to_entries { entries } = entries
@@ -271,6 +279,7 @@ end
 let print_entries = Array.iter print_stringln
 
 let navigation_test () =
+let gc_stat = Gc.quick_stat () in
   let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
   let filter anydir item = item <> ".git" in
   print_string base_path ; print_newline () ;
@@ -285,8 +294,18 @@ let navigation_test () =
     (*
     |> print_entries ;
     *)
-    print_float !time_counter ;
+  print_float !readdir_time ;
   print_newline () ;
+  print_float !opendir_time ;
+  print_newline () ;
+  print_float !append_time ;
+  print_newline () ;
+  print_float !index_time ;
+  print_newline () ;
+let gc_stat2 = Gc.quick_stat () in
+Printf.printf "minor_col:%d major_col:%d\n"
+  (gc_stat2.minor_collections - gc_stat.minor_collections)
+  (gc_stat2.major_collections - gc_stat.major_collections) ;
   let {
     Navigator.total_entries         ;
     Navigator.total_tokens          ;
