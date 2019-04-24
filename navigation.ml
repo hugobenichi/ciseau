@@ -158,10 +158,7 @@ module Suffixarray = struct
 end
 
 
-let readdir_time = ref 0.0
-let opendir_time = ref 0.0
-let append_time = ref 0.0
-let index_time = ref 0.0
+  let insert_time = ref 0.0
 
 module Navigator = struct
   (* Note on different interface into range search:
@@ -191,72 +188,114 @@ module Navigator = struct
     total_tokens_length   : int ;
   }
 
+  type readdir_rec_state = {
+    path_buffer   : string Arraybuffer.t ;
+    visit_queue   : string Queue.t ;
+    token_map     : (string, string list) Hashtbl.t ;
+    filter        : string -> string -> bool ;
+    buffer        : Buffer.t ;
+  }
+
+  let mk_readdir_rec_state path filter =
+    let path_buffer = Arraybuffer.empty "?" in
+    let visit_queue = Queue.create () in
+    let token_map = Hashtbl.create 128 in
+    let buffer = Buffer.create 1024 in
+    Queue.push path visit_queue ;
+    { path_buffer ; visit_queue ; token_map ; filter ; buffer }
+
   let readdir_foreach path fn =
     let rec loop dir_handle fn =
-      let t1 = Sys.time () in
       match Unix.readdir dir_handle with
-        | y                     -> (fn y) ; readdir_time -=. t1 ; readdir_time +=. Sys.time () ; loop dir_handle fn
+        | y                     -> (fn y) ; loop dir_handle fn
         | exception End_of_file -> Unix.closedir dir_handle
     in
-    let f1 = Sys.time () in
     match Unix.opendir path with
-      | dir_handle -> (opendir_time +=. ((Sys.time ()) -. f1) ; loop dir_handle fn)
+      | dir_handle -> loop dir_handle fn
       | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
       | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
       | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
   (* TODO: should directories be handled separately ? should they be included at all ? *)
-  let rec readdir_recursive ?parallel:(n_thread=0) path_buffer filter visit_queue =
+  let readdir_recursive { path_buffer ; visit_queue ; token_map ; filter } =
     let fn path item =
       if  item <> "." && item <> ".." && filter path item
         then (
-        let a1 = Sys.time () in
           let new_entry = path ^ "/" ^ item in
           Arraybuffer.append path_buffer new_entry ;
           Queue.push new_entry visit_queue ;
-          append_time +=. ((Sys.time ()) -. a1)
         )
     in
-    if not (Queue.is_empty visit_queue) then
+    while not (Queue.is_empty visit_queue) do
       let path = Queue.pop visit_queue in
       readdir_foreach path (fn path) ;
-      if Queue.length visit_queue > 20 && n_thread > 0 then (
-        let t1 = Thread.create (readdir_recursive ~parallel:(n_thread - 2) path_buffer filter) visit_queue in
-        let t2 = Thread.create (readdir_recursive ~parallel:(n_thread - 2) path_buffer filter) visit_queue in
-        Thread.join t1 ;
-        Thread.join t2
-      ) ;
-      readdir_recursive ~parallel:(n_thread - 1) path_buffer filter visit_queue
+    done
 
   let nofilter anydir anyname = true
 
   let token_index_insert tbl path token =
-    if slen token > 0 then
+    if slen token > 0 then (
+      insert_time -=. Sys.time () ;
       Hashtbl.find_opt tbl token
         |> Options.get_or []
-        |> List.cons token
-        |> Hashtbl.replace tbl token
+        |> List.cons path
+        |> Hashtbl.replace tbl token ;
+      insert_time +=. Sys.time ()
+    )
+
+  let rec readdir_recursive2 state tokens path =
+    match Unix.opendir path with
+      | dir ->
+        (try
+          let buffer_n = Buffer.length state.buffer in
+          while true do
+            let item = Unix.readdir dir in
+            if  item <> "." && item <> ".." && state.filter path item then (
+              Buffer.add_char state.buffer '/' ;
+              Buffer.add_string state.buffer item ;
+              let new_path = Buffer.contents state.buffer in
+              Arraybuffer.append state.path_buffer new_path ;
+              let tokens' = item :: tokens in
+              (* Instead of using a hashtbl here, I can change the list of token
+               * into a list of tuple (token, string list ref) and directly index paths
+               * by all their tokens with that.
+               *)
+              (* otherwise I can create the token -> path list mapping better and more
+               * cheaply ? *)
+              List.iter (token_index_insert state.token_map new_path) tokens' ;
+              readdir_recursive2 state tokens' new_path ;
+              Buffer.truncate state.buffer buffer_n
+            )
+          done
+        with End_of_file -> Unix.closedir dir)
+      | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
+      | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
+      | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
   let mk_file_index ?recursive:(recur=false) ?filter:(filter=nofilter) path =
-    let path_buffer = Arraybuffer.empty "?" in
+    let t1 = Sys.time () in
+    let state = mk_readdir_rec_state path filter in
     if recur
-      then
-        let queue = Queue.create () in
-        Queue.push path queue ;
-        readdir_recursive ~parallel:0 path_buffer filter queue
-      (* TODO: cleanup that second branch *)
-      else readdir_foreach path (Arraybuffer.append path_buffer) ;
-let d1 = Sys.time () in
-    let entries = Arraybuffer.to_array path_buffer in
+      then (Buffer.add_string state.buffer path ; readdir_recursive2 state [] path )
+      (*
+      then readdir_recursive state
+      *)
+      (* TODO: eliminate second branch by putting recurence flag in readdir_rec_state *)
+      else readdir_foreach path (Arraybuffer.append state.path_buffer) ;
+    Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
+    let entries = Arraybuffer.to_array state.path_buffer in
     Array.sort String.compare entries ;
-    let token_map = Hashtbl.create 128 in
+    Printf.printf "sort done: %f\n" ((Sys.time ()) -. t1) ;
+    let token_map = state.token_map in
+    (*
     for i = 0 to astop entries do
       let path = array_get entries i in
       path |> String.split_on_char '/'
            |> List.iter (token_index_insert token_map path)
     done ;
+    *)
     let token_index = Suffixarray.mk_suffixarray (keys token_map) token_map in
-index_time +=. ((Sys.time ()) -. d1) ;
+    Printf.printf "index done: %f\n" ((Sys.time ()) -. t1) ;
     { entries ; token_map ; token_index }
 
   let index_to_entries { entries } = entries
@@ -274,12 +313,39 @@ index_time +=. ((Sys.time ()) -. d1) ;
     total_entries_length  = Array.fold_left string_byte_adder 0 entries ;
     total_tokens_length   = Hashtbl.fold string_byte_adder2 token_map 0 ;
   }
+
+  let rec append_all buffer =
+    function
+      | [] -> ()
+      | h :: t -> Arraybuffer.append buffer h ; append_all buffer t
+
+  let starts_with prefix str =
+    let rec loop i stop str_a str_b =
+      i = stop || (String.get str_a i) = (String.get str_b i) && loop (i+1) stop str_a str_b
+    in
+    loop 0 (slen prefix) prefix str
+
+  let find_match { entries ; token_map ; token_index } pattern =
+    let buffer = Arraybuffer.empty "?" in
+    let regexp = Str.regexp pattern in
+    Hashtbl.iter (fun token path_list ->
+      if starts_with pattern token then (
+      (*
+      if Str.string_match regexp token 0 then (
+      Printf.printf "find match: %s with %s\n" token (list_to_string id path_list) ;
+      *)
+        append_all buffer path_list
+      )
+    ) token_map ;
+    let matches = Arraybuffer.to_array buffer in
+    Array.sort String.compare matches ;
+    matches
 end
 
 let print_entries = Array.iter print_stringln
 
 let navigation_test () =
-let gc_stat = Gc.quick_stat () in
+  let gc_stat = Gc.quick_stat () in
   let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
   let filter anydir item = item <> ".git" in
   print_string base_path ; print_newline () ;
@@ -294,18 +360,11 @@ let gc_stat = Gc.quick_stat () in
     (*
     |> print_entries ;
     *)
-  print_float !readdir_time ;
-  print_newline () ;
-  print_float !opendir_time ;
-  print_newline () ;
-  print_float !append_time ;
-  print_newline () ;
-  print_float !index_time ;
-  print_newline () ;
-let gc_stat2 = Gc.quick_stat () in
-Printf.printf "minor_col:%d major_col:%d\n"
-  (gc_stat2.minor_collections - gc_stat.minor_collections)
-  (gc_stat2.major_collections - gc_stat.major_collections) ;
+    print_string "insert: " ; print_float !insert_time ; print_newline () ;
+  let gc_stat2 = Gc.quick_stat () in
+  Printf.printf "minor_col:%d major_col:%d\n"
+    (gc_stat2.minor_collections - gc_stat.minor_collections)
+    (gc_stat2.major_collections - gc_stat.major_collections) ;
   let {
     Navigator.total_entries         ;
     Navigator.total_tokens          ;
@@ -313,8 +372,13 @@ Printf.printf "minor_col:%d major_col:%d\n"
     Navigator.total_tokens_length   ;
   } = Navigator.file_index_stats file_index in
   Printf.printf
-    "total_entries=%d total_tokens=%d total_entries_length=%d total_tokens_length=%d\n"
+    "entries=%d tokens=%d entries_length=%d tokens_length=%d\n"
     total_entries
     total_tokens
     total_entries_length
-    total_tokens_length
+    total_tokens_length ;
+  let a1 = Sys.time () in
+  Navigator.find_match file_index "xfrm" |> print_entries ;
+  Printf.printf "find_time: %f\n" ((Sys.time ()) -. a1)
+
+
