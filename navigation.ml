@@ -1,7 +1,6 @@
 open Util
 open Util.Arrays
 
-
 module Suffixarray = struct
   (* Is this reasonable for real input
    *
@@ -74,20 +73,7 @@ module Suffixarray = struct
 
   (* PERF: use native strcmp instead ! *)
   let rec compare_substrings ~left:left ~left_offset:i ~right:right ~right_offset:j =
-    let lenleft = slen left in
-    let lenright = slen right in
-    if lenleft = i && lenright = j
-      then 0
-    else if lenleft = i
-      then 1
-    else if lenright = j
-      then -1
-    else
-    let x = Char.compare (String.get left i) (String.get right j) in
-    if x = 0
-      then compare_substrings ~left:left ~left_offset:(i + 1) ~right:right ~right_offset:(j + 1)
-    else
-      x
+    string_compare_fast left i right j
 
   let mk_suffixarray entries_original entry_to_values =
     let entries = Array.copy entries_original in
@@ -105,7 +91,10 @@ module Suffixarray = struct
         ~left:entries.(substrings.(2*i)) ~left_offset:substrings.(2*i + 1)
         ~right:entries.(substrings.(2*j)) ~right_offset:substrings.(2*j + 1)
     in
+    (* PERF: toooooo sloooooow *)
+    let t1 = Sys.time () in
     Array.sort compare_suffixes substrings_index ;
+    Printf.printf "suffixarray(len:%d) sort time %f\n" (alen substrings_index) ((Sys.time ()) -. t1) ;
     { entries ; substrings ; substrings_index ; entry_to_values }
 
   let prepare suffixarray entrie = ()
@@ -175,6 +164,7 @@ module Navigator = struct
 
   type filter_fn = string -> string -> bool
 
+  (* TODO: should directories be handled separately ? should they be included at all ? *)
   type file_index = {
     entries       : string array ;
     token_map     : (string, string list) Hashtbl.t ;
@@ -216,7 +206,7 @@ module Navigator = struct
       | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
       | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
-  (* TODO: should directories be handled separately ? should they be included at all ? *)
+  (* breath first search *)
   let readdir_recursive { path_buffer ; visit_queue ; token_map ; filter } =
     let fn path item =
       if  item <> "." && item <> ".." && filter path item
@@ -243,6 +233,7 @@ module Navigator = struct
       insert_time +=. Sys.time ()
     )
 
+  (* depth first search. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
   let rec readdir_recursive2 state tokens path =
     match Unix.opendir path with
       | dir ->
@@ -256,12 +247,7 @@ module Navigator = struct
               let new_path = Buffer.contents state.buffer in
               Arraybuffer.append state.path_buffer new_path ;
               let tokens' = item :: tokens in
-              (* Instead of using a hashtbl here, I can change the list of token
-               * into a list of tuple (token, string list ref) and directly index paths
-               * by all their tokens with that.
-               *)
-              (* otherwise I can create the token -> path list mapping better and more
-               * cheaply ? *)
+              (* PERF: how to create the token -> path list cheaply without a hashtbl *)
               List.iter (token_index_insert state.token_map new_path) tokens' ;
               readdir_recursive2 state tokens' new_path ;
               Buffer.truncate state.buffer buffer_n
@@ -277,26 +263,16 @@ module Navigator = struct
     let state = mk_readdir_rec_state path filter in
     if recur
       then (Buffer.add_string state.buffer path ; readdir_recursive2 state [] path )
-      (*
-      then readdir_recursive state
-      *)
       (* TODO: eliminate second branch by putting recurence flag in readdir_rec_state *)
       else readdir_foreach path (Arraybuffer.append state.path_buffer) ;
     Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
     let entries = Arraybuffer.to_array state.path_buffer in
     Array.sort String.compare entries ;
     Printf.printf "sort done: %f\n" ((Sys.time ()) -. t1) ;
-    let token_map = state.token_map in
-    (*
-    for i = 0 to astop entries do
-      let path = array_get entries i in
-      path |> String.split_on_char '/'
-           |> List.iter (token_index_insert token_map path)
-    done ;
-    *)
-    let token_index = Suffixarray.mk_suffixarray (keys token_map) token_map in
+    (* let token_index = Suffixarray.mk_suffixarray (keys token_map) token_map in *)
+    let token_index = Suffixarray.mk_suffixarray [||] state.token_map in
     Printf.printf "index done: %f\n" ((Sys.time ()) -. t1) ;
-    { entries ; token_map ; token_index }
+    { entries ; token_map = state.token_map ; token_index }
 
   let index_to_entries { entries } = entries
 
@@ -305,7 +281,6 @@ module Navigator = struct
   let string_byte_adder byte_count path = byte_count + (slen path)
   let string_byte_adder2 token _ byte_count = string_byte_adder byte_count token
 
-  (* TODO *)
   let file_index_stats { entries ; token_map ; token_index } =
   {
     total_entries         = alen entries ;
@@ -329,10 +304,9 @@ module Navigator = struct
     let buffer = Arraybuffer.empty "?" in
     let regexp = Str.regexp pattern in
     Hashtbl.iter (fun token path_list ->
-      if starts_with pattern token then (
-      (*
       if Str.string_match regexp token 0 then (
-      Printf.printf "find match: %s with %s\n" token (list_to_string id path_list) ;
+      (*
+      if string_starts_with pattern token then (
       *)
         append_all buffer path_list
       )
@@ -378,7 +352,8 @@ let navigation_test () =
     total_entries_length
     total_tokens_length ;
   let a1 = Sys.time () in
-  Navigator.find_match file_index "xfrm" |> print_entries ;
+  let pattern = if alen Sys.argv > 2 then Sys.argv.(2) else "xfrm" in
+  Navigator.find_match file_index pattern |> print_entries ;
   Printf.printf "find_time: %f\n" ((Sys.time ()) -. a1)
 
 

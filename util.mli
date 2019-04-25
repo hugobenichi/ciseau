@@ -41,6 +41,10 @@ val alen                      : 'a array -> int
 val blen                      : Bytes.t -> int
 val slen                      : string -> int
 
+(* String utility functions *)
+val string_compare_fast       : string -> int -> string -> int -> int
+val string_starts_with        : string -> string -> bool
+
 (* Combinators for options *)
 module Options : sig
   val some                    : 'a -> 'a option

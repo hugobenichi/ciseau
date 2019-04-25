@@ -40,6 +40,9 @@ let alen = Array.length
 let blen = Bytes.length
 let slen = String.length
 
+external string_compare_fast : string -> int -> string -> int -> int = "string_compare_fast"
+external string_starts_with : string -> string -> bool = "string_starts_with"
+
 module Options = struct
   let some x = Some x
 
