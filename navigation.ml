@@ -1,6 +1,27 @@
 open Util
 open Util.Arrays
 
+type dir_type = DT_BLK       (* This is a block device. *)
+              | DT_CHR       (* This is a character device. *)
+              | DT_DIR       (* This is a directory. *)
+              | DT_FIFO      (* This is a named pipe (FIFO). *)
+              | DT_LNK       (* This is a symbolic link. *)
+              | DT_REG       (* This is a regular file. *)
+              | DT_SOCK      (* This is a UNIX domain socket. *)
+              | DT_UNKNOWN   (* The file type could not be determined. *)
+external readdir_t : Unix.dir_handle -> string * dir_type = "readdir_t"
+
+let dir_type_name =
+  function
+    | DT_BLK      -> "DT_BLK"
+    | DT_CHR      -> "DT_CHR"
+    | DT_DIR      -> "DT_DIR"
+    | DT_FIFO     -> "DT_FIFO"
+    | DT_LNK      -> "DT_LNK"
+    | DT_REG      -> "DT_REG"
+    | DT_SOCK     -> "DT_SOCK"
+    | DT_UNKNOWN  -> "DT_UNKNOWN"
+
 module Suffixarray = struct
   (* Is this reasonable for real input
    *
@@ -237,11 +258,15 @@ module Navigator = struct
   let rec readdir_recursive2 state tokens path =
     match Unix.opendir path with
       | dir ->
-        (try
           let buffer_n = Buffer.length state.buffer in
-          while true do
-            let item = Unix.readdir dir in
-            if  item <> "." && item <> ".." && state.filter path item then (
+          let go_on = ref true in
+          while !go_on do
+            let (item, d_type) = readdir_t dir in
+            if item = "" then
+              go_on := false
+            else if d_type <> DT_DIR && d_type <> DT_REG then
+              ()
+            else if item <> "." && item <> ".." && state.filter path item then (
               Buffer.add_char state.buffer '/' ;
               Buffer.add_string state.buffer item ;
               let new_path = Buffer.contents state.buffer in
@@ -249,11 +274,12 @@ module Navigator = struct
               let tokens' = item :: tokens in
               (* PERF: how to create the token -> path list cheaply without a hashtbl *)
               List.iter (token_index_insert state.token_map new_path) tokens' ;
-              readdir_recursive2 state tokens' new_path ;
+              if d_type == DT_DIR then
+                readdir_recursive2 state tokens' new_path ;
               Buffer.truncate state.buffer buffer_n
             )
-          done
-        with End_of_file -> Unix.closedir dir)
+          done ;
+          Unix.closedir dir
       | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
       | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
       | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
@@ -266,13 +292,12 @@ module Navigator = struct
       (* TODO: eliminate second branch by putting recurence flag in readdir_rec_state *)
       else readdir_foreach path (Arraybuffer.append state.path_buffer) ;
     Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
-    let entries = Arraybuffer.to_array state.path_buffer in
-    Array.sort String.compare entries ;
-    Printf.printf "sort done: %f\n" ((Sys.time ()) -. t1) ;
-    (* let token_index = Suffixarray.mk_suffixarray (keys token_map) token_map in *)
-    let token_index = Suffixarray.mk_suffixarray [||] state.token_map in
-    Printf.printf "index done: %f\n" ((Sys.time ()) -. t1) ;
-    { entries ; token_map = state.token_map ; token_index }
+    {
+      entries = Arraybuffer.to_array state.path_buffer ;
+      token_map = state.token_map ;
+      token_index = Suffixarray.mk_suffixarray [||] state.token_map ;
+      (* token_index = Suffixarray.mk_suffixarray (keys token_map) token_map *)
+    }
 
   let index_to_entries { entries } = entries
 
