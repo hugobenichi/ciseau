@@ -1,8 +1,27 @@
+
 (* main module for interacting with the terminal *)
 
 val terminal_restore          : unit -> unit
 val terminal_set_raw          : unit -> unit
 val terminal_dimensions       : unit -> Util.Vec.vec2
+
+module Keys : sig
+  open Util
+
+  type key =
+      Key of char
+    | Click of Vec.vec2         (* esc[M + mod + mouse position *)
+    | ClickRelease of Vec.vec2  (* esc[M + mod + mouse position *)
+    | Escape_Z                  (* esc[Z: shift + tab *)
+    | ArrowUp                   (* esc[A *)
+    | ArrowDown                 (* esc[B *)
+    | ArrowRight                (* esc[C *)
+    | ArrowLeft                 (* esc[D *)
+    | EINTR                     (* usually happen when terminal is resized *)
+
+  val descr_of                : key -> string
+  val make_next_key_fn        : unit -> unit -> key  (* created unit -> key function is not reentrant and keeps state between inputs *)
+end
 
 module Color : sig
   type color  = (* First 8 ansi colors *)

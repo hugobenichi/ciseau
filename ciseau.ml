@@ -132,8 +132,9 @@ module Config = struct
 end
 
 
-module Keys = struct
-
+(* TODO: it would be nice to pair this with the reverse mapping in Term.Keys.descr_of to have
+ * one place for handling input mapping and configuration reading better *)
+module Input = struct
   let ctrl_at               = '\x00'
   let ctrl_a                = '\x01'
   let ctrl_b                = '\x02'
@@ -175,140 +176,6 @@ module Keys = struct
   let vtab                  = ctrl_k
   let new_page              = ctrl_l
   let enter                 = ctrl_m
-
-  type key =
-      Key of char
-    | Click of vec2         (* esc[M + mod + mouse position *)
-    | ClickRelease of vec2  (* esc[M + mod + mouse position *)
-    | Escape_Z              (* esc[Z: shift + tab *)
-    | ArrowUp               (* esc[A *)
-    | ArrowDown             (* esc[B *)
-    | ArrowRight            (* esc[C *)
-    | ArrowLeft             (* esc[D *)
-    | EINTR                 (* usually happen when terminal is resized *)
-
-  let descr_of =
-    function
-      | Click {x ; y}         ->  Printf.sprintf "Click(%d,%d)" x y
-      | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
-      | Escape_Z              -> "Escape_z"
-      | ArrowUp               -> "ArrowUp"
-      | ArrowDown             -> "ArrowDown"
-      | ArrowRight            -> "ArrowRight"
-      | ArrowLeft             -> "ArrowLeft"
-      | EINTR                 -> "Interrupt"
-      | Key '\x00'            -> "^@"
-      | Key '\x01'            -> "^a"
-      | Key '\x02'            -> "^b"
-      | Key '\x03'            -> "^c"
-      | Key '\x04'            -> "^d"
-      | Key '\x05'            -> "^e"
-      | Key '\x06'            -> "^f"
-      | Key '\x07'            -> "^g"
-      | Key '\x08'            -> "^h"
-      | Key '\x09'            -> "^i"
-      | Key '\x0a'            -> "^j"
-      | Key '\x0b'            -> "^k"
-      | Key '\x0c'            -> "^l"
-      | Key '\x0d'            -> "^m"
-      | Key '\x0e'            -> "^n"
-      | Key '\x0f'            -> "^o"
-      | Key '\x10'            -> "^p"
-      | Key '\x11'            -> "^q"
-      | Key '\x12'            -> "^r"
-      | Key '\x13'            -> "^s"
-      | Key '\x14'            -> "^t"
-      | Key '\x15'            -> "^u"
-      | Key '\x16'            -> "^v"
-      | Key '\x17'            -> "^w"
-      | Key '\x18'            -> "^x"
-      | Key '\x19'            -> "^y"
-      | Key '\x1a'            -> "^z"
-      | Key '\x1b'            -> "^["
-      | Key '\x1c'            -> "^\\"
-      | Key '\x1d'            -> "^]"
-      | Key '\x1e'            -> "^^"
-      | Key '\x1f'            -> "^_"
-      | Key '\x20'            -> "space"
-      | Key '\x7f'            -> "del"
-      | Key '\''              -> "'"
-      | Key k                 ->  Char.escaped k
-
-  (* Terminal input needs to be read 3 bytes at a time to detect escape sequences *)
-  let input_buffer_len = 3
-
-  (* Buffer inputs across next_key calls in order to correclty segment escape key codes *)
-  type input_buffer = {
-    buffer : Bytes.t ;
-    mutable cursor : int ;    (* indicate if there is some pending input from last read *)
-    mutable lastread : int ;
-  }
-
-  let rec next_key input_buffer () =
-    let { buffer ; cursor ; lastread } = input_buffer in
-    if cursor > 0 then
-      let c = Bytes.get buffer cursor in
-      input_buffer.cursor <- (cursor + 1) mod lastread ;
-      Key c
-    else
-    match
-      Unix.read Unix.stdin buffer 0 input_buffer_len
-    with
-      (* interrupt: probably a screen resize event *)
-      | exception Unix.Unix_error (Unix.EINTR, _, _)
-            -> EINTR
-      (* timeout: retry *)
-      | 0   ->
-              output_string logs "input timeout\n" ;
-              next_key input_buffer ()
-      (* one normal key *)
-      | 1   -> Key (Bytes.get buffer 0)
-      (* escape sequences *)
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z'
-            -> Escape_Z
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'A'
-            -> ArrowUp
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'B'
-            -> ArrowDown
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'C'
-            -> ArrowRight
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'D'
-            -> ArrowLeft
-      (* mouse click *)
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
-            ->
-              Unix.read Unix.stdin buffer 0 input_buffer_len |> ignore ;
-              (* x10 mouse click mode. *)
-              (* TODO: add support for other modes: xterm-262, ... *)
-              let x10_position_reader c =
-                let c' = (Char.code c) - 33 in
-                if c' < 0 then c' + 255 else c'
-              in
-              let cx = Bytes.get buffer 1 |> x10_position_reader in
-              let cy = Bytes.get buffer 2 |> x10_position_reader in
-              Bytes.get buffer 0
-                |> Char.code
-                |> (land) 3 (* Ignore modifier keys *)
-                |> (function
-                  (* TODO: distinguish between left/middle/right buttons *)
-                  | 0
-                  | 1
-                  | 2   ->  Click (mk_v2 cx cy)
-                  | 3   ->  ClickRelease (mk_v2 cx cy)
-                  | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
-      (* This happens when typing CTRL + [ followed by another key *)
-      | n  ->
-          input_buffer.cursor <- 1 ;
-          input_buffer.lastread <- n ;
-          Key (Bytes.get buffer 0)
-
-  let make_next_key_fn () =
-    {
-      buffer    = Bytes.make input_buffer_len '\000' ;
-      cursor    = 0 ;
-      lastread  = 0;
-    } |> next_key
-
 end
 
 
@@ -2291,7 +2158,7 @@ module Ciseau = struct
   let command_key_table : command array = Array.make 255 Noop
 
   let _ =
-    let open Keys in
+    let open Input in
     Array.iter
     (fun (c, command) -> array_set command_key_table (Char.code c) command)
     [|
@@ -2405,15 +2272,15 @@ module Ciseau = struct
       | ArrowLeft
       | ArrowRight
       | Click _
-      | ClickRelease _              ->  id
-      | EINTR                       ->  resize_editor
-      | Escape_Z                    ->  change_mode Normal
-      | Key c when c = ctrl_c
-                                    ->  stop_editor
+      | ClickRelease _                    ->  id
+      | EINTR                             ->  resize_editor
+      | Escape_Z                          ->  change_mode Normal
+      | Key c when c = Input.ctrl_c
+                                          ->  stop_editor
       (* | Key c when c = return ->  finish_input_sequence TODO: signal end of rawinput *)
-      | Key c when c = tab          ->  rawinput_append '\t'
-      | Key c when c = backspace    ->  rawinput_delete
-      | Key c                       ->  rawinput_append c
+      | Key c when c = Input.tab          ->  rawinput_append '\t'
+      | Key c when c = Input.backspace    ->  rawinput_delete
+      | Key c                             ->  rawinput_append c
 
   (* TODO: introduce state_machine for decoupling editor struct from input processing *)
   let process_key key editor =
@@ -2497,7 +2364,7 @@ module Fuzzer = struct
       *)
       incr i ;
       if !i > n
-        then Keys.Key Keys.ctrl_c
+        then Keys.Key Input.ctrl_c
         else
           Random.State.int r l |> array_get fuzz_keys
     in loop
