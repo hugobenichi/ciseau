@@ -27,7 +27,7 @@ module Navigator : sig
     total_tokens_length       : int ;
   }
 
-  val mk_file_index           : ?recursive:bool -> ?filter:filter_fn -> string -> file_index
+  val mk_file_index           : ?filter:filter_fn -> string -> file_index
   val index_to_entries        : file_index -> string array
   val mk_range                : file_index -> Suffixarray.range
   val file_index_stats        : file_index -> stats

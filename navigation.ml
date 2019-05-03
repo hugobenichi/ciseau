@@ -215,33 +215,6 @@ module Navigator = struct
     Queue.push path visit_queue ;
     { path_buffer ; visit_queue ; token_map ; filter ; buffer }
 
-  let readdir_foreach path fn =
-    let rec loop dir_handle fn =
-      match Unix.readdir dir_handle with
-        | y                     -> (fn y) ; loop dir_handle fn
-        | exception End_of_file -> Unix.closedir dir_handle
-    in
-    match Unix.opendir path with
-      | dir_handle -> loop dir_handle fn
-      | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
-      | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
-      | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
-
-  (* breath first search *)
-  let readdir_recursive { path_buffer ; visit_queue ; token_map ; filter } =
-    let fn path item =
-      if  item <> "." && item <> ".." && filter path item
-        then (
-          let new_entry = path ^ "/" ^ item in
-          Arraybuffer.append path_buffer new_entry ;
-          Queue.push new_entry visit_queue ;
-        )
-    in
-    while not (Queue.is_empty visit_queue) do
-      let path = Queue.pop visit_queue in
-      readdir_foreach path (fn path) ;
-    done
-
   let nofilter anydir anyname = true
 
   let token_index_insert tbl path token =
@@ -254,43 +227,43 @@ module Navigator = struct
       insert_time +=. Sys.time ()
     )
 
-  (* depth first search. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
-  let rec readdir_recursive2 state tokens path =
+  (* depth first directory walk. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
+  let rec readdir state tokens path =
     match Unix.opendir path with
       | dir ->
           let buffer_n = Buffer.length state.buffer in
           let go_on = ref true in
           while !go_on do
-            let (item, d_type) = readdir_t dir in
-            if item = "" then
-              go_on := false
-            else if d_type <> DT_DIR && d_type <> DT_REG then
-              ()
-            else if item <> "." && item <> ".." && state.filter path item then (
-              Buffer.add_char state.buffer '/' ;
-              Buffer.add_string state.buffer item ;
-              let new_path = Buffer.contents state.buffer in
-              Arraybuffer.append state.path_buffer new_path ;
-              let tokens' = item :: tokens in
-              (* PERF: how to create the token -> path list cheaply without a hashtbl *)
-              List.iter (token_index_insert state.token_map new_path) tokens' ;
-              if d_type == DT_DIR then
-                readdir_recursive2 state tokens' new_path ;
-              Buffer.truncate state.buffer buffer_n
-            )
-          done ;
-          Unix.closedir dir
-      | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
-      | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
-      | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
+            match readdir_t dir with
+              | ("", _) -> go_on := false
+              | (".", _)
+              | ("..", _) -> ()
+              | (item, _) when not (state.filter path item) -> ()
+              | (item, d_type) when d_type = DT_DIR || d_type = DT_REG ->
+                  begin
+                    Buffer.add_char state.buffer '/' ;
+                    Buffer.add_string state.buffer item ;
+                    let new_path = Buffer.contents state.buffer in
+                    Arraybuffer.append state.path_buffer new_path ;
+                    let tokens' = item :: tokens in
+                    (* PERF: how to create the token -> path list cheaply without a hashtbl *)
+                    List.iter (token_index_insert state.token_map new_path) tokens' ;
+                    if d_type == DT_DIR then
+                      readdir state tokens' new_path ;
+                    Buffer.truncate state.buffer buffer_n
+                  end
+              | (_, _) -> ()
+        done ;
+        Unix.closedir dir
+    | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
+    | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
+    | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
-  let mk_file_index ?recursive:(recur=false) ?filter:(filter=nofilter) path =
-    let t1 = Sys.time () in
-    let state = mk_readdir_rec_state path filter in
-    if recur
-      then (Buffer.add_string state.buffer path ; readdir_recursive2 state [] path )
-      (* TODO: eliminate second branch by putting recurence flag in readdir_rec_state *)
-      else readdir_foreach path (Arraybuffer.append state.path_buffer) ;
+let mk_file_index ?filter:(filter=nofilter) path =
+  let t1 = Sys.time () in
+  let state = mk_readdir_rec_state path filter in
+    Buffer.add_string state.buffer path ;
+    readdir state [] path ;
     Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
     {
       entries = Arraybuffer.to_array state.path_buffer ;
@@ -348,7 +321,7 @@ let navigation_test () =
   let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
   let filter anydir item = item <> ".git" in
   print_string base_path ; print_newline () ;
-  let file_index = Navigator.mk_file_index ~recursive:true ~filter:filter base_path in
+  let file_index = Navigator.mk_file_index ~filter:filter base_path in
   (*
   print_entries (Navigator.index_to_entries file_index) ;
   print_newline () ;
