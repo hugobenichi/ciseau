@@ -259,12 +259,10 @@ module Navigator = struct
     | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
     | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
-let mk_file_index ?filter:(filter=nofilter) path =
-  let t1 = Sys.time () in
-  let state = mk_readdir_rec_state path filter in
+  let mk_file_index ?filter:(filter=nofilter) path =
+    let state = mk_readdir_rec_state path filter in
     Buffer.add_string state.buffer path ;
     readdir state [] path ;
-    Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
     {
       entries = Arraybuffer.to_array state.path_buffer ;
       token_map = state.token_map ;
@@ -316,12 +314,36 @@ end
 
 let print_entries = Array.iter print_stringln
 
-let navigation_test () =
+let print_frame framebuffer path entries input =
+  let open Term in
+  let x_offset = 1 in (* BUG: why do I need a +1 offset !!??!! *)
+  let fb_height = (Framebuffer.framebuffer_size framebuffer).Vec.y in
+  let max_entry = min (alen entries) (fb_height - 1 (* header *) - 1 (* input *)) in
+  Framebuffer.clear framebuffer ;
+  for i = 0 to max_entry - 1 do
+    Framebuffer.put_line framebuffer ~y:(i+1) ~x:x_offset (array_get entries i)
+  done ;
+  Framebuffer.put_line framebuffer ~y:(fb_height-1) ~x:x_offset ("input: " ^ input) ;
+  (*
+  Framebuffer.put_line framebuffer ~y:0 ~x:x_offset ~len:(slen path) path ;
+  *)
+  Framebuffer.render framebuffer
+
+let path_normalize path =
+  let last = (slen path) - 1 in
+  if String.get path last = '/'
+    then String.sub path 0 last
+    else path
+
+let navigation_test1 () =
   let gc_stat = Gc.quick_stat () in
-  let base_path = if alen Sys.argv > 1 then Sys.argv.(1) else "/etc" in
+  let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc")
+  in
   let filter anydir item = item <> ".git" in
   print_string base_path ; print_newline () ;
+  let t1 = Sys.time () in
   let file_index = Navigator.mk_file_index ~filter:filter base_path in
+  Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
   (*
   print_entries (Navigator.index_to_entries file_index) ;
   print_newline () ;
@@ -354,4 +376,32 @@ let navigation_test () =
   Navigator.find_match file_index pattern |> print_entries ;
   Printf.printf "find_time: %f\n" ((Sys.time ()) -. a1)
 
+let navigation_test2 () =
+  let open Term in
+  let path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
+  let filter anydir item = item <> ".git" in
+  let file_index = Navigator.mk_file_index ~filter:filter path in
+  let next_key = Keys.make_next_key_fn () in
+  let rec loop framebuffer path index =
+    match next_key () with
+      | Key c when c = '\x03' -> () (* exit *)
+      | Key c ->
+          let pattern = string_of_char c in
+          let entries = Navigator.find_match file_index pattern in
+          print_frame framebuffer path entries pattern ;
+          loop framebuffer path index
+      | _ -> loop framebuffer path index
+  in
+  try
+    Term.terminal_set_raw () ;
+    let term_dim = Term.terminal_dimensions () in
+    let framebuffer = Framebuffer.mk_framebuffer term_dim in
+    print_frame framebuffer path (Navigator.index_to_entries file_index) "" ;
+    loop framebuffer path file_index ;
+    Term.terminal_restore ()
+  with
+    e ->  Term.terminal_restore () ;
+          Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+          Printexc.print_backtrace stdout
 
+let navigation_test = navigation_test2

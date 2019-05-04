@@ -289,8 +289,8 @@ end
 
 (* A common buffer for filling Fileview content just before bliting into a backend rendering framebuffer *)
 (* TODO: Not threadsafe !! find better place to put that *)
-let fb = ref (Framebuffer.init_framebuffer (mk_v2 300 80))
-(* let fb = ref (Framebuffer.init_framebuffer (mk_v2 4000 100)) *)
+let fb = ref (Framebuffer.mk_framebuffer (mk_v2 300 80))
+(* let fb = ref (Framebuffer.mk_framebuffer (mk_v2 4000 100)) *)
 
 
 module Screen : sig
@@ -2037,7 +2037,7 @@ module Ciseau = struct
 
   let init_editor file =
     let term_dim = Term.terminal_dimensions () in
-    let frame_buffer = Framebuffer.init_framebuffer term_dim in
+    let frame_buffer = Framebuffer.mk_framebuffer term_dim in
     let filebuffers = test_mk_filebuffers file in
     {
       term_dim        = term_dim ;
@@ -2058,7 +2058,7 @@ module Ciseau = struct
 
   let resize_editor editor =
     let term_dim = Term.terminal_dimensions () in
-    let frame_buffer = Framebuffer.init_framebuffer term_dim in
+    let frame_buffer = Framebuffer.mk_framebuffer term_dim in
     {
       editor with
       term_dim        = term_dim ;

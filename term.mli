@@ -60,7 +60,8 @@ end
 module Framebuffer : sig
   open Util
   type t
-  val init_framebuffer  : Vec.vec2 -> t
+  val mk_framebuffer    : Vec.vec2 -> t
+  val framebuffer_size  : t -> Vec.vec2
   val clear             : t -> unit
   val clear_rect        : t -> Rec.rec2 -> unit
   val clear_line        : t -> x:int -> y:int -> len:int -> unit
@@ -71,3 +72,11 @@ module Framebuffer : sig
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
   val put_framebuffer   : t -> Rec.rec2 -> t -> unit
 end
+
+(* Is this interface useful for drawing ? how to pass colors, lines segments
+module Drawview : sig
+  type t
+  val mk_drawview       : Rec.rec2 -> Framebuffer.t -> t
+  val iter_lines        : t -> (i -> string) -> unit
+end
+*)

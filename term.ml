@@ -285,7 +285,7 @@ module Framebuffer = struct
     mutable cursor            : vec2 ;
   }
 
-  let init_framebuffer v2 =
+  let mk_framebuffer v2 =
     let len = v2.x * v2.y
     in {
       text        = Bytes.make len Default.text ;
@@ -297,6 +297,8 @@ module Framebuffer = struct
       window      = v2 ;
       cursor      = v2_zero ;
     }
+
+  let framebuffer_size  { window } = window
 
   let default_fill_len    = 8192
   let default_fg_colors   = Array.make default_fill_len Default.fg_color_code
@@ -409,8 +411,8 @@ module Framebuffer = struct
       array_set t.line_lengths y x
 
   let to_offset window x y =
-    assert (x <= window.x) ;
-    assert (y <= window.y) ;
+    assert_that (x <= window.x) ;
+    assert_that (y <= window.y) ;
     y * window.x + x
 
   let put_color_rect t { Color.fg ; Color.bg } rect =
