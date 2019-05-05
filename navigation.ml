@@ -324,8 +324,8 @@ let print_frame framebuffer path entries input =
     Framebuffer.put_line framebuffer ~y:(i+1) ~x:x_offset (array_get entries i)
   done ;
   Framebuffer.put_line framebuffer ~y:(fb_height-1) ~x:x_offset ("input: " ^ input) ;
-  (*
   Framebuffer.put_line framebuffer ~y:0 ~x:x_offset ~len:(slen path) path ;
+  (*
   *)
   Framebuffer.render framebuffer
 
@@ -382,22 +382,28 @@ let navigation_test2 () =
   let filter anydir item = item <> ".git" in
   let file_index = Navigator.mk_file_index ~filter:filter path in
   let next_key = Keys.make_next_key_fn () in
-  let rec loop framebuffer path index =
-    match next_key () with
-      | Key c when c = '\x03' -> () (* exit *)
-      | Key c ->
-          let pattern = string_of_char c in
-          let entries = Navigator.find_match file_index pattern in
-          print_frame framebuffer path entries pattern ;
-          loop framebuffer path index
-      | _ -> loop framebuffer path index
+  let rec loop framebuffer path index pattern =
+    next_key ()
+      |> (function
+        | Key c when c = '\x03'   -> None
+        | Key c when c = '\x7f'   -> Some (String.sub pattern 0 (max 0 ((slen pattern) - 1)))
+        | Key c                   -> Some (pattern ^ (string_of_char c))
+        | _                       -> Some pattern)
+      |> (function
+        | None -> () (* exit *)
+        | Some same_pattern when pattern = same_pattern ->
+              loop framebuffer path index pattern
+        | Some new_pattern ->
+              let entries = Navigator.find_match file_index new_pattern in
+              print_frame framebuffer path entries new_pattern ;
+              loop framebuffer path index new_pattern)
   in
   try
     Term.terminal_set_raw () ;
     let term_dim = Term.terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     print_frame framebuffer path (Navigator.index_to_entries file_index) "" ;
-    loop framebuffer path file_index ;
+    loop framebuffer path file_index "" ;
     Term.terminal_restore ()
   with
     e ->  Term.terminal_restore () ;
