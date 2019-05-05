@@ -22,6 +22,12 @@ let dir_type_name =
     | DT_SOCK     -> "DT_SOCK"
     | DT_UNKNOWN  -> "DT_UNKNOWN"
 
+type index_entry = {
+  dtype     : dir_type ;
+  path      : string ;
+  tokens    : string list ;
+}
+
 module Suffixarray = struct
   (* Is this reasonable for real input
    *
@@ -167,8 +173,7 @@ module Suffixarray = struct
 
 end
 
-
-  let insert_time = ref 0.0
+let insert_time = ref 0.0
 
 module Navigator = struct
   (* Note on different interface into range search:
@@ -188,8 +193,7 @@ module Navigator = struct
   (* TODO: should directories be handled separately ? should they be included at all ? *)
   type file_index = {
     entries       : string array ;
-    token_map     : (string, string list) Hashtbl.t ;
-    token_index   : Suffixarray.t ;
+    token_map     : (string, index_entry list) Hashtbl.t ;
   }
 
   type stats = {
@@ -202,7 +206,7 @@ module Navigator = struct
   type readdir_rec_state = {
     path_buffer   : string Arraybuffer.t ;
     visit_queue   : string Queue.t ;
-    token_map     : (string, string list) Hashtbl.t ;
+    token_map     : (string, index_entry list) Hashtbl.t ;
     filter        : string -> string -> bool ;
     buffer        : Buffer.t ;
   }
@@ -217,12 +221,12 @@ module Navigator = struct
 
   let nofilter anydir anyname = true
 
-  let token_index_insert tbl path token =
+  let token_index_insert tbl entry token =
     if slen token > 0 then (
       insert_time -=. Sys.time () ;
       Hashtbl.find_opt tbl token
         |> Options.get_or []
-        |> List.cons path
+        |> List.cons entry
         |> Hashtbl.replace tbl token ;
       insert_time +=. Sys.time ()
     )
@@ -246,8 +250,13 @@ module Navigator = struct
                     let new_path = Buffer.contents state.buffer in
                     Arraybuffer.append state.path_buffer new_path ;
                     let tokens' = item :: tokens in
+                    let entry = {
+                      dtype     = d_type ;
+                      path      = new_path ;
+                      tokens    = tokens' ;
+                    } in
                     (* PERF: how to create the token -> path list cheaply without a hashtbl *)
-                    List.iter (token_index_insert state.token_map new_path) tokens' ;
+                    List.iter (token_index_insert state.token_map entry) tokens' ;
                     if d_type == DT_DIR then
                       readdir state tokens' new_path ;
                     Buffer.truncate state.buffer buffer_n
@@ -266,18 +275,14 @@ module Navigator = struct
     {
       entries = Arraybuffer.to_array state.path_buffer ;
       token_map = state.token_map ;
-      token_index = Suffixarray.mk_suffixarray [||] state.token_map ;
-      (* token_index = Suffixarray.mk_suffixarray (keys token_map) token_map *)
     }
 
   let index_to_entries { entries } = entries
 
-  let mk_range { token_index } = Suffixarray.mk_range token_index ""
-
   let string_byte_adder byte_count path = byte_count + (slen path)
   let string_byte_adder2 token _ byte_count = string_byte_adder byte_count token
 
-  let file_index_stats { entries ; token_map ; token_index } =
+  let file_index_stats { entries ; token_map } =
   {
     total_entries         = alen entries ;
     total_tokens          = Hashtbl.length token_map ;
@@ -288,7 +293,7 @@ module Navigator = struct
   let rec append_all buffer =
     function
       | [] -> ()
-      | h :: t -> Arraybuffer.append buffer h ; append_all buffer t
+      | { path } :: t -> Arraybuffer.append buffer path ; append_all buffer t
 
   let starts_with prefix str =
     let rec loop i stop str_a str_b =
@@ -296,15 +301,15 @@ module Navigator = struct
     in
     loop 0 (slen prefix) prefix str
 
-  let find_match { entries ; token_map ; token_index } pattern =
+  let find_match { entries ; token_map } pattern =
     let buffer = Arraybuffer.empty "?" in
     let regexp = Str.regexp pattern in
-    Hashtbl.iter (fun token path_list ->
+    Hashtbl.iter (fun token entry_list ->
       if Str.string_match regexp token 0 then (
       (*
       if string_starts_with pattern token then (
       *)
-        append_all buffer path_list
+        append_all buffer entry_list
       )
     ) token_map ;
     let matches = Arraybuffer.to_array buffer in
@@ -348,13 +353,7 @@ let navigation_test1 () =
   print_entries (Navigator.index_to_entries file_index) ;
   print_newline () ;
   *)
-  Navigator.mk_range file_index
-    |> Suffixarray.range_to_array
-    |> ignore ;
-    (*
-    |> print_entries ;
-    *)
-    print_string "insert: " ; print_float !insert_time ; print_newline () ;
+  print_string "insert: " ; print_float !insert_time ; print_newline () ;
   let gc_stat2 = Gc.quick_stat () in
   Printf.printf "minor_col:%d major_col:%d\n"
     (gc_stat2.minor_collections - gc_stat.minor_collections)
