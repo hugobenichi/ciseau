@@ -123,6 +123,8 @@ module Arrays = struct
     a_out
 
   let array_swap a i j =
+    check_bounds i (alen a) ;
+    check_bounds j (alen a) ;
     let t = a.(i) in
     a.(i) <- a.(j) ;
     a.(j) <- t
@@ -181,6 +183,12 @@ module Arraybuffer = struct
       b.data <- grow_array b.zero b.data ;
     Arrays.array_set b.data b.next e ;
     b.next <- b.next + 1
+
+  let del buffer i =
+    Arrays.check_bounds i buffer.next ;
+    buffer.next <- buffer.next - 1 ;
+    Arrays.array_swap buffer.data i buffer.next
+
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)

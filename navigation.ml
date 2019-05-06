@@ -28,6 +28,8 @@ type index_entry = {
   tokens    : string list ;
 }
 
+let zero_index_entry = { path = "" ; dtype = DT_UNKNOWN ; tokens = [] }
+
 module Suffixarray = struct
   (* Is this reasonable for real input
    *
@@ -293,7 +295,7 @@ module Navigator = struct
   let rec append_all buffer =
     function
       | [] -> ()
-      | { path } :: t -> Arraybuffer.append buffer path ; append_all buffer t
+      | entry :: t -> Arraybuffer.append buffer entry ; append_all buffer t
 
   let starts_with prefix str =
     let rec loop i stop str_a str_b =
@@ -302,19 +304,45 @@ module Navigator = struct
     loop 0 (slen prefix) prefix str
 
   let find_match { entries ; token_map } pattern =
-    let buffer = Arraybuffer.empty "?" in
+    let buffer = Arraybuffer.empty zero_index_entry in
     let regexp = Str.regexp pattern in
     Hashtbl.iter (fun token entry_list ->
-      if Str.string_match regexp token 0 then (
+      if Str.string_match regexp token 0 then
       (*
-      if string_starts_with pattern token then (
+      if string_starts_with pattern token then
       *)
         append_all buffer entry_list
-      )
     ) token_map ;
-    let matches = Arraybuffer.to_array buffer in
+    let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
     Array.sort String.compare matches ;
     matches
+
+  let rec refine_match entry_buffer =
+    function
+      | [] -> ()
+      | pattern :: pattern_tail ->
+          let match_pattern token = Str.string_match (Str.regexp pattern) token 0 in
+          let i = ref 0 in
+          while !i < Arraybuffer.len entry_buffer do
+            let { tokens } = Arraybuffer.get entry_buffer !i in
+            if List.exists match_pattern tokens
+              then incr i
+              else Arraybuffer.del entry_buffer !i
+          done ;
+          refine_match entry_buffer pattern_tail
+
+  let find_multi_match { entries ; token_map } patterns =
+    let buffer = Arraybuffer.empty zero_index_entry in
+    let regexp = Str.regexp (List.hd patterns) in
+    Hashtbl.iter (fun token entry_list ->
+      if Str.string_match regexp token 0 then
+        append_all buffer entry_list
+    ) token_map ;
+    refine_match buffer (List.tl patterns) ;
+    let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
+    Array.sort String.compare matches ;
+    matches
+
 end
 
 let print_entries = Array.iter print_stringln
@@ -393,7 +421,7 @@ let navigation_test2 () =
         | Some same_pattern when pattern = same_pattern ->
               loop framebuffer path index pattern
         | Some new_pattern ->
-              let entries = Navigator.find_match file_index new_pattern in
+              let entries = Navigator.find_multi_match file_index (String.split_on_char ' '  new_pattern) in
               print_frame framebuffer path entries new_pattern ;
               loop framebuffer path index new_pattern)
   in

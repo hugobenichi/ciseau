@@ -80,6 +80,7 @@ module Arraybuffer : sig
   val reserve         : int -> 'a -> 'a t
   val to_array        : 'a t -> 'a array
   val append          : 'a t -> 'a -> unit
+  val del             : 'a t -> int -> unit
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)
