@@ -292,10 +292,13 @@ module Navigator = struct
     total_tokens_length   = Hashtbl.fold string_byte_adder2 token_map 0 ;
   }
 
-  let rec append_all buffer =
+  let rec append_all target_dtype buffer =
     function
       | [] -> ()
-      | entry :: t -> Arraybuffer.append buffer entry ; append_all buffer t
+      | entry :: t -> begin
+          if target_dtype = entry.dtype then Arraybuffer.append buffer entry ;
+          append_all target_dtype buffer t
+        end
 
   let starts_with prefix str =
     let rec loop i stop str_a str_b =
@@ -311,7 +314,7 @@ module Navigator = struct
       (*
       if string_starts_with pattern token then
       *)
-        append_all buffer entry_list
+        append_all DT_REG buffer entry_list
     ) token_map ;
     let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
     Array.sort String.compare matches ;
@@ -336,7 +339,7 @@ module Navigator = struct
     let regexp = Str.regexp (List.hd patterns) in
     Hashtbl.iter (fun token entry_list ->
       if Str.string_match regexp token 0 then
-        append_all buffer entry_list
+        append_all DT_REG buffer entry_list
     ) token_map ;
     refine_match buffer (List.tl patterns) ;
     let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
