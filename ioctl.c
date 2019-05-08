@@ -1,3 +1,5 @@
+#define __GNU_SOURCE
+
 #include <dirent.h>
 #include <errno.h>
 #include <string.h>
@@ -35,7 +37,7 @@ CAMLprim value string_compare_fast(value v1, value v1_offset, value v2, value v2
     char *s2;
     s1 = String_val(v1) + Int_val(v1_offset);
     s2 = String_val(v2) + Int_val(v2_offset);
-    return Val_int(strcmp(s1, s2));
+    CAMLreturn(Val_int(strcmp(s1, s2)));
 }
 
 CAMLprim value string_starts_with(value prefix, value candidate)
@@ -48,12 +50,22 @@ CAMLprim value string_starts_with(value prefix, value candidate)
     s2 = String_val(candidate);
 
     for (;;) {
-        if (*s1 == '\0') return Val_true;
-        if (*s2 == '\0') return Val_false;
-        if (*s1 != *s2) return Val_false;
+        if (*s1 == '\0') CAMLreturn(Val_true);
+        if (*s2 == '\0') CAMLreturn(Val_false);
+        if (*s1 != *s2) CAMLreturn(Val_false);
         s1++;
         s2++;
     }
+}
+
+CAMLprim value string_is_substring(value ignore_case, value fragment, value text)
+{
+    CAMLparam3(ignore_case, fragment, text);
+    char *f;
+    char *t;
+    f = String_val(fragment);
+    t = String_val(text);
+    CAMLreturn(Val_bool(t && f && Bool_val(ignore_case) ?  strcasestr(t, f) : strstr(t, f)));
 }
 
 enum simple_d_type

@@ -40,8 +40,11 @@ let alen = Array.length
 let blen = Bytes.length
 let slen = String.length
 
-external string_compare_fast : string -> int -> string -> int -> int = "string_compare_fast"
-external string_starts_with : string -> string -> bool = "string_starts_with"
+external string_compare_fast          : string -> int -> string -> int -> int             = "string_compare_fast"
+external string_starts_with           : string -> string -> bool                          = "string_starts_with"
+external string_is_substring_native   : bool -> string -> string -> bool                  = "string_is_substring"
+
+let string_is_substring ?ignore_case:(ic=false) fragment text = string_is_substring_native ic fragment text
 
 module Options = struct
   let some x = Some x

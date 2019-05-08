@@ -44,6 +44,7 @@ val slen                      : string -> int
 (* String utility functions *)
 val string_compare_fast       : string -> int -> string -> int -> int
 val string_starts_with        : string -> string -> bool
+val string_is_substring       : ?ignore_case:bool -> string -> string -> bool
 
 (* Combinators for options *)
 module Options : sig

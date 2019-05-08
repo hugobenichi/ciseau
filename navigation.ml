@@ -250,7 +250,8 @@ module Navigator = struct
                     Buffer.add_char state.buffer '/' ;
                     Buffer.add_string state.buffer item ;
                     let new_path = Buffer.contents state.buffer in
-                    Arraybuffer.append state.path_buffer new_path ;
+                    if d_type == DT_REG then
+                      Arraybuffer.append state.path_buffer new_path ;
                     let tokens' = item :: tokens in
                     let entry = {
                       dtype     = d_type ;
@@ -300,18 +301,12 @@ module Navigator = struct
           append_all target_dtype buffer t
         end
 
-  let starts_with prefix str =
-    let rec loop i stop str_a str_b =
-      i = stop || (String.get str_a i) = (String.get str_b i) && loop (i+1) stop str_a str_b
-    in
-    loop 0 (slen prefix) prefix str
-
   let find_match { entries ; token_map } pattern =
     let buffer = Arraybuffer.empty zero_index_entry in
-    let regexp = Str.regexp pattern in
     Hashtbl.iter (fun token entry_list ->
-      if Str.string_match regexp token 0 then
+      if string_is_substring pattern token then
       (*
+      if Str.string_match (Str.regexp pattern) token 0 then
       if string_starts_with pattern token then
       *)
         append_all DT_REG buffer entry_list
@@ -324,7 +319,7 @@ module Navigator = struct
     function
       | [] -> ()
       | pattern :: pattern_tail ->
-          let match_pattern token = Str.string_match (Str.regexp pattern) token 0 in
+          let match_pattern = string_is_substring pattern in
           let i = ref 0 in
           while !i < Arraybuffer.len entry_buffer do
             let { tokens } = Arraybuffer.get entry_buffer !i in
@@ -336,16 +331,14 @@ module Navigator = struct
 
   let find_multi_match { entries ; token_map } patterns =
     let buffer = Arraybuffer.empty zero_index_entry in
-    let regexp = Str.regexp (List.hd patterns) in
     Hashtbl.iter (fun token entry_list ->
-      if Str.string_match regexp token 0 then
+      if string_is_substring (List.hd patterns) token then
         append_all DT_REG buffer entry_list
     ) token_map ;
     refine_match buffer (List.tl patterns) ;
     let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
     Array.sort String.compare matches ;
     matches
-
 end
 
 let print_entries = Array.iter print_stringln
@@ -440,4 +433,25 @@ let navigation_test2 () =
           Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
           Printexc.print_backtrace stdout
 
-let navigation_test = navigation_test2
+(* pipe output into | sort | uniq -c *)
+let index_histogram_test () =
+  let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
+  let filter anydir item = item <> ".git" in
+  let { Navigator.entries ; Navigator.token_map } = Navigator.mk_file_index ~filter:filter base_path in
+(*
+  (* token length *)
+  Hashtbl.iter (fun token entries -> Printf.printf "%d\n" (slen token)) token_map
+  (* path length *)
+  Array.iter (fun path -> Printf.printf "%d\n" (slen path)) entries
+  (* tokens per path *)
+  Array.iter (fun path -> Printf.printf "%d\n" (path |> String.split_on_char '/' |> List.length)) entries
+*)
+  (* paths per token *)
+  Hashtbl.iter (fun token entries -> Printf.printf "%d\n" (List.length entries)) token_map
+
+let navigation_test =
+  (*
+  navigation_test1
+  index_histogram_test
+  *)
+  navigation_test2
