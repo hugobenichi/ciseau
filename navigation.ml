@@ -28,6 +28,8 @@ type index_entry = {
   tokens    : string list ;
 }
 
+let index_entry_compare entry1 entry2 = String.compare entry1.path entry2.path
+
 let zero_index_entry = { path = "" ; dtype = DT_UNKNOWN ; tokens = [] }
 
 module Suffixarray = struct
@@ -195,6 +197,7 @@ module Navigator = struct
   (* TODO: should directories be handled separately ? should they be included at all ? *)
   type file_index = {
     entries       : string array ;
+    entries2      : index_entry array ;
     token_map     : (string, index_entry list) Hashtbl.t ;
   }
 
@@ -207,6 +210,7 @@ module Navigator = struct
 
   type readdir_rec_state = {
     path_buffer   : string Arraybuffer.t ;
+    index_entry_buffer   : index_entry Arraybuffer.t ;
     visit_queue   : string Queue.t ;
     token_map     : (string, index_entry list) Hashtbl.t ;
     filter        : string -> string -> bool ;
@@ -215,11 +219,12 @@ module Navigator = struct
 
   let mk_readdir_rec_state path filter =
     let path_buffer = Arraybuffer.empty "?" in
+    let index_entry_buffer = Arraybuffer.empty zero_index_entry in
     let visit_queue = Queue.create () in
     let token_map = Hashtbl.create 128 in
     let buffer = Buffer.create 1024 in
     Queue.push path visit_queue ;
-    { path_buffer ; visit_queue ; token_map ; filter ; buffer }
+    { path_buffer ; index_entry_buffer ; visit_queue ; token_map ; filter ; buffer }
 
   let nofilter anydir anyname = true
 
@@ -258,6 +263,7 @@ module Navigator = struct
                       path      = new_path ;
                       tokens    = tokens' ;
                     } in
+                    Arraybuffer.append state.index_entry_buffer entry ;
                     (* PERF: how to create the token -> path list cheaply without a hashtbl *)
                     List.iter (token_index_insert state.token_map entry) tokens' ;
                     if d_type == DT_DIR then
@@ -275,8 +281,13 @@ module Navigator = struct
     let state = mk_readdir_rec_state path filter in
     Buffer.add_string state.buffer path ;
     readdir state [] path ;
+    let entries = Arraybuffer.to_array state.path_buffer in
+    Array.sort String.compare entries ;
+    let entries2 = Arraybuffer.to_array state.index_entry_buffer in
+    Array.sort index_entry_compare entries2 ;
     {
-      entries = Arraybuffer.to_array state.path_buffer ;
+      entries ;
+      entries2 ;
       token_map = state.token_map ;
     }
 
@@ -329,16 +340,45 @@ module Navigator = struct
           done ;
           refine_match entry_buffer pattern_tail
 
+  let tokens_match_all_patterns patterns tokens =
+    List.for_all (fun p -> List.exists (string_is_substring p) tokens) patterns
+
+  (* patterns must not be empty *)
   let find_multi_match { entries ; token_map } patterns =
     let buffer = Arraybuffer.empty zero_index_entry in
     Hashtbl.iter (fun token entry_list ->
-      if string_is_substring (List.hd patterns) token then
-        append_all DT_REG buffer entry_list
+      if string_is_substring (List.hd patterns) token
+        then append_all DT_REG buffer entry_list
     ) token_map ;
     refine_match buffer (List.tl patterns) ;
     let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
     Array.sort String.compare matches ;
     matches
+
+  let find_multi_match2 { entries2 } patterns =
+    let buffer = Arraybuffer.empty "" in
+    Array.iter (fun { path ; dtype ; tokens } ->
+      (*
+      if dtype = DT_REG && List.for_all (fun p -> string_is_substring p path) tokens
+      *)
+      if dtype = DT_REG && tokens_match_all_patterns patterns tokens
+        then Arraybuffer.append buffer path
+    ) entries2 ;
+    Arraybuffer.to_array buffer
+
+  (*
+   * Quick performance tests seem to show that:
+   *  - find_multi_match2 is much better at 1 or 2 char pattern input
+   *  - find_multi_match is better with longer pattern inputs
+   *      - this is expected because of the shorter list of tokens to initially scan on longer patterns,
+   *        and the smaller impact of the final sort
+   *      - on small patterns that returns lots of matches, sorting dominates probably
+   *
+   *  - in find_multi_match2 doing a O(patterns x tokens) nested for loop match is more
+   *    efficient than matching tokens on the whole string (20~30% speedup)
+   *
+   *  - sorting all entries matching input on every refresh can be the most expensive op on bit match set.
+   *)
 end
 
 let print_entries = Array.iter print_stringln
@@ -416,9 +456,19 @@ let navigation_test2 () =
         | None -> () (* exit *)
         | Some same_pattern when pattern = same_pattern ->
               loop framebuffer path index pattern
+        | Some "" ->
+              print_frame framebuffer path file_index.entries (Printf.sprintf " (found %d)" (alen file_index.entries));
+              loop framebuffer path index ""
         | Some new_pattern ->
+              let t1 = Sys.time () in
               let entries = Navigator.find_multi_match file_index (String.split_on_char ' '  new_pattern) in
-              print_frame framebuffer path entries new_pattern ;
+              let t2 = Sys.time () in
+              let delta = t2 -. t1 in
+              let footer = Printf.sprintf "%s (time %f, found %d)" new_pattern delta (alen entries) in
+              (*
+              let entries = Navigator.find_multi_match file_index (String.split_on_char ' '  new_pattern) in
+              *)
+              print_frame framebuffer path entries footer ;
               loop framebuffer path index new_pattern)
   in
   try
