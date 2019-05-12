@@ -366,6 +366,17 @@ module Navigator = struct
     ) entries2 ;
     Arraybuffer.to_array buffer
 
+  let start_matcher_thread file_index patterns_channel match_channel =
+    Thread.create (fun () ->
+      while true do
+        patterns_channel
+          |> Event.receive
+          |> Event.sync
+          |> find_multi_match2 file_index
+          |> Event.send match_channel
+          |> Event.sync
+      done) ()
+
   (*
    * Quick performance tests seem to show that:
    *  - find_multi_match2 is much better at 1 or 2 char pattern input
@@ -483,6 +494,56 @@ let navigation_test2 () =
           Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
           Printexc.print_backtrace stdout
 
+let navigation_test3 () =
+  let open Term in
+  let path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
+  let filter anydir item = item <> ".git" in
+  let file_index = Navigator.mk_file_index ~filter:filter path in
+  let next_key = Keys.make_next_key_fn () in
+  let patterns_channel = Event.new_channel () in
+  let match_channel = Event.new_channel () in
+  let matcher_thread = Navigator.start_matcher_thread file_index patterns_channel match_channel in
+  let _ = matcher_thread in
+  let patterns_event = ref (Event.always ()) in
+  let rec loop framebuffer path index pattern last_match =
+    Event.poll !patterns_event |> ignore ;
+    Event.receive match_channel
+      |> Event.poll
+      |> function
+        | Some entries ->
+            print_frame framebuffer path entries (Printf.sprintf "input: %s (found %d)" pattern (alen entries));
+            loop framebuffer path index pattern entries
+        | None -> () ;
+    next_key ()
+      |> (function
+        | Key c when c = '\x03'   -> None
+        | Key c when c = '\x7f'   -> Some (String.sub pattern 0 (max 0 ((slen pattern) - 1)))
+        | Key c                   -> Some (pattern ^ (string_of_char c))
+        | _                       -> Some pattern)
+      |> (function
+        | None -> () (* exit *)
+        | Some same_pattern when pattern = same_pattern ->
+              loop framebuffer path index pattern last_match
+        | Some "" ->
+              print_frame framebuffer path file_index.entries (Printf.sprintf " (found %d)" (alen file_index.entries));
+              loop framebuffer path index "" file_index.entries
+        | Some new_pattern ->
+              patterns_event := Event.send patterns_channel (String.split_on_char ' '  new_pattern) ;
+              print_frame framebuffer path file_index.entries (Printf.sprintf " (found %d)" (alen file_index.entries));
+              loop framebuffer path index new_pattern file_index.entries)
+  in
+  try
+    Term.terminal_set_raw () ;
+    let term_dim = Term.terminal_dimensions () in
+    let framebuffer = Framebuffer.mk_framebuffer term_dim in
+    print_frame framebuffer path (Navigator.index_to_entries file_index) "" ;
+    loop framebuffer path file_index "" [||];
+    Term.terminal_restore ()
+  with
+    e ->  Term.terminal_restore () ;
+          Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+          Printexc.print_backtrace stdout
+
 (* pipe output into | sort | uniq -c *)
 let index_histogram_test () =
   let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
@@ -504,4 +565,4 @@ let navigation_test =
   navigation_test1
   index_histogram_test
   *)
-  navigation_test2
+  navigation_test3
