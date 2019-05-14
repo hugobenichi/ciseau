@@ -58,6 +58,7 @@ CAMLprim value string_starts_with(value prefix, value candidate)
     }
 }
 
+char *strcasestr(const char *haystack, const char *needle);
 CAMLprim value string_is_substring(value ignore_case, value fragment, value text)
 {
     CAMLparam3(ignore_case, fragment, text);
@@ -65,7 +66,9 @@ CAMLprim value string_is_substring(value ignore_case, value fragment, value text
     char *t;
     f = String_val(fragment);
     t = String_val(text);
-    CAMLreturn(Val_bool(t && f && Bool_val(ignore_case) ?  strcasestr(t, f) : strstr(t, f)));
+    CAMLreturn(Val_bool(
+	t && f &&
+	(Bool_val(ignore_case) ? strcasestr(t, f) : strstr(t, f)) != NULL));
 }
 
 enum simple_d_type
