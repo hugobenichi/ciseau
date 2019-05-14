@@ -3,6 +3,7 @@ let const a b     = a
 let flip f a b    = f b a
 let psi f g a1 a2 = f (g a1) (g a2)
 let (>>) f g x    = g (f x)
+let neg f x       = not (f x)
 
 let (+=) r x = (r := !r + x)
 let (-=) r x = (r := !r - x)
@@ -43,8 +44,11 @@ let slen = String.length
 external string_compare_fast          : string -> int -> string -> int -> int             = "string_compare_fast"
 external string_starts_with           : string -> string -> bool                          = "string_starts_with"
 external string_is_substring_native   : bool -> string -> string -> bool                  = "string_is_substring"
-
 let string_is_substring ?ignore_case:(ic=false) fragment text = string_is_substring_native ic fragment text
+let string_first s = String.get s 0
+let string_last s = String.get s ((slen s) - 1)
+let string_drop n s = String.sub s n ((slen s) - n)
+let string_cut n s = String.sub s 0 ((slen s) - n)
 
 module Options = struct
   let some x = Some x

@@ -340,8 +340,28 @@ module Navigator = struct
           done ;
           refine_match entry_buffer pattern_tail
 
-  let tokens_match_all_patterns patterns tokens =
-    List.for_all (fun p -> List.exists (string_is_substring p) tokens) patterns
+  let rec match_pattern pattern =
+    match string_first pattern with
+      | '!' when pattern = "!"  ->  const true
+      | '!'   ->  neg (match_pattern (string_drop 1 pattern))
+      | '='   ->  (=) (string_drop 1 pattern) (* TODO: only match directory *)
+      | '/'   ->  string_starts_with (string_drop 1 pattern)
+      | '~'   ->
+          begin try
+            let regexp = Str.regexp (string_drop 1 pattern) in
+            fun token ->
+              begin match Str.search_forward regexp token 0 with
+                | _           -> true
+                | exception _ -> false
+              end
+          with
+            (* TODO: for incorrect regexps, show the pattern in red *)
+            e -> const true
+          end
+      | _     ->  string_is_substring pattern
+
+  let tokens_match_all matchers tokens =
+    List.for_all (fun matcher -> List.exists matcher tokens) matchers
 
   (* patterns must not be empty *)
   let find_multi_match { entries ; token_map } patterns =
@@ -357,11 +377,12 @@ module Navigator = struct
 
   let find_multi_match2 { entries2 } patterns =
     let buffer = Arraybuffer.empty "" in
+    let matchers = patterns |> List.filter ((<>) "") |> List.map match_pattern in
     Array.iter (fun { path ; dtype ; tokens } ->
       (*
       if dtype = DT_REG && List.for_all (fun p -> string_is_substring p path) tokens
       *)
-      if dtype = DT_REG && tokens_match_all_patterns patterns tokens
+      if dtype = DT_REG && tokens_match_all matchers tokens
         then Arraybuffer.append buffer path
     ) entries2 ;
     Arraybuffer.to_array buffer
@@ -472,7 +493,7 @@ let navigation_test2 () =
               loop framebuffer path index ""
         | Some new_pattern ->
               let t1 = Sys.time () in
-              let entries = Navigator.find_multi_match file_index (String.split_on_char ' '  new_pattern) in
+              let entries = Navigator.find_multi_match2 file_index (String.split_on_char ' '  new_pattern) in
               let t2 = Sys.time () in
               let delta = t2 -. t1 in
               let footer = Printf.sprintf "%s (time %f, found %d)" new_pattern delta (alen entries) in
@@ -565,4 +586,4 @@ let navigation_test =
   navigation_test1
   index_histogram_test
   *)
-  navigation_test3
+  navigation_test2

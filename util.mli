@@ -3,11 +3,13 @@ val id                        : 'a-> 'a
 (* Constant function *)
 val const                     : 'a -> 'b -> 'a
 (* Flip input types of a 2-arity function *)
-val flip                      : ('a -> 'b -> 'c) -> 'b -> 'a -> 'c 
+val flip                      : ('a -> 'b -> 'c) -> 'b -> 'a -> 'c
 (* Compose two functions *)
 val (>>)                      : ('a -> 'b) -> ('b -> 'c) -> 'a -> 'c
 (* Another 2-functions composer *)
 val psi                       : ('b -> 'b -> 'c) -> ('a -> 'b) -> 'a -> 'a -> 'c
+(* Inverse a predicate *)
+val neg                       : ('a -> bool) -> 'a -> bool
 
 (* Int ref increment/decrement *)
 val (+=)                      : int ref -> int -> unit
@@ -45,6 +47,12 @@ val slen                      : string -> int
 val string_compare_fast       : string -> int -> string -> int -> int
 val string_starts_with        : string -> string -> bool
 val string_is_substring       : ?ignore_case:bool -> string -> string -> bool
+val string_first              : string -> char
+val string_last               : string -> char
+(* drop 'n' first characters *)
+val string_drop               : int -> string -> string
+(* cut 'n' last characters *)
+val string_cut                : int -> string -> string
 
 (* Combinators for options *)
 module Options : sig
