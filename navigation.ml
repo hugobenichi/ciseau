@@ -28,6 +28,8 @@ type index_entry = {
   tokens    : string list ;
 }
 
+let index_entry_path { path } = path
+
 let index_entry_compare entry1 entry2 = String.compare entry1.path entry2.path
 
 let zero_index_entry = { path = "" ; dtype = DT_UNKNOWN ; tokens = [] }
@@ -51,8 +53,7 @@ module Navigator = struct
 
   (* TODO: should directories be handled separately ? should they be included at all ? *)
   type file_index = {
-    entries       : string array ;
-    entries2      : index_entry array ;
+    entries       : index_entry array ;
     token_map     : (string, index_entry list) Hashtbl.t ;
   }
 
@@ -64,6 +65,7 @@ module Navigator = struct
   }
 
   type readdir_rec_state = {
+(* delete this *)
     path_buffer   : string Arraybuffer.t ;
     index_entry_buffer   : index_entry Arraybuffer.t ;
     visit_queue   : string Queue.t ;
@@ -136,27 +138,20 @@ module Navigator = struct
     let state = mk_readdir_rec_state path filter in
     Buffer.add_string state.buffer path ;
     readdir state [] path ;
-    let entries = Arraybuffer.to_array state.path_buffer in
-    Array.sort String.compare entries ;
-    let entries2 = Arraybuffer.to_array state.index_entry_buffer in
-    Array.sort index_entry_compare entries2 ;
+    let entries = Arraybuffer.to_array state.index_entry_buffer in
+    Array.sort index_entry_compare entries ;
     {
       entries ;
-      entries2 ;
       token_map = state.token_map ;
     }
 
-  let index_to_entries { entries } = entries
+  let index_to_entries { entries } = Array.map index_entry_path entries
 
-  let string_byte_adder byte_count path = byte_count + (slen path)
-  let string_byte_adder2 token _ byte_count = string_byte_adder byte_count token
-
-  let file_index_stats { entries ; token_map } =
-  {
+  let file_index_stats { entries ; token_map } = {
     total_entries         = alen entries ;
     total_tokens          = Hashtbl.length token_map ;
-    total_entries_length  = Array.fold_left string_byte_adder 0 entries ;
-    total_tokens_length   = Hashtbl.fold string_byte_adder2 token_map 0 ;
+    total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
+    total_tokens_length   = Hashtbl.fold (fun token _ bytecount -> bytecount + (slen token)) token_map 0 ;
   }
 
   let rec make_matcher pattern =
@@ -180,13 +175,13 @@ module Navigator = struct
       | _     ->  string_is_substring pattern
 
   (* patterns must not be empty *)
-  let find_matches { entries2 } patterns =
-    let buffer = Arraybuffer.empty "" in
+  let find_matches { entries } patterns =
+    let buffer = Arraybuffer.empty zero_index_entry in
     let matchers = patterns |> List.filter ((<>) "") |> List.map make_matcher in
-    Array.iter (fun { path ; dtype ; tokens } ->
-      if dtype = DT_REG && List.for_all (fun matcher -> List.exists matcher tokens) matchers
-        then Arraybuffer.append buffer path
-    ) entries2 ;
+    Array.iter (fun entry ->
+      if entry.dtype = DT_REG && List.for_all (fun matcher -> List.exists matcher entry.tokens) matchers
+        then Arraybuffer.append buffer entry
+    ) entries ;
     Arraybuffer.to_array buffer
 
   let start_matcher_thread file_index patterns_channel match_channel =
@@ -210,7 +205,7 @@ let print_frame framebuffer path entries input =
   let max_entry = min (alen entries) (fb_height - 1 (* header *) - 1 (* input *)) in
   Framebuffer.clear framebuffer ;
   for i = 0 to max_entry - 1 do
-    Framebuffer.put_line framebuffer ~y:(i+1) ~x:x_offset (array_get entries i)
+    Framebuffer.put_line framebuffer ~y:(i+1) ~x:x_offset (array_get entries i).path
   done ;
   Framebuffer.put_line framebuffer ~y:(fb_height-1) ~x:x_offset ("input: " ^ input) ;
   Framebuffer.put_line framebuffer ~y:0 ~x:x_offset ~len:(slen path) path ;
@@ -252,7 +247,7 @@ let navigation_test1 () =
     total_tokens_length ;
   let a1 = Sys.time () in
   let pattern = if alen Sys.argv > 2 then Sys.argv.(2) else "xfrm" in
-  Navigator.find_matches file_index [pattern] |> print_entries ;
+  Navigator.find_matches file_index [pattern] |> Array.map index_entry_path |> print_entries ;
   Printf.printf "find_time: %f\n" ((Sys.time ()) -. a1)
 
 let navigation_test2 () =
@@ -291,7 +286,7 @@ let navigation_test2 () =
     Term.terminal_set_raw () ;
     let term_dim = Term.terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
-    print_frame framebuffer path (Navigator.index_to_entries file_index) "" ;
+    print_frame framebuffer path file_index.entries "" ;
     loop framebuffer path file_index "" ;
     Term.terminal_restore ()
   with
@@ -341,7 +336,7 @@ let navigation_test3 () =
     Term.terminal_set_raw () ;
     let term_dim = Term.terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
-    print_frame framebuffer path (Navigator.index_to_entries file_index) "" ;
+    print_frame framebuffer path file_index.entries "" ;
     loop framebuffer path file_index "" [||];
     Term.terminal_restore ()
   with
