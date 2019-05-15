@@ -159,46 +159,10 @@ module Navigator = struct
     total_tokens_length   = Hashtbl.fold string_byte_adder2 token_map 0 ;
   }
 
-  let rec append_all target_dtype buffer =
-    function
-      | [] -> ()
-      | entry :: t -> begin
-          if target_dtype = entry.dtype then Arraybuffer.append buffer entry ;
-          append_all target_dtype buffer t
-        end
-
-  let find_match { entries ; token_map } pattern =
-    let buffer = Arraybuffer.empty zero_index_entry in
-    Hashtbl.iter (fun token entry_list ->
-      if string_is_substring pattern token then
-      (*
-      if Str.string_match (Str.regexp pattern) token 0 then
-      if string_starts_with pattern token then
-      *)
-        append_all DT_REG buffer entry_list
-    ) token_map ;
-    let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
-    Array.sort String.compare matches ;
-    matches
-
-  let rec refine_match entry_buffer =
-    function
-      | [] -> ()
-      | pattern :: pattern_tail ->
-          let match_pattern = string_is_substring pattern in
-          let i = ref 0 in
-          while !i < Arraybuffer.len entry_buffer do
-            let { tokens } = Arraybuffer.get entry_buffer !i in
-            if List.exists match_pattern tokens
-              then incr i
-              else Arraybuffer.del entry_buffer !i
-          done ;
-          refine_match entry_buffer pattern_tail
-
-  let rec match_pattern pattern =
+  let rec make_matcher pattern =
     match string_first pattern with
       | '!' when pattern = "!"  ->  const true
-      | '!'   ->  neg (match_pattern (string_drop 1 pattern))
+      | '!'   ->  neg (make_matcher (string_drop 1 pattern))
       | '='   ->  (=) (string_drop 1 pattern) (* TODO: only match directory *)
       | '/'   ->  string_starts_with (string_drop 1 pattern)
       | '~'   ->
@@ -215,29 +179,12 @@ module Navigator = struct
           end
       | _     ->  string_is_substring pattern
 
-  let tokens_match_all matchers tokens =
-    List.for_all (fun matcher -> List.exists matcher tokens) matchers
-
   (* patterns must not be empty *)
-  let find_multi_match { entries ; token_map } patterns =
-    let buffer = Arraybuffer.empty zero_index_entry in
-    Hashtbl.iter (fun token entry_list ->
-      if string_is_substring (List.hd patterns) token
-        then append_all DT_REG buffer entry_list
-    ) token_map ;
-    refine_match buffer (List.tl patterns) ;
-    let matches = Array.map (fun { path } -> path) (Arraybuffer.to_array buffer) in
-    Array.sort String.compare matches ;
-    matches
-
-  let find_multi_match2 { entries2 } patterns =
+  let find_matches { entries2 } patterns =
     let buffer = Arraybuffer.empty "" in
-    let matchers = patterns |> List.filter ((<>) "") |> List.map match_pattern in
+    let matchers = patterns |> List.filter ((<>) "") |> List.map make_matcher in
     Array.iter (fun { path ; dtype ; tokens } ->
-      (*
-      if dtype = DT_REG && List.for_all (fun p -> string_is_substring p path) tokens
-      *)
-      if dtype = DT_REG && tokens_match_all matchers tokens
+      if dtype = DT_REG && List.for_all (fun matcher -> List.exists matcher tokens) matchers
         then Arraybuffer.append buffer path
     ) entries2 ;
     Arraybuffer.to_array buffer
@@ -248,24 +195,10 @@ module Navigator = struct
         patterns_channel
           |> Event.receive
           |> Event.sync
-          |> find_multi_match2 file_index
+          |> find_matches file_index
           |> Event.send match_channel
           |> Event.sync
       done) ()
-
-  (*
-   * Quick performance tests seem to show that:
-   *  - find_multi_match2 is much better at 1 or 2 char pattern input
-   *  - find_multi_match is better with longer pattern inputs
-   *      - this is expected because of the shorter list of tokens to initially scan on longer patterns,
-   *        and the smaller impact of the final sort
-   *      - on small patterns that returns lots of matches, sorting dominates probably
-   *
-   *  - in find_multi_match2 doing a O(patterns x tokens) nested for loop match is more
-   *    efficient than matching tokens on the whole string (20~30% speedup)
-   *
-   *  - sorting all entries matching input on every refresh can be the most expensive op on bit match set.
-   *)
 end
 
 let print_entries = Array.iter print_stringln
@@ -300,10 +233,6 @@ let navigation_test1 () =
   let t1 = Sys.time () in
   let file_index = Navigator.mk_file_index ~filter:filter base_path in
   Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
-  (*
-  print_entries (Navigator.index_to_entries file_index) ;
-  print_newline () ;
-  *)
   print_string "insert: " ; print_float !insert_time ; print_newline () ;
   let gc_stat2 = Gc.quick_stat () in
   Printf.printf "minor_col:%d major_col:%d\n"
@@ -323,7 +252,7 @@ let navigation_test1 () =
     total_tokens_length ;
   let a1 = Sys.time () in
   let pattern = if alen Sys.argv > 2 then Sys.argv.(2) else "xfrm" in
-  Navigator.find_match file_index pattern |> print_entries ;
+  Navigator.find_matches file_index [pattern] |> print_entries ;
   Printf.printf "find_time: %f\n" ((Sys.time ()) -. a1)
 
 let navigation_test2 () =
@@ -348,12 +277,12 @@ let navigation_test2 () =
               loop framebuffer path index ""
         | Some new_pattern ->
               let t1 = Sys.time () in
-              let entries = Navigator.find_multi_match2 file_index (String.split_on_char ' '  new_pattern) in
+              let entries = Navigator.find_matches file_index (String.split_on_char ' '  new_pattern) in
               let t2 = Sys.time () in
               let delta = t2 -. t1 in
               let footer = Printf.sprintf "%s (time %f, found %d)" new_pattern delta (alen entries) in
               (*
-              let entries = Navigator.find_multi_match file_index (String.split_on_char ' '  new_pattern) in
+              let entries = Navigator.find_matches file_index (String.split_on_char ' '  new_pattern) in
               *)
               print_frame framebuffer path entries footer ;
               loop framebuffer path index new_pattern)
