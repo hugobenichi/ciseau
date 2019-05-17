@@ -51,37 +51,28 @@ module Navigator = struct
 
   type filter_fn = string -> string -> bool
 
-  (* TODO: should directories be handled separately ? should they be included at all ? *)
   type file_index = {
     entries       : index_entry array ;
-    token_map     : (string, index_entry list) Hashtbl.t ;
   }
 
   type stats = {
     total_entries         : int ;
-    total_tokens          : int ;
     total_entries_length  : int ;
-    total_tokens_length   : int ;
   }
 
-  type readdir_rec_state = {
-(* delete this *)
-    path_buffer   : string Arraybuffer.t ;
+  type readdir_state = {
     index_entry_buffer   : index_entry Arraybuffer.t ;
     visit_queue   : string Queue.t ;
-    token_map     : (string, index_entry list) Hashtbl.t ;
     filter        : string -> string -> bool ;
     buffer        : Buffer.t ;
   }
 
   let mk_readdir_rec_state path filter =
-    let path_buffer = Arraybuffer.empty "?" in
     let index_entry_buffer = Arraybuffer.empty zero_index_entry in
     let visit_queue = Queue.create () in
-    let token_map = Hashtbl.create 128 in
     let buffer = Buffer.create 1024 in
     Queue.push path visit_queue ;
-    { path_buffer ; index_entry_buffer ; visit_queue ; token_map ; filter ; buffer }
+    { index_entry_buffer ; visit_queue ; filter ; buffer }
 
   let nofilter anydir anyname = true
 
@@ -112,8 +103,6 @@ module Navigator = struct
                     Buffer.add_char state.buffer '/' ;
                     Buffer.add_string state.buffer item ;
                     let new_path = Buffer.contents state.buffer in
-                    if d_type == DT_REG then
-                      Arraybuffer.append state.path_buffer new_path ;
                     let tokens' = item :: tokens in
                     let entry = {
                       dtype     = d_type ;
@@ -121,8 +110,6 @@ module Navigator = struct
                       tokens    = tokens' ;
                     } in
                     Arraybuffer.append state.index_entry_buffer entry ;
-                    (* PERF: how to create the token -> path list cheaply without a hashtbl *)
-                    List.iter (token_index_insert state.token_map entry) tokens' ;
                     if d_type == DT_DIR then
                       readdir state tokens' new_path ;
                     Buffer.truncate state.buffer buffer_n
@@ -138,20 +125,15 @@ module Navigator = struct
     let state = mk_readdir_rec_state path filter in
     Buffer.add_string state.buffer path ;
     readdir state [] path ;
-    let entries = Arraybuffer.to_array state.index_entry_buffer in
-    Array.sort index_entry_compare entries ;
-    {
-      entries ;
-      token_map = state.token_map ;
-    }
+    let index = { entries = Arraybuffer.to_array state.index_entry_buffer } in
+    Array.sort index_entry_compare index.entries ;
+    index
 
   let index_to_entries { entries } = Array.map index_entry_path entries
 
-  let file_index_stats { entries ; token_map } = {
+  let file_index_stats { entries } = {
     total_entries         = alen entries ;
-    total_tokens          = Hashtbl.length token_map ;
     total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
-    total_tokens_length   = Hashtbl.fold (fun token _ bytecount -> bytecount + (slen token)) token_map 0 ;
   }
 
   let rec make_matcher pattern =
@@ -235,16 +217,9 @@ let navigation_test1 () =
     (gc_stat2.major_collections - gc_stat.major_collections) ;
   let {
     Navigator.total_entries         ;
-    Navigator.total_tokens          ;
     Navigator.total_entries_length  ;
-    Navigator.total_tokens_length   ;
   } = Navigator.file_index_stats file_index in
-  Printf.printf
-    "entries=%d tokens=%d entries_length=%d tokens_length=%d\n"
-    total_entries
-    total_tokens
-    total_entries_length
-    total_tokens_length ;
+  Printf.printf "entries=%d entries_length=%d\n" total_entries total_entries_length ;
   let a1 = Sys.time () in
   let pattern = if alen Sys.argv > 2 then Sys.argv.(2) else "xfrm" in
   Navigator.find_matches file_index [pattern] |> Array.map index_entry_path |> print_entries ;
@@ -275,7 +250,7 @@ let navigation_test2 () =
               let entries = Navigator.find_matches file_index (String.split_on_char ' '  new_pattern) in
               let t2 = Sys.time () in
               let delta = t2 -. t1 in
-              let footer = Printf.sprintf "%s (time %f, found %d)" new_pattern delta (alen entries) in
+              let footer = Printf.sprintf "%s (time %f, found %d, insert time %f)" new_pattern delta (alen entries) !insert_time in
               (*
               let entries = Navigator.find_matches file_index (String.split_on_char ' '  new_pattern) in
               *)
@@ -344,25 +319,5 @@ let navigation_test3 () =
           Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
           Printexc.print_backtrace stdout
 
-(* pipe output into | sort | uniq -c *)
-let index_histogram_test () =
-  let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
-  let filter anydir item = item <> ".git" in
-  let { Navigator.entries ; Navigator.token_map } = Navigator.mk_file_index ~filter:filter base_path in
-(*
-  (* token length *)
-  Hashtbl.iter (fun token entries -> Printf.printf "%d\n" (slen token)) token_map
-  (* path length *)
-  Array.iter (fun path -> Printf.printf "%d\n" (slen path)) entries
-  (* tokens per path *)
-  Array.iter (fun path -> Printf.printf "%d\n" (path |> String.split_on_char '/' |> List.length)) entries
-*)
-  (* paths per token *)
-  Hashtbl.iter (fun token entries -> Printf.printf "%d\n" (List.length entries)) token_map
-
 let navigation_test =
-  (*
-  navigation_test1
-  index_histogram_test
-  *)
   navigation_test2

@@ -10,9 +10,7 @@ module Navigator : sig
 
   type stats = {
     total_entries             : int ;
-    total_tokens              : int ;
     total_entries_length      : int ;
-    total_tokens_length       : int ;
   }
 
   val mk_file_index           : ?filter:filter_fn -> string -> file_index
