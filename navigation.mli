@@ -7,12 +7,15 @@ type filter_fn = string -> string -> bool
 type file_index
 
 type stats = {
-  total_entries             : int ;
-  total_entries_length      : int ;
+  total_entries               : int ;
+  total_entries_length        : int ;
+  gc_minor_collections        : int ;
+  gc_major_collections        : int ;
+  construction_time           : float ;
 }
 
-val mk_file_index           : ?filter:filter_fn -> string -> file_index
-val index_to_entries        : file_index -> string array
-val file_index_stats        : file_index -> stats
+val mk_file_index             : ?filter:filter_fn -> string -> file_index
+val file_index_entries        : file_index -> string array
+val file_index_stats          : file_index -> stats
 
 val navigation_test           : unit -> unit

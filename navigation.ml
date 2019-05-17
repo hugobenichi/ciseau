@@ -34,17 +34,19 @@ let index_entry_compare entry1 entry2 = String.compare entry1.path entry2.path
 
 let zero_index_entry = { path = "" ; dtype = DT_UNKNOWN ; tokens = [] }
 
-let insert_time = ref 0.0
-
 type filter_fn = string -> string -> bool
-
-type file_index = {
-  entries       : index_entry array ;
-}
 
 type stats = {
   total_entries         : int ;
   total_entries_length  : int ;
+  gc_minor_collections  : int ;
+  gc_major_collections  : int ;
+  construction_time     : float ;
+}
+
+type file_index = {
+  entries       : index_entry array ;
+  stats         : stats ;
 }
 
 type readdir_state = {
@@ -62,16 +64,6 @@ let mk_readdir_rec_state path filter =
   { index_entry_buffer ; visit_queue ; filter ; buffer }
 
 let nofilter anydir anyname = true
-
-let token_index_insert tbl entry token =
-  if slen token > 0 then (
-    insert_time -=. Sys.time () ;
-    Hashtbl.find_opt tbl token
-      |> Options.get_or []
-      |> List.cons entry
-      |> Hashtbl.replace tbl token ;
-    insert_time +=. Sys.time ()
-  )
 
 (* depth first directory walk. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
 let rec readdir state tokens path =
@@ -109,19 +101,28 @@ let rec readdir state tokens path =
   | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
 
 let mk_file_index ?filter:(filter=nofilter) path =
+  let timestamp_start = Sys.time () in
+  let gc_stats_before = Gc.quick_stat () in
   let state = mk_readdir_rec_state path filter in
   Buffer.add_string state.buffer path ;
   readdir state [] path ;
-  let index = { entries = Arraybuffer.to_array state.index_entry_buffer } in
-  Array.sort index_entry_compare index.entries ;
-  index
+  let entries = Arraybuffer.to_array state.index_entry_buffer in
+  Array.sort index_entry_compare entries ;
+  let gc_stats_after = Gc.quick_stat () in
+  let timestamp_stop = Sys.time () in
+  {
+    entries ;
+    stats = {
+      total_entries        = alen entries ;
+      total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
+      gc_minor_collections = (gc_stats_after.minor_collections - gc_stats_before.minor_collections) ;
+      gc_major_collections = (gc_stats_after.major_collections - gc_stats_before.major_collections) ;
+      construction_time    = timestamp_stop -. timestamp_start ;
+    }
+  }
 
-let index_to_entries { entries } = Array.map index_entry_path entries
-
-let file_index_stats { entries } = {
-  total_entries         = alen entries ;
-  total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
-}
+let file_index_entries { entries }  = Array.map index_entry_path entries
+let file_index_stats { stats }    = stats
 
 let rec make_matcher pattern =
   match string_first pattern with
@@ -177,24 +178,13 @@ let path_normalize path =
     else path
 
 let navigation_test1 () =
-  let gc_stat = Gc.quick_stat () in
-  let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc")
-  in
+  let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
   let filter anydir item = item <> ".git" in
   print_string base_path ; print_newline () ;
-  let t1 = Sys.time () in
   let file_index = mk_file_index ~filter:filter base_path in
-  Printf.printf "exploration done: %f\n" ((Sys.time ()) -. t1) ;
-  print_string "insert: " ; print_float !insert_time ; print_newline () ;
-  let gc_stat2 = Gc.quick_stat () in
-  Printf.printf "minor_col:%d major_col:%d\n"
-    (gc_stat2.minor_collections - gc_stat.minor_collections)
-    (gc_stat2.major_collections - gc_stat.major_collections) ;
-  let {
-    total_entries         ;
-    total_entries_length  ;
-  } = file_index_stats file_index in
-  Printf.printf "entries=%d entries_length=%d\n" total_entries total_entries_length ;
+  Printf.printf "exploration time: %f\n" file_index.stats.construction_time ;
+  Printf.printf "minor_col:%d major_col:%d\n" file_index.stats.gc_minor_collections file_index.stats.gc_major_collections ;
+  Printf.printf "entries=%d entries_length=%d\n" file_index.stats.total_entries file_index.stats.total_entries_length ;
   let a1 = Sys.time () in
   let pattern = if alen Sys.argv > 2 then Sys.argv.(2) else "xfrm" in
   find_matches file_index [pattern] |> Array.map index_entry_path |> print_entries ;
@@ -225,7 +215,7 @@ let navigation_test2 () =
               let entries = find_matches file_index (String.split_on_char ' '  new_pattern) in
               let t2 = Sys.time () in
               let delta = t2 -. t1 in
-              let footer = Printf.sprintf "%s (time %f, found %d, insert time %f)" new_pattern delta (alen entries) !insert_time in
+              let footer = Printf.sprintf "%s (time %f, found %d, insert time %f)" new_pattern delta (alen entries) file_index.stats.construction_time in
               (*
               let entries = Navigator.find_matches file_index (String.split_on_char ' '  new_pattern) in
               *)
