@@ -156,15 +156,21 @@ let find_matches { entries } patterns =
 
 let print_entries = Array.iter print_stringln
 
-let print_frame framebuffer path entries input =
+let print_frame framebuffer stats path entries input =
   let open Term in
   let x_offset = 1 in (* BUG: why do I need a +1 offset !!??!! *)
   let fb_height = (Framebuffer.framebuffer_size framebuffer).Vec.y in
-  let max_entry = min (alen entries) (fb_height - 1 (* header *) - 1 (* input *)) in
+  let max_entry = min (alen entries) (fb_height - 1 (* header *) - 1 (* stats *) - 1 (* input *)) in
   Framebuffer.clear framebuffer ;
   for i = 0 to max_entry - 1 do
     Framebuffer.put_line framebuffer ~y:(i+1) ~x:x_offset (array_get entries i).path
   done ;
+  Framebuffer.put_line framebuffer ~y:(fb_height-2) ~x:x_offset
+    (Printf.sprintf "stats: time=%f entries=%d gc_minor=%d gc_major=%d"
+      stats.construction_time
+      stats.total_entries
+      stats.gc_minor_collections
+      stats.gc_major_collections) ;
   Framebuffer.put_line framebuffer ~y:(fb_height-1) ~x:x_offset ("input: " ^ input) ;
   Framebuffer.put_line framebuffer ~y:0 ~x:x_offset ~len:(slen path) path ;
   (*
@@ -177,20 +183,7 @@ let path_normalize path =
     then String.sub path 0 last
     else path
 
-let navigation_test1 () =
-  let base_path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
-  let filter anydir item = item <> ".git" in
-  print_string base_path ; print_newline () ;
-  let file_index = mk_file_index ~filter:filter base_path in
-  Printf.printf "exploration time: %f\n" file_index.stats.construction_time ;
-  Printf.printf "minor_col:%d major_col:%d\n" file_index.stats.gc_minor_collections file_index.stats.gc_major_collections ;
-  Printf.printf "entries=%d entries_length=%d\n" file_index.stats.total_entries file_index.stats.total_entries_length ;
-  let a1 = Sys.time () in
-  let pattern = if alen Sys.argv > 2 then Sys.argv.(2) else "xfrm" in
-  find_matches file_index [pattern] |> Array.map index_entry_path |> print_entries ;
-  Printf.printf "find_time: %f\n" ((Sys.time ()) -. a1)
-
-let navigation_test2 () =
+let navigation_test () =
   let open Term in
   let path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
   let filter anydir item = item <> ".git" in
@@ -208,31 +201,25 @@ let navigation_test2 () =
         | Some same_pattern when pattern = same_pattern ->
               loop framebuffer path index pattern
         | Some "" ->
-              print_frame framebuffer path file_index.entries (Printf.sprintf " (found %d)" (alen file_index.entries));
+              print_frame framebuffer file_index.stats path file_index.entries (Printf.sprintf " (found %d)" (alen file_index.entries));
               loop framebuffer path index ""
         | Some new_pattern ->
               let t1 = Sys.time () in
               let entries = find_matches file_index (String.split_on_char ' '  new_pattern) in
               let t2 = Sys.time () in
               let delta = t2 -. t1 in
-              let footer = Printf.sprintf "%s (time %f, found %d, insert time %f)" new_pattern delta (alen entries) file_index.stats.construction_time in
-              (*
-              let entries = Navigator.find_matches file_index (String.split_on_char ' '  new_pattern) in
-              *)
-              print_frame framebuffer path entries footer ;
+              let footer = Printf.sprintf "%s (found %d, time %f)" new_pattern (alen entries) delta in
+              print_frame framebuffer file_index.stats path entries footer ;
               loop framebuffer path index new_pattern)
   in
   try
     Term.terminal_set_raw () ;
     let term_dim = Term.terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
-    print_frame framebuffer path file_index.entries "" ;
+    print_frame framebuffer file_index.stats path file_index.entries "" ;
     loop framebuffer path file_index "" ;
     Term.terminal_restore ()
   with
     e ->  Term.terminal_restore () ;
           Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
           Printexc.print_backtrace stdout
-
-let navigation_test =
-  navigation_test2
