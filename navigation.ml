@@ -45,68 +45,105 @@ type stats = {
 }
 
 type file_index = {
-  entries       : index_entry array ;
-  stats         : stats ;
+  entries               : index_entry array ;
+  stats                 : stats ;
 }
 
 type readdir_state = {
-  index_entry_buffer   : index_entry Arraybuffer.t ;
-  visit_queue   : string Queue.t ;
-  filter        : string -> string -> bool ;
-  buffer        : Buffer.t ;
+  current_path          : string ;
+  current_tokens        : string list ;
+  dirhandle             : Unix.dir_handle ;
 }
-
-let mk_readdir_rec_state path filter =
-  let index_entry_buffer = Arraybuffer.empty zero_index_entry in
-  let visit_queue = Queue.create () in
-  let buffer = Buffer.create 1024 in
-  Queue.push path visit_queue ;
-  { index_entry_buffer ; visit_queue ; filter ; buffer }
 
 let nofilter anydir anyname = true
 
-(* depth first directory walk. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
-let rec readdir state tokens path =
+let open_dir path =
   match Unix.opendir path with
-    | dir ->
-        let buffer_n = Buffer.length state.buffer in
+    | dir -> Some dir
+    | exception Unix.Unix_error (Unix.EACCES, _, _)   -> None
+    | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> None
+    | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> None
+
+(* depth first directory walk. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
+let rec readdir entries filter tokens path =
+  open_dir path
+  |> function
+    | None -> ()
+    | Some dir ->
         let go_on = ref true in
         while !go_on do
           match readdir_t dir with
             | ("", _) -> go_on := false
             | (".", _)
             | ("..", _) -> ()
-            | (item, _) when not (state.filter path item) -> ()
+            | (item, _) when not (filter path item) -> ()
             | (item, d_type) when d_type = DT_DIR || d_type = DT_REG ->
                 begin
-                  Buffer.add_char state.buffer '/' ;
-                  Buffer.add_string state.buffer item ;
-                  let new_path = Buffer.contents state.buffer in
-                  let tokens' = item :: tokens in
                   let entry = {
                     dtype     = d_type ;
-                    path      = new_path ;
-                    tokens    = tokens' ;
+                    path      = path ^ "/" ^ item ;
+                    tokens    = item :: tokens ;
                   } in
-                  Arraybuffer.append state.index_entry_buffer entry ;
+                  Arraybuffer.append entries entry ;
                   if d_type == DT_DIR then
-                    readdir state tokens' new_path ;
-                  Buffer.truncate state.buffer buffer_n
+                    readdir entries filter entry.tokens entry.path ;
                 end
             | (_, _) -> ()
       done ;
       Unix.closedir dir
-  | exception Unix.Unix_error (Unix.EACCES, _, _)   -> ()
-  | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> ()
-  | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> ()
+
+(* depth first directory walk. Tail recursive. TODO: save and return recusion state. *)
+let rec readdir_loop entries filter nodes =
+  match nodes with
+    | [] -> ()
+    | { current_path ; current_tokens ; dirhandle } :: tail_nodes ->
+      begin
+        readdir_t dirhandle
+        |> (function
+          (* exhausted dir handle *)
+          | ("", _) ->
+              Unix.closedir dirhandle ;
+              tail_nodes
+          (* filter out *)
+          | (".", _)
+          | ("..", _) -> nodes
+          | (item, _) when not (filter current_path item) -> nodes
+          (* keep *)
+          | (item, dtype) when dtype = DT_DIR || dtype = DT_REG ->
+              begin
+                let entry = {
+                  dtype     = dtype ;
+                  path      = current_path ^ "/" ^ item ;
+                  tokens    = item :: current_tokens ;
+                } in
+                Arraybuffer.append entries entry ;
+                if dtype == DT_DIR
+                then
+                  {
+                    current_path    = entry.path ;
+                    current_tokens  = entry.tokens ;
+                    dirhandle       = Unix.opendir entry.path ;
+                  } :: nodes
+                else
+                  nodes
+              end
+          | (_, _) -> nodes)
+        |> readdir_loop entries filter
+      end
 
 let mk_file_index ?filter:(filter=nofilter) path =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
-  let state = mk_readdir_rec_state path filter in
-  Buffer.add_string state.buffer path ;
-  readdir state [] path ;
-  let entries = Arraybuffer.to_array state.index_entry_buffer in
+  let entry_buffer = Arraybuffer.empty zero_index_entry in
+  (*
+  readdir entry_buffer filter [] path ;
+  *)
+  readdir_loop entry_buffer filter [{
+    current_path = path ;
+    current_tokens = [path] ;
+    dirhandle = Unix.opendir path ;
+  }] ;
+  let entries = Arraybuffer.to_array entry_buffer in
   Array.sort index_entry_compare entries ;
   let gc_stats_after = Gc.quick_stat () in
   let timestamp_stop = Sys.time () in
