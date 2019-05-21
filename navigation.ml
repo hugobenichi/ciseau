@@ -1,6 +1,8 @@
 open Util
 open Util.Arrays
 
+let kReaddirIterativeTimeout = 0.02 (* 20 ms *)
+
 type dir_type = DT_BLK       (* This is a block device. *)
               | DT_CHR       (* This is a character device. *)
               | DT_DIR       (* This is a directory. *)
@@ -44,15 +46,17 @@ type stats = {
   construction_time     : float ;
 }
 
-type file_index = {
-  entries               : index_entry array ;
-  stats                 : stats ;
-}
-
 type readdir_state = {
   current_path          : string ;
   current_tokens        : string list ;
   dirhandle             : Unix.dir_handle ;
+}
+
+type file_index = {
+  entries               : index_entry array ;
+  filter                : filter_fn ;
+  readdir_next          : readdir_state list ;
+  stats                 : stats ;
 }
 
 let nofilter anydir anyname = true
@@ -64,38 +68,12 @@ let open_dir path =
     | exception Unix.Unix_error (Unix.ENOTDIR, _, _)  -> None
     | exception Unix.Unix_error (Unix.ENOENT, _, _)   -> None
 
-(* depth first directory walk. Caveats: can stack overflow or exhaust fds for very deep hierarchies. *)
-let rec readdir entries filter tokens path =
-  open_dir path
-  |> function
-    | None -> ()
-    | Some dir ->
-        let go_on = ref true in
-        while !go_on do
-          match readdir_t dir with
-            | ("", _) -> go_on := false
-            | (".", _)
-            | ("..", _) -> ()
-            | (item, _) when not (filter path item) -> ()
-            | (item, d_type) when d_type = DT_DIR || d_type = DT_REG ->
-                begin
-                  let entry = {
-                    dtype     = d_type ;
-                    path      = path ^ "/" ^ item ;
-                    tokens    = item :: tokens ;
-                  } in
-                  Arraybuffer.append entries entry ;
-                  if d_type == DT_DIR then
-                    readdir entries filter entry.tokens entry.path ;
-                end
-            | (_, _) -> ()
-      done ;
-      Unix.closedir dir
-
 (* depth first directory walk. Tail recursive. TODO: save and return recusion state. *)
-let rec readdir_loop entries filter nodes =
+(* PERF: Sys.time is quite slower than Unix.time *)
+let rec readdir deadline entry_buffer filter nodes =
   match nodes with
-    | [] -> ()
+    | [] -> []
+    | _ when Unix.time () > deadline -> []
     | { current_path ; current_tokens ; dirhandle } :: tail_nodes ->
       begin
         readdir_t dirhandle
@@ -116,7 +94,7 @@ let rec readdir_loop entries filter nodes =
                   path      = current_path ^ "/" ^ item ;
                   tokens    = item :: current_tokens ;
                 } in
-                Arraybuffer.append entries entry ;
+                Arraybuffer.append entry_buffer entry ;
                 if dtype == DT_DIR
                 then
                   {
@@ -128,33 +106,54 @@ let rec readdir_loop entries filter nodes =
                   nodes
               end
           | (_, _) -> nodes)
-        |> readdir_loop entries filter
+        |> readdir deadline entry_buffer filter
       end
 
 let mk_file_index ?filter:(filter=nofilter) path =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
   let entry_buffer = Arraybuffer.empty zero_index_entry in
-  (*
-  readdir entry_buffer filter [] path ;
-  *)
-  readdir_loop entry_buffer filter [{
+  readdir (Unix.time() +. 5.0) entry_buffer filter [{
     current_path = path ;
     current_tokens = [path] ;
     dirhandle = Unix.opendir path ;
-  }] ;
+  }] |> ignore ;
   let entries = Arraybuffer.to_array entry_buffer in
   Array.sort index_entry_compare entries ;
   let gc_stats_after = Gc.quick_stat () in
   let timestamp_stop = Sys.time () in
   {
     entries ;
+    filter ;
+    readdir_next = [] ;
     stats = {
       total_entries        = alen entries ;
       total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
       gc_minor_collections = (gc_stats_after.minor_collections - gc_stats_before.minor_collections) ;
       gc_major_collections = (gc_stats_after.major_collections - gc_stats_before.major_collections) ;
       construction_time    = timestamp_stop -. timestamp_start ;
+    }
+  }
+
+let file_index_continue file_index =
+  let timestamp_start = Sys.time () in
+  let gc_stats_before = Gc.quick_stat () in
+  let entry_buffer = Arraybuffer.empty zero_index_entry in
+  let readdir_next' = readdir (Unix.time () +. kReaddirIterativeTimeout) entry_buffer file_index.filter file_index.readdir_next in
+  (* TODO: sort new entries, then merge old sorted entries with new sorted entries *)
+  let entries = file_index.entries in
+  let gc_stats_after = Gc.quick_stat () in
+  let timestamp_stop = Sys.time () in
+  {
+    entries = entries ;
+    filter =  file_index.filter ;
+    readdir_next = readdir_next' ;
+    stats = {
+      total_entries        = alen entries ;
+      total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
+      gc_minor_collections = file_index.stats.gc_minor_collections + (gc_stats_after.minor_collections - gc_stats_before.minor_collections) ;
+      gc_major_collections = file_index.stats.gc_major_collections + (gc_stats_after.major_collections - gc_stats_before.major_collections) ;
+      construction_time    = file_index.stats.construction_time +. timestamp_stop -. timestamp_start ;
     }
   }
 
