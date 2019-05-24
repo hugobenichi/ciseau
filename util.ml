@@ -208,6 +208,51 @@ module Arrays = struct
         end
     in
       recursive_merge_sort (Array.copy a) compare_fn a start stop
+
+
+  let array_shuffle a =
+    for i = 1 to astop a do
+        array_swap a i (Random.int i)
+    done
+
+  let assert_array_sorted compare_fn a =
+    for i = 1 to astop a do
+      if compare_fn a.(i - 1) a.(i) > 0 then fail  "not sorted"
+    done
+
+  let _ =
+    if false then
+    (* insertion sort test *)
+    for i = 0 to 100 do
+      let a = Array.init (10 + (Random.int 1000)) (fun x -> Random.int 255) in
+      array_shuffle a ;
+      subarray_insertion_sort compare a 0 (astop a) ;
+      assert_array_sorted compare a
+    done
+
+  let _ =
+    if false then
+    (* merge sort test *)
+    (* PERF: huge performance cliff from 100k to 1M ??? *)
+      let a = Array.init (10 + (Random.int 100000)) (fun x -> Random.int 255) in
+    for i = 0 to 1 do
+      array_shuffle a ;
+      subarray_sort compare a 0 (astop a) ;
+      assert_array_sorted compare a
+    done
+
+  let _ =
+    if false then
+    (* sorted array merge test *)
+    for i = 0 to 100 do
+      let a = Array.init (10 + (Random.int 1000)) (fun x -> Random.int 255) in
+      let b = Array.init ((alen a) + 10 + (Random.int 1000)) (fun x -> Random.int 255) in
+      subarray_insertion_sort compare a 0 (astop a) ;
+      subarray_insertion_sort compare b 0 (astop b) ;
+      inplace_sorted_merge compare b ((alen b) -  (alen a)) a (alen a) ;
+      assert_array_sorted compare b
+    done
+
 end
 
 module Arraybuffer = struct
