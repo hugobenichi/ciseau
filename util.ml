@@ -148,6 +148,66 @@ module Arrays = struct
 
   let array_unsafe_alloc n =
     Array.make n "" |> Obj.magic
+
+  let array_extend zero a newlen =
+    if newlen <= alen a
+    then a
+    else let a' = Array.make newlen zero in
+         Array.blit a 0 a' 0 (alen a) ;
+         a'
+
+  let inplace_sorted_merge compare_fn array1 len1 array2 len2 =
+    assert_that (len1 + len2 <= alen array1) ;
+    let rec sorted_insert compare_fn array1 array2 out =
+      function
+        | (0, 0)      ->  () (* nothing left to do *)
+        | (_, 0)      ->  () (* second array exhausted *)
+        | (0, in2)    ->  Array.blit array2 0 array1 0 in2 (* first array exhausted *)
+        | (in1, in2) when compare_fn array1.(in1) array2.(in2) < 0
+                      ->  array1.(out) <- array2.(in2) ;
+                          sorted_insert compare_fn array1 array2 (out - 1) (in1, in2 - 1)
+        | (in1, in2)  ->  array1.(out) <- array1.(in1) ;
+                          sorted_insert compare_fn array1 array2 (out - 1) (in1 - 1, in2)
+    in
+      sorted_insert compare_fn array1 array2 (len1 + len2 - 1) (len1 - 1, len2 - 1)
+
+  let rec array_sorted_merge compare_fn out offset_out array1 in1 len1 array2 in2 len2 =
+    match (len1, len2) with
+      | (0, 0)  ->  ()
+      | (_, 0)  ->  Array.blit array1 in1 out offset_out len1
+      | (0, _)  ->  Array.blit array2 in2 out offset_out len2
+      | (_, _) when compare_fn array1.(in1) array2.(in2) < 0
+                ->  out.(offset_out) <- array1.(in1) ;
+                    array_sorted_merge compare_fn out (offset_out + 1) array1 (in1 + 1) (len1 - 1) array2 in2 len2
+      | (_, _)  ->  out.(offset_out) <- array2.(in2) ;
+                    array_sorted_merge compare_fn out (offset_out + 1) array1 in1 len1 array2 (in2 + 1) (len2 - 1)
+
+  let subarray_insertion_sort compare_fn a start stop =
+    let rec find_insert compare_fn a start i j =
+      if start < j && compare_fn a.(j) a.(i) > 0 then find_insert compare_fn a start i (j - 1) else j
+    in
+    for i = start + 1 to stop do
+      let j = find_insert compare_fn a start i (i - 1) in
+      let t = a.(j) in
+      Array.blit a j a (j + 1) (i - j) ;
+      a.(i) <- t
+    done
+
+  let kInsertionThreshold = 100
+
+  let subarray_sort compare_fn a start stop =
+    let rec recursive_merge_sort buffer compare_fn a start stop =
+      if stop - start <  kInsertionThreshold
+        then subarray_insertion_sort compare_fn a start stop
+        else begin
+          let middle = (stop + start) / 2 in
+          recursive_merge_sort buffer compare_fn a start middle ;
+          recursive_merge_sort buffer compare_fn a (middle + 1) stop;
+          array_sorted_merge compare_fn buffer 0 a start (middle - start + 1) a (middle + 1) (stop - middle) ;
+          Array.blit buffer 0 a start (stop - start + 1)
+        end
+    in
+      recursive_merge_sort (Array.copy a) compare_fn a start stop
 end
 
 module Arraybuffer = struct
@@ -177,17 +237,9 @@ module Arraybuffer = struct
   let to_array { data ; next } =
     Array.sub data 0 next
 
-  let grow_array e data =
-    (* Better way to do this to avoid the initialization to 0 ? *)
-    let len = alen data in
-    let len' = max 10 (2 * len) in
-    let data' = Array.make len' e in
-    Arrays.array_blit data 0 data' 0 len ;
-    data'
-
   let append b e =
     if alen b.data <= b.next then
-      b.data <- grow_array b.zero b.data ;
+      b.data <- Arrays.array_extend b.zero b.data (max 10 (2 * b.next)) ;
     Arrays.array_set b.data b.next e ;
     b.next <- b.next + 1
 
@@ -196,6 +248,9 @@ module Arraybuffer = struct
     buffer.next <- buffer.next - 1 ;
     Arrays.array_swap buffer.data i buffer.next
 
+  let merge_insert compare_fn b a len =
+    b.data <- Arrays.array_extend b.zero b.data (b.next + len) ;
+    Arrays.inplace_sorted_merge compare_fn b.data b.next a len
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)

@@ -78,6 +78,10 @@ module Arrays : sig
   val array_swap              : 'a array -> int -> int -> unit
   val array_find              : ('a -> bool) -> 'a array -> int
   val array_unsafe_alloc      : int -> 'a array
+  val array_extend            : 'a -> 'a array -> int -> 'a array
+  val inplace_sorted_merge    :('a -> 'a -> int) -> 'a array -> int -> 'a array -> int -> unit
+  val subarray_insertion_sort : ('a -> 'a -> int) -> 'a array -> int -> int -> unit
+  val subarray_sort           : ('a -> 'a -> int) -> 'a array -> int -> int -> unit
 end
 
 (* Wraps a vanilla array with a cursor to provide a convenient append operation. Used by value. *)
@@ -90,6 +94,7 @@ module Arraybuffer : sig
   val to_array        : 'a t -> 'a array
   val append          : 'a t -> 'a -> unit
   val del             : 'a t -> int -> unit
+  val merge_insert    : ('a -> 'a -> int) -> 'a t -> 'a array -> int -> unit
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)
