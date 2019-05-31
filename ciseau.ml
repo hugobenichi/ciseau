@@ -622,7 +622,7 @@ end = struct
     in
     let ch = open_in f in
     try
-      let r = loop (Arraybuffer.reserve 32 "") ch
+      let r = loop (Arraybuffer.mk_arraybuffer 32 "") ch
                 |> Arraybuffer.to_array
       in
         close_in ch ;

@@ -88,14 +88,16 @@ end
 (* Wraps a vanilla array with a cursor to provide a convenient append operation. Used by value. *)
 module Arraybuffer : sig
   type 'a t
-  val len             : 'a t -> int
-  val get             : 'a t -> int -> 'a
-  val empty           : 'a -> 'a t
-  val reserve         : int -> 'a -> 'a t
-  val to_array        : 'a t -> 'a array
-  val append          : 'a t -> 'a -> unit
-  val del             : 'a t -> int -> unit
-  val merge_insert    : ('a -> 'a -> int) -> 'a t -> 'a array -> int -> unit
+  val len                     : 'a t -> int
+  val get                     : 'a t -> int -> 'a
+  val mk_empty_arraybuffer    : 'a -> 'a t
+  val mk_arraybuffer          : int -> 'a -> 'a t
+  val to_array                : 'a t -> 'a array
+  val reserve                 : 'a t -> int -> unit
+  val append                  : 'a t -> 'a -> unit
+  val del                     : 'a t -> int -> unit
+  val sort                    : 'a t -> ('a -> 'a -> int) -> unit
+  val merge_insert            : 'a t -> ('a -> 'a -> int) -> 'a array -> unit
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)

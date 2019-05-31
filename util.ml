@@ -129,12 +129,15 @@ module Arrays = struct
     array_blit a_in 0 a_out 0 l ;
     a_out
 
-  let array_swap a i j =
-    check_bounds i (alen a) ;
-    check_bounds j (alen a) ;
+  let swap a i j =
     let t = a.(i) in
     a.(i) <- a.(j) ;
     a.(j) <- t
+
+  let array_swap a i j =
+    check_bounds i (alen a) ;
+    check_bounds j (alen a) ;
+    swap a i j
 
   let array_find fn a =
     let rec loop fn a i =
@@ -183,14 +186,17 @@ module Arrays = struct
                     array_sorted_merge compare_fn out (offset_out + 1) array1 in1 len1 array2 (in2 + 1) (len2 - 1)
 
   let subarray_insertion_sort compare_fn a start stop =
-    let rec find_insert compare_fn a start i j =
-      if start < j && compare_fn a.(j) a.(i) > 0 then find_insert compare_fn a start i (j - 1) else j
+    let rec insert_back compare_fn a start i =
+      check_bounds i (alen a) ;
+      assert_that (0 <= i) ;
+      if start < i && compare_fn a.(i - 1) a.(i) > 0 then
+        begin
+          swap a (i - 1) i ;
+          insert_back compare_fn a start (i - 1)
+        end
     in
     for i = start + 1 to stop do
-      let j = find_insert compare_fn a start i (i - 1) in
-      let t = a.(j) in
-      Array.blit a j a (j + 1) (i - j) ;
-      a.(i) <- t
+      insert_back compare_fn a start i
     done
 
   let kInsertionThreshold = 100
@@ -219,6 +225,15 @@ module Arrays = struct
     for i = 1 to astop a do
       if compare_fn a.(i - 1) a.(i) > 0 then fail  "not sorted"
     done
+
+  let _ =
+    if false then
+    let a = [| 1 ; 2 ; 3 ; 4 ; 5 ; 6 ; 7 ; 8 ; 9 |] in
+    let b = Array.copy a in
+    array_shuffle b ;
+    subarray_insertion_sort compare b 0 (astop b) ;
+    if a <> b then
+      Printf.printf "%s != %s\n" (array_to_string string_of_int a) (array_to_string string_of_int b)
 
   let _ =
     if false then
@@ -267,17 +282,21 @@ module Arraybuffer = struct
 
   let get { data } index = Arrays.array_get data index
 
-  let empty zero_elem = {
+  let mk_empty_arraybuffer zero_elem = {
     data = [||] ;
     next = 0 ;
     zero = zero_elem ;
   }
 
-  let reserve n zero_elem = {
+  let mk_arraybuffer n zero_elem = {
     data = Array.make n zero_elem ;
     next = 0 ;
     zero = zero_elem ;
   }
+
+  let reserve b n =
+    if alen b.data <= n then
+      b.data <- Arrays.array_extend b.zero b.data n
 
   let to_array { data ; next } =
     Array.sub data 0 next
@@ -293,9 +312,15 @@ module Arraybuffer = struct
     buffer.next <- buffer.next - 1 ;
     Arrays.array_swap buffer.data i buffer.next
 
-  let merge_insert compare_fn b a len =
-    b.data <- Arrays.array_extend b.zero b.data (b.next + len) ;
-    Arrays.inplace_sorted_merge compare_fn b.data b.next a len
+  let sort { data ; next } compare_fn =
+    Arrays.subarray_sort compare_fn data 0 next
+
+  let merge_insert b compare_fn a =
+    if alen a > 0 then
+      begin
+        reserve b (b.next + (alen a)) ;
+        Arrays.inplace_sorted_merge compare_fn b.data b.next a (alen a)
+      end
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)

@@ -112,7 +112,7 @@ let rec readdir deadline entry_buffer filter nodes =
 let mk_file_index ?filter:(filter=nofilter) path =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
-  let entry_buffer = Arraybuffer.empty zero_index_entry in
+  let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
   readdir (Unix.time() +. 5.0) entry_buffer filter [{
     current_path = path ;
     current_tokens = [path] ;
@@ -128,29 +128,48 @@ let mk_file_index ?filter:(filter=nofilter) path =
     readdir_next = [] ;
     stats = {
       total_entries        = alen entries ;
-      total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
+      total_entries_length = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
       gc_minor_collections = (gc_stats_after.minor_collections - gc_stats_before.minor_collections) ;
       gc_major_collections = (gc_stats_after.major_collections - gc_stats_before.major_collections) ;
       construction_time    = timestamp_stop -. timestamp_start ;
     }
   }
 
+let mk_file_index_empty ?filter:(filter=nofilter) path =
+  {
+    entries = [||] ;
+    filter ;
+    readdir_next = [{
+      current_path = path ;
+      current_tokens = [path] ;
+      dirhandle = Unix.opendir path ;
+    }] ;
+    stats = {
+      total_entries        = 0 ;
+      total_entries_length = 0 ;
+      gc_minor_collections = 0 ;
+      gc_major_collections = 0 ;
+      construction_time    = 0. ;
+    }
+  }
+
 let file_index_continue file_index =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
-  let entry_buffer = Arraybuffer.empty zero_index_entry in
+  let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
   let readdir_next' = readdir (Unix.time () +. kReaddirIterativeTimeout) entry_buffer file_index.filter file_index.readdir_next in
-  (* TODO: sort new entries, then merge old sorted entries with new sorted entries *)
-  let entries = file_index.entries in
+  Arraybuffer.sort entry_buffer index_entry_compare ;
+  Arraybuffer.merge_insert entry_buffer index_entry_compare file_index.entries ;
+  let entries' = Arraybuffer.to_array entry_buffer in
   let gc_stats_after = Gc.quick_stat () in
   let timestamp_stop = Sys.time () in
   {
-    entries = entries ;
+    entries = entries' ;
     filter =  file_index.filter ;
     readdir_next = readdir_next' ;
     stats = {
-      total_entries        = alen entries ;
-      total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
+      total_entries        = alen entries' ;
+      total_entries_length  = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries' ;
       gc_minor_collections = file_index.stats.gc_minor_collections + (gc_stats_after.minor_collections - gc_stats_before.minor_collections) ;
       gc_major_collections = file_index.stats.gc_major_collections + (gc_stats_after.major_collections - gc_stats_before.major_collections) ;
       construction_time    = file_index.stats.construction_time +. timestamp_stop -. timestamp_start ;
@@ -182,7 +201,7 @@ let rec make_matcher pattern =
 
 (* patterns must not be empty *)
 let find_matches { entries } patterns =
-  let buffer = Arraybuffer.empty zero_index_entry in
+  let buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
   let matchers = patterns |> List.filter ((<>) "") |> List.map make_matcher in
   Array.iter (fun entry ->
     if entry.dtype = DT_REG && List.for_all (fun matcher -> List.exists matcher entry.tokens) matchers
@@ -209,8 +228,6 @@ let print_frame framebuffer stats path entries input =
       stats.gc_major_collections) ;
   Framebuffer.put_line framebuffer ~y:(fb_height-1) ~x:x_offset ("input: " ^ input) ;
   Framebuffer.put_line framebuffer ~y:0 ~x:x_offset ~len:(slen path) path ;
-  (*
-  *)
   Framebuffer.render framebuffer
 
 let path_normalize path =
@@ -223,7 +240,14 @@ let navigation_test () =
   let open Term in
   let path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
   let filter anydir item = item <> ".git" in
+  (*
   let file_index = mk_file_index ~filter:filter path in
+  *)
+  let file_index = mk_file_index_empty ~filter:filter path |> file_index_continue in
+  (*
+  print_entries (file_index_entries file_index) ;
+  if true then exit 0 ;
+  *)
   let next_key = Keys.make_next_key_fn () in
   let rec loop framebuffer path index pattern =
     next_key ()
