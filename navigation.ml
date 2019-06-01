@@ -153,11 +153,11 @@ let mk_file_index_empty ?filter:(filter=nofilter) path =
     }
   }
 
-let file_index_continue file_index =
+let file_index_continue ?timeout:(timeout=kReaddirIterativeTimeout) file_index =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
   let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
-  let readdir_next' = readdir (Unix.time () +. kReaddirIterativeTimeout) entry_buffer file_index.filter file_index.readdir_next in
+  let readdir_next' = readdir (Unix.time () +. timeout) entry_buffer file_index.filter file_index.readdir_next in
   Arraybuffer.sort entry_buffer index_entry_compare ;
   Arraybuffer.merge_insert entry_buffer index_entry_compare file_index.entries ;
   let entries' = Arraybuffer.to_array entry_buffer in
@@ -240,9 +240,6 @@ let navigation_test () =
   let open Term in
   let path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
   let filter anydir item = item <> ".git" in
-  (*
-  let file_index = mk_file_index ~filter:filter path in
-  *)
   let file_index = mk_file_index_empty ~filter:filter path |> file_index_continue in
   (*
   print_entries (file_index_entries file_index) ;

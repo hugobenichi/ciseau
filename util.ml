@@ -159,7 +159,7 @@ module Arrays = struct
          Array.blit a 0 a' 0 (alen a) ;
          a'
 
-  let inplace_sorted_merge compare_fn array1 len1 array2 len2 =
+  let inplace_sorted_merge compare_fn ~array1:array1 ~len1:len1 ~array2:array2 ~len2:len2 =
     assert_that (len1 + len2 <= alen array1) ;
     let rec sorted_insert compare_fn array1 array2 out =
       function
@@ -185,36 +185,33 @@ module Arrays = struct
       | (_, _)  ->  out.(offset_out) <- array2.(in2) ;
                     array_sorted_merge compare_fn out (offset_out + 1) array1 in1 len1 array2 (in2 + 1) (len2 - 1)
 
-  let subarray_insertion_sort compare_fn a start stop =
+  let subarray_insertion_sort compare_fn a ?start:(start=0) ~len:len =
     let rec insert_back compare_fn a start i =
-      check_bounds i (alen a) ;
-      assert_that (0 <= i) ;
       if start < i && compare_fn a.(i - 1) a.(i) > 0 then
         begin
           swap a (i - 1) i ;
           insert_back compare_fn a start (i - 1)
         end
     in
-    for i = start + 1 to stop do
+    for i = start + 1 to len - 1 do
       insert_back compare_fn a start i
     done
 
   let kInsertionThreshold = 100
 
-  let subarray_sort compare_fn a start stop =
-    let rec recursive_merge_sort buffer compare_fn a start stop =
-      if stop - start <  kInsertionThreshold
-        then subarray_insertion_sort compare_fn a start stop
+  let subarray_sort compare_fn a ?start:(start=0) ~len:len =
+    let rec recursive_merge_sort buffer compare_fn a start len =
+      if len <  kInsertionThreshold
+        then subarray_insertion_sort compare_fn a ~start:start ~len:len
         else begin
-          let middle = (stop + start) / 2 in
-          recursive_merge_sort buffer compare_fn a start middle ;
-          recursive_merge_sort buffer compare_fn a (middle + 1) stop;
-          array_sorted_merge compare_fn buffer 0 a start (middle - start + 1) a (middle + 1) (stop - middle) ;
-          Array.blit buffer 0 a start (stop - start + 1)
+          let len' = len / 2 in
+          recursive_merge_sort buffer compare_fn a start len' ;
+          recursive_merge_sort buffer compare_fn a (start + len') (len - len') ;
+          array_sorted_merge compare_fn buffer 0 a start len' a (start + len') (len - len') ;
+          Array.blit buffer 0 a start len
         end
     in
-      recursive_merge_sort (Array.copy a) compare_fn a start stop
-
+      recursive_merge_sort (Array.copy a) compare_fn a start len
 
   let array_shuffle a =
     for i = 1 to astop a do
@@ -231,7 +228,7 @@ module Arrays = struct
     let a = [| 1 ; 2 ; 3 ; 4 ; 5 ; 6 ; 7 ; 8 ; 9 |] in
     let b = Array.copy a in
     array_shuffle b ;
-    subarray_insertion_sort compare b 0 (astop b) ;
+    subarray_insertion_sort compare b ~start:0 ~len:(alen b) ;
     if a <> b then
       Printf.printf "%s != %s\n" (array_to_string string_of_int a) (array_to_string string_of_int b)
 
@@ -241,7 +238,7 @@ module Arrays = struct
     for i = 0 to 100 do
       let a = Array.init (10 + (Random.int 1000)) (fun x -> Random.int 255) in
       array_shuffle a ;
-      subarray_insertion_sort compare a 0 (astop a) ;
+      subarray_insertion_sort compare a ~start:0 ~len:(alen a) ;
       assert_array_sorted compare a
     done
 
@@ -252,7 +249,7 @@ module Arrays = struct
       let a = Array.init (10 + (Random.int 100000)) (fun x -> Random.int 255) in
     for i = 0 to 1 do
       array_shuffle a ;
-      subarray_sort compare a 0 (astop a) ;
+      subarray_sort compare a ~start:0 ~len:(alen a) ;
       assert_array_sorted compare a
     done
 
@@ -262,9 +259,9 @@ module Arrays = struct
     for i = 0 to 100 do
       let a = Array.init (10 + (Random.int 1000)) (fun x -> Random.int 255) in
       let b = Array.init ((alen a) + 10 + (Random.int 1000)) (fun x -> Random.int 255) in
-      subarray_insertion_sort compare a 0 (astop a) ;
-      subarray_insertion_sort compare b 0 (astop b) ;
-      inplace_sorted_merge compare b ((alen b) -  (alen a)) a (alen a) ;
+      subarray_insertion_sort compare a ~start:0 ~len:(alen a) ;
+      subarray_insertion_sort compare b ~start:0 ~len:(alen b) ;
+      inplace_sorted_merge compare ~array1:b ~len1:((alen b) -  (alen a)) ~array2:a ~len2:(alen a) ;
       assert_array_sorted compare b
     done
 
@@ -313,13 +310,13 @@ module Arraybuffer = struct
     Arrays.array_swap buffer.data i buffer.next
 
   let sort { data ; next } compare_fn =
-    Arrays.subarray_sort compare_fn data 0 next
+    Arrays.subarray_sort compare_fn data ~start:0 ~len:next
 
   let merge_insert b compare_fn a =
     if alen a > 0 then
       begin
         reserve b (b.next + (alen a)) ;
-        Arrays.inplace_sorted_merge compare_fn b.data b.next a (alen a)
+        Arrays.inplace_sorted_merge compare_fn ~array1:b.data ~len1:b.next ~array2:a ~len2:(alen a)
       end
 end
 

@@ -79,9 +79,9 @@ module Arrays : sig
   val array_find              : ('a -> bool) -> 'a array -> int
   val array_unsafe_alloc      : int -> 'a array
   val array_extend            : 'a -> 'a array -> int -> 'a array
-  val inplace_sorted_merge    : ('a -> 'a -> int) -> 'a array -> int -> 'a array -> int -> unit
-  val subarray_insertion_sort : ('a -> 'a -> int) -> 'a array -> int -> int -> unit
-  val subarray_sort           : ('a -> 'a -> int) -> 'a array -> int -> int -> unit
+  (* TODO: make len argument optional *)
+  val subarray_insertion_sort : ('a -> 'a -> int) -> 'a array -> ?start:int -> len:int -> unit
+  val subarray_sort           : ('a -> 'a -> int) -> 'a array -> ?start:int -> len:int -> unit
   val assert_array_sorted     : ('a -> 'a -> int) -> 'a array -> unit
 end
 
