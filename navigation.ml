@@ -24,6 +24,13 @@ let dir_type_name =
     | DT_SOCK     -> "DT_SOCK"
     | DT_UNKNOWN  -> "DT_UNKNOWN"
 
+type file_index_entry =
+  | File of string
+  | Dir of string
+  | UnixSocket of string
+  | Link of string * string
+
+(* TODO: 1) replace path by file_index_entry, 2) rename to entry_info *)
 type index_entry = {
   dtype     : dir_type ;
   path      : string ;
@@ -109,14 +116,14 @@ let rec readdir deadline entry_buffer filter nodes =
         |> readdir deadline entry_buffer filter
       end
 
-let mk_file_index ?filter:(filter=nofilter) path =
+let mk_file_index ?filter:(filter=nofilter) ~basedir:basedir =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
   let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
   readdir (Unix.time() +. 5.0) entry_buffer filter [{
-    current_path = path ;
-    current_tokens = [path] ;
-    dirhandle = Unix.opendir path ;
+    current_path = basedir ;
+    current_tokens = [basedir] ;
+    dirhandle = Unix.opendir basedir ;
   }] |> ignore ;
   let entries = Arraybuffer.to_array entry_buffer in
   Array.sort index_entry_compare entries ;
@@ -135,14 +142,14 @@ let mk_file_index ?filter:(filter=nofilter) path =
     }
   }
 
-let mk_file_index_empty ?filter:(filter=nofilter) path =
+let mk_file_index_empty ?filter:(filter=nofilter) ~basedir:basedir =
   {
     entries = [||] ;
     filter ;
     readdir_next = [{
-      current_path = path ;
-      current_tokens = [path] ;
-      dirhandle = Unix.opendir path ;
+      current_path = basedir ;
+      current_tokens = [basedir] ;
+      dirhandle = Unix.opendir basedir ;
     }] ;
     stats = {
       total_entries        = 0 ;
@@ -153,7 +160,9 @@ let mk_file_index_empty ?filter:(filter=nofilter) path =
     }
   }
 
-let file_index_continue ?timeout:(timeout=kReaddirIterativeTimeout) file_index =
+let file_index_has_pending { readdir_next } = (readdir_next <> [])
+
+let file_index_continue ?duration:(timeout=kReaddirIterativeTimeout) file_index =
   let timestamp_start = Sys.time () in
   let gc_stats_before = Gc.quick_stat () in
   let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
@@ -240,7 +249,7 @@ let navigation_test () =
   let open Term in
   let path = path_normalize (if alen Sys.argv > 1 then Sys.argv.(1) else "/etc") in
   let filter anydir item = item <> ".git" in
-  let file_index = mk_file_index_empty ~filter:filter path |> file_index_continue in
+  let file_index = mk_file_index_empty ~filter:filter ~basedir:path |> file_index_continue in
   (*
   print_entries (file_index_entries file_index) ;
   if true then exit 0 ;
