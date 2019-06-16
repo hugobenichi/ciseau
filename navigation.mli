@@ -20,10 +20,9 @@ type stats = {
   construction_time           : float ;
 }
 
-val mk_file_index             : ?filter:filter_fn -> basedir:string -> file_index
 val mk_file_index_empty       : ?filter:filter_fn -> basedir:string -> file_index
 val file_index_continue       : ?duration:float -> file_index -> file_index
-val file_index_has_pending    : file_index -> bool
+val file_index_is_complete    : file_index -> bool
 (* TODO:  1) consider returning a thing that can be iterated instead of an array
           2) return something better than strings
 *)

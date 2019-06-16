@@ -13,17 +13,6 @@ type dir_type = DT_BLK       (* This is a block device. *)
               | DT_UNKNOWN   (* The file type could not be determined. *)
 external readdir_t : Unix.dir_handle -> string * dir_type = "readdir_t"
 
-let dir_type_name =
-  function
-    | DT_BLK      -> "DT_BLK"
-    | DT_CHR      -> "DT_CHR"
-    | DT_DIR      -> "DT_DIR"
-    | DT_FIFO     -> "DT_FIFO"
-    | DT_LNK      -> "DT_LNK"
-    | DT_REG      -> "DT_REG"
-    | DT_SOCK     -> "DT_SOCK"
-    | DT_UNKNOWN  -> "DT_UNKNOWN"
-
 type file_index_entry =
   | File of string
   | Dir of string
@@ -116,32 +105,6 @@ let rec readdir deadline entry_buffer filter nodes =
         |> readdir deadline entry_buffer filter
       end
 
-let mk_file_index ?filter:(filter=nofilter) ~basedir:basedir =
-  let timestamp_start = Sys.time () in
-  let gc_stats_before = Gc.quick_stat () in
-  let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
-  readdir (Unix.time() +. 5.0) entry_buffer filter [{
-    current_path = basedir ;
-    current_tokens = [basedir] ;
-    dirhandle = Unix.opendir basedir ;
-  }] |> ignore ;
-  let entries = Arraybuffer.to_array entry_buffer in
-  Array.sort index_entry_compare entries ;
-  let gc_stats_after = Gc.quick_stat () in
-  let timestamp_stop = Sys.time () in
-  {
-    entries ;
-    filter ;
-    readdir_next = [] ;
-    stats = {
-      total_entries        = alen entries ;
-      total_entries_length = Array.fold_left (fun bytecount { path } -> bytecount + (slen path)) 0 entries ;
-      gc_minor_collections = (gc_stats_after.minor_collections - gc_stats_before.minor_collections) ;
-      gc_major_collections = (gc_stats_after.major_collections - gc_stats_before.major_collections) ;
-      construction_time    = timestamp_stop -. timestamp_start ;
-    }
-  }
-
 let mk_file_index_empty ?filter:(filter=nofilter) ~basedir:basedir =
   {
     entries = [||] ;
@@ -160,7 +123,10 @@ let mk_file_index_empty ?filter:(filter=nofilter) ~basedir:basedir =
     }
   }
 
-let file_index_has_pending { readdir_next } = (readdir_next <> [])
+let file_index_is_complete =
+  function
+    | { readdir_next = [] } -> true
+    | _                     -> false
 
 let file_index_continue ?duration:(timeout=kReaddirIterativeTimeout) file_index =
   let timestamp_start = Sys.time () in
@@ -274,7 +240,7 @@ let navigation_test () =
               let entries = find_matches file_index (String.split_on_char ' '  new_pattern) in
               let t2 = Sys.time () in
               let delta = t2 -. t1 in
-              let footer = Printf.sprintf "%s (found %d, time %f)" new_pattern (alen entries) delta in
+              let footer = Printf.sprintf "%s (%d, %.3fs)" new_pattern (alen entries) delta in
               print_frame framebuffer file_index.stats path entries footer ;
               loop framebuffer path index new_pattern)
   in
