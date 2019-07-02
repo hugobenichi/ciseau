@@ -22,12 +22,12 @@ function ciseau_compile {
   cd $CISEAU_BUILD_DIR
 
   # Build native
-  gcc -v -c -o ioctl.o ioctl.c -I `ocamlc -where`
+  gcc -v -c -o native.o native.c -I `ocamlc -where`
 
   # Build ocaml
   # How to order files correctly ?
   #ocamlopt -p -g -inline 0 str.cmxa unix.cmxa -o *.mli *.ml *.o
-  ocamlopt -I +threads -p -g -inline 0 str.cmxa unix.cmxa threads.cmxa -o $CISEAU_OUT ioctl.o util.ml{i,} term.ml{i,} config.ml{i,} navigation.ml{i,} motion.ml{i,} ciseau.ml
+  ocamlopt -I +threads -p -g -inline 0 str.cmxa unix.cmxa threads.cmxa -o $CISEAU_OUT native.o util.ml{i,} term.ml{i,} config.ml{i,} navigation.ml{i,} motion.ml{i,} ciseau.ml
 
   cd ..
 }
