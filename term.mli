@@ -8,16 +8,21 @@ val terminal_dimensions       : unit -> Util.Vec.vec2
 module Keys : sig
   open Util
 
+  type click =
+      Left
+    | Right
+    | Middle
+
   type key =
       Key of char
-    | Click of Vec.vec2         (* esc[M + mod + mouse position *)
-    | ClickRelease of Vec.vec2  (* esc[M + mod + mouse position *)
-    | Escape_Z                  (* esc[Z: shift + tab *)
-    | ArrowUp                   (* esc[A *)
-    | ArrowDown                 (* esc[B *)
-    | ArrowRight                (* esc[C *)
-    | ArrowLeft                 (* esc[D *)
-    | EINTR                     (* usually happen when terminal is resized *)
+    | Click of Vec.vec2 * click
+    | ClickRelease of Vec.vec2
+    | Escape_Z
+    | ArrowUp
+    | ArrowDown
+    | ArrowRight
+    | ArrowLeft
+    | EINTR
 
   val descr_of                : key -> string
   val make_next_key_fn        : unit -> unit -> key  (* created unit -> key function is not reentrant and keeps state between inputs *)

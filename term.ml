@@ -1,13 +1,10 @@
 open Util
 
-
-let kDRAW_SCREEN  = true
+let kDRAW_SCREEN = true
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
-
-let terminal_dimensions () =
-  let (term_rows, term_cols) = get_terminal_size () in
-  Vec.mk_v2 term_cols term_rows
+let terminal_dimensions  =
+  get_terminal_size >> apply_tup2 Vec.mk_v2
 
 let stdout_write_string s =
   let l = slen s in
@@ -22,8 +19,8 @@ let terminal_restore () =
   stdout_write_string "\027[?1000l" ; (* mouse event off *)
   stdout_write_string "\027[?1002l" ; (* mouse tracking off *)
   stdout_write_string "\027[?1004l" ; (* switch focus event off *)
-  stdout_write_string "\027[?47l" ; (* switch back to main screen *)
-  stdout_write_string "\027[u" (* cursor restore *)
+  stdout_write_string "\027[?47l" ;   (* switch back to main screen *)
+  stdout_write_string "\027[u"        (* cursor restore *)
 
 let terminal_set_raw () =
   let want = Unix.tcgetattr Unix.stdin in
@@ -43,15 +40,20 @@ let terminal_set_raw () =
   stdout_write_string "\027[?47h" ;   (* switch offscreen *)
   stdout_write_string "\027[?1000h" ; (* mouse event on *)
   stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
-  (* stdout_write_string "\027[?1004h" ; *) (* TODO: enable, switch focus event off *)
+  (* stdout_write_string "\027[?1004h" ; *) (* switch focus event off *)
   Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
 
 module Keys = struct
   open Util.Vec
 
+  type click =
+      Left
+    | Right
+    | Middle
+
   type key =
       Key of char
-    | Click of vec2         (* esc[M + mod + mouse position *)
+    | Click of vec2 * click (* esc[M + mod + mouse position *)
     | ClickRelease of vec2  (* esc[M + mod + mouse position *)
     | Escape_Z              (* esc[Z: shift + tab *)
     | ArrowUp               (* esc[A *)
@@ -62,50 +64,52 @@ module Keys = struct
 
   let descr_of =
     function
-      | Click {x ; y}         ->  Printf.sprintf "Click(%d,%d)" x y
-      | ClickRelease {x ; y}  ->  Printf.sprintf "ClickRelease(%d,%d)" x y
-      | Escape_Z              -> "Escape_z"
-      | ArrowUp               -> "ArrowUp"
-      | ArrowDown             -> "ArrowDown"
-      | ArrowRight            -> "ArrowRight"
-      | ArrowLeft             -> "ArrowLeft"
-      | EINTR                 -> "Interrupt"
-      | Key '\x00'            -> "^@"
-      | Key '\x01'            -> "^a"
-      | Key '\x02'            -> "^b"
-      | Key '\x03'            -> "^c"
-      | Key '\x04'            -> "^d"
-      | Key '\x05'            -> "^e"
-      | Key '\x06'            -> "^f"
-      | Key '\x07'            -> "^g"
-      | Key '\x08'            -> "^h"
-      | Key '\x09'            -> "^i"
-      | Key '\x0a'            -> "^j"
-      | Key '\x0b'            -> "^k"
-      | Key '\x0c'            -> "^l"
-      | Key '\x0d'            -> "^m"
-      | Key '\x0e'            -> "^n"
-      | Key '\x0f'            -> "^o"
-      | Key '\x10'            -> "^p"
-      | Key '\x11'            -> "^q"
-      | Key '\x12'            -> "^r"
-      | Key '\x13'            -> "^s"
-      | Key '\x14'            -> "^t"
-      | Key '\x15'            -> "^u"
-      | Key '\x16'            -> "^v"
-      | Key '\x17'            -> "^w"
-      | Key '\x18'            -> "^x"
-      | Key '\x19'            -> "^y"
-      | Key '\x1a'            -> "^z"
-      | Key '\x1b'            -> "^["
-      | Key '\x1c'            -> "^\\"
-      | Key '\x1d'            -> "^]"
-      | Key '\x1e'            -> "^^"
-      | Key '\x1f'            -> "^_"
-      | Key '\x20'            -> "space"
-      | Key '\x7f'            -> "del"
-      | Key '\''              -> "'"
-      | Key k                 ->  Char.escaped k
+      | Click ({x ; y}, Left)           ->  Printf.sprintf "ClickLeft(%d,%d)" x y
+      | Click ({x ; y}, Right)          ->  Printf.sprintf "ClickRight(%d,%d)" x y
+      | Click ({x ; y}, Middle)         ->  Printf.sprintf "ClickMiddle(%d,%d)" x y
+      | ClickRelease {x ; y}            ->  Printf.sprintf "ClickRelease(%d,%d)" x y
+      | Escape_Z                        -> "Escape_z"
+      | ArrowUp                         -> "ArrowUp"
+      | ArrowDown                       -> "ArrowDown"
+      | ArrowRight                      -> "ArrowRight"
+      | ArrowLeft                       -> "ArrowLeft"
+      | EINTR                           -> "Interrupt"
+      | Key '\x00'                      -> "^@"
+      | Key '\x01'                      -> "^a"
+      | Key '\x02'                      -> "^b"
+      | Key '\x03'                      -> "^c"
+      | Key '\x04'                      -> "^d"
+      | Key '\x05'                      -> "^e"
+      | Key '\x06'                      -> "^f"
+      | Key '\x07'                      -> "^g"
+      | Key '\x08'                      -> "^h"
+      | Key '\x09'                      -> "^i"
+      | Key '\x0a'                      -> "^j"
+      | Key '\x0b'                      -> "^k"
+      | Key '\x0c'                      -> "^l"
+      | Key '\x0d'                      -> "^m"
+      | Key '\x0e'                      -> "^n"
+      | Key '\x0f'                      -> "^o"
+      | Key '\x10'                      -> "^p"
+      | Key '\x11'                      -> "^q"
+      | Key '\x12'                      -> "^r"
+      | Key '\x13'                      -> "^s"
+      | Key '\x14'                      -> "^t"
+      | Key '\x15'                      -> "^u"
+      | Key '\x16'                      -> "^v"
+      | Key '\x17'                      -> "^w"
+      | Key '\x18'                      -> "^x"
+      | Key '\x19'                      -> "^y"
+      | Key '\x1a'                      -> "^z"
+      | Key '\x1b'                      -> "^["
+      | Key '\x1c'                      -> "^\\"
+      | Key '\x1d'                      -> "^]"
+      | Key '\x1e'                      -> "^^"
+      | Key '\x1f'                      -> "^_"
+      | Key '\x20'                      -> "space"
+      | Key '\x7f'                      -> "del"
+      | Key '\''                        -> "'"
+      | Key k                           ->  Char.escaped k
 
   (* Terminal input needs to be read 3 bytes at a time to detect escape sequences *)
   let input_buffer_len = 3
@@ -162,10 +166,9 @@ module Keys = struct
                 |> Char.code
                 |> (land) 3 (* Ignore modifier keys *)
                 |> (function
-                  (* TODO: distinguish between left/middle/right buttons *)
-                  | 0
-                  | 1
-                  | 2   ->  Click (mk_v2 cx cy)
+                  | 0   ->  Click (mk_v2 cx cy, Left)
+                  | 1   ->  Click (mk_v2 cx cy, Middle)
+                  | 2   ->  Click (mk_v2 cx cy, Right)
                   | 3   ->  ClickRelease (mk_v2 cx cy)
                   | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
       (* This happens when typing CTRL + [ followed by another key *)

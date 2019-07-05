@@ -10,6 +10,8 @@ val (>>)                      : ('a -> 'b) -> ('b -> 'c) -> 'a -> 'c
 val psi                       : ('b -> 'b -> 'c) -> ('a -> 'b) -> 'a -> 'a -> 'c
 (* Inverse a predicate *)
 val neg                       : ('a -> bool) -> 'a -> bool
+(* Apply a 2-tupple to a function of 2 arguments *)
+val apply_tup2                : ('a -> 'b -> 'c) -> 'a * 'b -> 'c
 
 (* Int ref increment/decrement *)
 val (+=)                      : int ref -> int -> unit

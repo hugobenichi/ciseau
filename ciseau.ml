@@ -1368,7 +1368,7 @@ module Ciseau = struct
     let open Keys in
     function
       | Key c               -> array_get command_key_table (Char.code c)
-      | Click pos           -> TilesetOp (Tileset.Selection pos)
+      | Click (pos, _)      -> TilesetOp (Tileset.Selection pos)
       | ClickRelease _      -> Noop
       | Escape_Z            -> Noop
       | ArrowUp             -> MoveOp Movement.Up

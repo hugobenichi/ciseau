@@ -5,6 +5,8 @@ let psi f g a1 a2 = f (g a1) (g a2)
 let (>>) f g x    = g (f x)
 let neg f x       = not (f x)
 
+let apply_tup2 fn (a, b) = fn a b
+
 let (+=) r x = (r := !r + x)
 let (-=) r x = (r := !r - x)
 let (+=.) r x = (r := !r +. x)

@@ -1,6 +1,5 @@
-(* Debugging flags *)
-val kLOG_STATS : bool
-val kDEBUG : bool
+val kLOG_STATS              : bool
+val kDEBUG                  : bool
 
 type colors = {
   operator                  : Term.Color.color_cell ;
