@@ -55,6 +55,12 @@ type file_index = {
   stats                 : stats ;
 }
 
+let mk_readdir_state current_path current_tokens dirhandle = {
+  current_path ;
+  current_tokens ;
+  dirhandle
+}
+
 let nofilter anydir anyname = true
 
 let open_dir path =
@@ -93,11 +99,9 @@ let rec readdir deadline entry_buffer filter nodes =
                 Arraybuffer.append entry_buffer entry ;
                 if dtype == DT_DIR
                 then
-                  {
-                    current_path    = entry.path ;
-                    current_tokens  = entry.tokens ;
-                    dirhandle       = Unix.opendir entry.path ;
-                  } :: nodes
+                  match open_dir entry.path with
+                    | None -> nodes
+                    | Some d -> (mk_readdir_state entry.path entry.tokens d) :: nodes
                 else
                   nodes
               end
@@ -109,11 +113,8 @@ let mk_file_index_empty ?filter:(filter=nofilter) ~basedir:basedir =
   {
     entries = [||] ;
     filter ;
-    readdir_next = [{
-      current_path = basedir ;
-      current_tokens = [basedir] ;
-      dirhandle = Unix.opendir basedir ;
-    }] ;
+    (* TODO: this can fail with EACCESS *)
+    readdir_next = [mk_readdir_state basedir [basedir] (Unix.opendir basedir)] ;
     stats = {
       total_entries        = 0 ;
       total_entries_length = 0 ;
