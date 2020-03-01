@@ -135,7 +135,7 @@ let file_index_continue ?duration:(timeout=kReaddirIterativeTimeout) file_index 
   let entry_buffer = Arraybuffer.mk_empty_arraybuffer zero_index_entry in
   let readdir_next' = readdir (Unix.time () +. timeout) entry_buffer file_index.filter file_index.readdir_next in
   Arraybuffer.sort entry_buffer index_entry_compare ;
-  Arraybuffer.merge_insert entry_buffer index_entry_compare file_index.entries ;
+  Arraybuffer.ordered_insert entry_buffer index_entry_compare file_index.entries ;
   let entries' = Arraybuffer.to_array entry_buffer in
   let gc_stats_after = Gc.quick_stat () in
   let timestamp_stop = Sys.time () in

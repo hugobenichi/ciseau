@@ -288,7 +288,7 @@ module Arraybuffer = struct
   }
 
   let mk_arraybuffer n zero_elem = {
-    data = Array.make n zero_elem ;
+    data = Array.make n zero_elem ; (* PERF: try to use array_unsafe_alloc *)
     next = 0 ;
     zero = zero_elem ;
   }
@@ -314,11 +314,13 @@ module Arraybuffer = struct
   let sort { data ; next } compare_fn =
     Arrays.subarray_sort compare_fn data ~start:0 ~len:next
 
-  let merge_insert b compare_fn a =
+  let ordered_insert b compare_fn a =
     if alen a > 0 then
       begin
-        reserve b (b.next + (alen a)) ;
-        Arrays.inplace_sorted_merge compare_fn ~array1:b.data ~len1:b.next ~array2:a ~len2:(alen a)
+        let newnext =b.next + (alen a) in
+        reserve b newnext;
+        Arrays.inplace_sorted_merge compare_fn ~array1:b.data ~len1:b.next ~array2:a ~len2:(alen a) ;
+        b.next <- newnext
       end
 end
 
@@ -335,11 +337,14 @@ let keys tbl =
 
 module Vec = struct
 
+  (* PERF: remove direct access to these fields and stuff a rec into a single int64 *)
   type vec2 = {
     x : int ;
     y : int ;
   }
 
+  let x { x ; y }   = x
+  let y { x ; y }   = y
   let mk_v2 x y     = { x ; y }
   let v2_zero       = mk_v2 0 0
   let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
@@ -358,6 +363,7 @@ end
 
 module Rec = struct
 
+  (* PERF: remove direct access to these fields and stuff a rec into a single int64 *)
   type rec2 = {
     x0  : int ;
     y0  : int ;
@@ -376,6 +382,10 @@ module Rec = struct
     h   = br_y - tl_y ;
   }
 
+  let x0 { x0 ; y0 ; x1 ; y1 }  = x0
+  let y0 { x0 ; y0 ; x1 ; y1 }  = y0
+  let x1 { x0 ; y0 ; x1 ; y1 }  = x1
+  let y1 { x0 ; y0 ; x1 ; y1 }  = y1
   let rect_size   { w ; h}      = Vec.mk_v2 w h
   let rect_offset { x0 ; y0 }   = Vec.mk_v2 x0 y0
   let rect_end    { x1 ; y1 }   = Vec.mk_v2 x1 y1

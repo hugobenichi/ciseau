@@ -78,8 +78,10 @@ module Arrays : sig
   val array_rev               : 'a array -> unit
   val array_append            : 'a array -> 'a -> 'a array
   val array_swap              : 'a array -> int -> int -> unit
+  (* Linear search returning the first index for which the predicate returns true *)
   val array_find              : ('a -> bool) -> 'a array -> int
   val array_unsafe_alloc      : int -> 'a array
+  (* Expend the given array to the requested length, filling the tail with the provided element *)
   val array_extend            : 'a -> 'a array -> int -> 'a array
   (* TODO: make len argument optional *)
   val subarray_insertion_sort : ('a -> 'a -> int) -> 'a array -> ?start:int -> len:int -> unit
@@ -99,7 +101,8 @@ module Arraybuffer : sig
   val append                  : 'a t -> 'a -> unit
   val del                     : 'a t -> int -> unit
   val sort                    : 'a t -> ('a -> 'a -> int) -> unit
-  val merge_insert            : 'a t -> ('a -> 'a -> int) -> 'a array -> unit
+  (* Insert content of the given array in order. Assumes this Arraybuffer.t and given array are both sorted. *)
+  val ordered_insert          : 'a t -> ('a -> 'a -> int) -> 'a array -> unit
 end
 
 (* Returns an array containing the keys in the given Hashtbl.t *)
