@@ -319,6 +319,7 @@ module Framebuffer = struct
       |> array_fill t.bg_colors offset len
 
   let clear t =
+    (*
     let rec loop t offset remaining =
       if remaining > 0 then (
         let len = min remaining default_fill_len in
@@ -329,8 +330,14 @@ module Framebuffer = struct
       )
     in
       loop t 0 t.len ;
+      *)
       Bytes.fill t.text 0 t.len Default.text ;
+      Array.fill t.fg_colors 0 t.len Default.fg_color_code ;
+      Array.fill t.bg_colors 0 t.len Default.fg_color_code ;
+      ()
+      (*
       array_blit default_line_length 0 t.line_lengths 0 t.window.y
+      *)
 
   let clear_rect t rect =
     assert_rect_inside t.window rect ;
@@ -410,8 +417,11 @@ module Framebuffer = struct
     )
 
   let update_line_end t x y =
+    ()
+    (*
     if (array_get t.line_lengths y) < x then
       array_set t.line_lengths y x
+      *)
 
   let to_offset window x y =
     assert_that (x <= window.x) ;
@@ -438,9 +448,12 @@ module Framebuffer = struct
 
   let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
     let bytes_offset = to_offset framebuffer.window x y in
-    let blitlen = if len < 0 then slen s else len in
+    let linelen = if len < 0 then slen s else len in
+    let blitlen = min linelen (framebuffer.window.x - x) in
+    (*
     if not (x + blitlen <= framebuffer.window.x) then
       fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
+      *)
     update_line_end framebuffer (x + blitlen) y ;
     bytes_blit_string s offset framebuffer.text bytes_offset blitlen
 
