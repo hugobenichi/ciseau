@@ -33,8 +33,8 @@ CAMLprim value string_compare_fast(value v1, value v1_offset, value v2, value v2
 {
     CAMLparam4(v1, v1_offset, v2, v2_offset);
 
-    char *s1;
-    char *s2;
+    const char *s1;
+    const char *s2;
     s1 = String_val(v1) + Int_val(v1_offset);
     s2 = String_val(v2) + Int_val(v2_offset);
     CAMLreturn(Val_int(strcmp(s1, s2)));
@@ -44,8 +44,8 @@ CAMLprim value string_starts_with(value prefix, value candidate)
 {
     CAMLparam2(prefix, candidate);
 
-    char *s1;
-    char *s2;
+    const char *s1;
+    const char *s2;
     s1 = String_val(prefix);
     s2 = String_val(candidate);
 
@@ -62,8 +62,8 @@ char *strcasestr(const char *haystack, const char *needle);
 CAMLprim value string_is_substring(value ignore_case, value fragment, value text)
 {
     CAMLparam3(ignore_case, fragment, text);
-    char *f;
-    char *t;
+    const char *f;
+    const char *t;
     f = String_val(fragment);
     t = String_val(text);
     CAMLreturn(Val_bool(
