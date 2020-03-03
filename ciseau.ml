@@ -1,6 +1,5 @@
 open Util
 open Util.Arrays
-open Util.Vec
 open Util.Rec
 open Term
 open Navigation
@@ -168,16 +167,16 @@ end
 
 (* A common buffer for filling Fileview content just before bliting into a backend rendering framebuffer *)
 (* TODO: Not threadsafe !! find better place to put that *)
-let fb = ref (Framebuffer.mk_framebuffer (mk_v2 300 80))
-(* let fb = ref (Framebuffer.mk_framebuffer (mk_v2 4000 100)) *)
+let fb = ref (Framebuffer.mk_framebuffer (Vec.mk_v2 300 80))
+(* let fb = ref (Framebuffer.mk_framebuffer (Vec.mk_v2 4000 100)) *)
 
 
 module Screen : sig
   type t
 
-  val screen_size       : t -> vec2
-  val screen_window     : t -> rec2
-  val screen_offset     : t -> vec2
+  val screen_size       : t -> Vec.vec2
+  val screen_window     : t -> Rec.rec2
+  val screen_offset     : t -> Vec.vec2
   val screen_width      : t -> int
   val screen_height     : t -> int
   val clear             : t -> unit
@@ -185,14 +184,14 @@ module Screen : sig
   val mk_subscreen      : t -> rec2 -> t
   val put_color_rect    : t -> Color.color_cell -> rec2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
-  val put_cursor        : t -> vec2 -> unit
+  val put_cursor        : t -> Vec.vec2 -> unit
   val put_framebuffer   : t -> Framebuffer.t -> unit
 
 end = struct
 
   type t = {
-    size            : vec2 ;
-    window          : rec2 ;
+    size            : Vec.vec2 ;
+    window          : Rec.rec2 ;
     frame_buffer    : Framebuffer.t ;
   }
 
@@ -254,7 +253,7 @@ end = struct
   let put_cursor screen pos =
     screen.window
       |> rect_offset
-      |> v2_add pos
+      |> Vec.v2_add pos
       |> Framebuffer.put_cursor screen.frame_buffer
 
   let put_framebuffer screen src =
@@ -271,7 +270,7 @@ module Filebuffer : sig
   val filename            : t -> string
   val file_length         : t -> int
   val search              : t -> string -> rec2 array
-  val cursor              : t -> vec2 -> Cursor.t
+  val cursor              : t -> Vec.vec2 -> Cursor.t
 
   (* TODO: migrate fill_framebuffer to text cursor and eliminate these two *)
   val line_at             : t -> int -> string
@@ -423,7 +422,7 @@ end = struct
 
   let view_position_to_text_position x y =
     (* This can be computed if I keep the horizontal offset, and the cursor mapping *)
-    mk_v2 x y
+    Vec.mk_v2 x y
 
 end
 
@@ -436,15 +435,15 @@ module Fileview : sig
 (* FIXME: remove the v2 for viewport rectangle size used for recomputing the adjusted view rectangle around the cursor
  * Instead, remember in the fileview the view offset of the previous fileview draw and recompute the new view offset when drawing
  * Benefit: this removes the extra argument in apply_movement and will facilitate the refactoring afterwards *)
-  val apply_movement          : Movement.movement -> vec2 -> t -> t
+  val apply_movement          : Movement.movement -> Vec.vec2 -> t -> t
   val cursor                  : t -> Cursor.t
-  val adjust_view             : vec2 -> t -> t
+  val adjust_view             : Vec.vec2 -> t -> t
   val swap_line_number_mode   : t -> t
   val swap_linebreaking_mode  : t -> t
   val toggle_show_token       : t -> t
   val toggle_show_neighbor    : t -> t
   val toggle_show_selection   : t -> t
-  val recenter_view           : vec2 -> t -> t
+  val recenter_view           : Vec.vec2 -> t -> t
   val draw                    : t -> Screen.t -> redraw_level -> bool -> unit
 
 end = struct
@@ -479,7 +478,7 @@ end = struct
   type t = {
     filebuffer        : filebuffer ;
     cursor            : Cursor.t ;        (* current position in file space: x = column index, y = row index *)
-    view              : vec2 ;            (* x,y offset of the rectangle view into the text *)
+    view              : Vec.vec2 ;        (* x,y offset of the rectangle view into the text *)
     numbering         : numbering_mode ;
     mov_mode          : Movement.mode ;
     show_token        : bool ;
@@ -490,8 +489,8 @@ end = struct
 
   let init_fileview filebuffer = {
     filebuffer        = filebuffer ;
-    cursor            = Filebuffer.cursor filebuffer v2_zero ;
-    view              = v2_zero ;
+    cursor            = Filebuffer.cursor filebuffer Vec.zero ;
+    view              = Vec.zero ;
     numbering         = CursorRelative ;
     mov_mode          = Movement.Chars ;
     show_token        = true ;
@@ -537,7 +536,7 @@ end = struct
         view_y
     in {
       t with
-        view  = mk_v2 new_view_x new_view_y ;
+        view  = Vec.mk_v2 new_view_x new_view_y ;
     }
 
   let apply_movement mov screen_size t =
@@ -593,7 +592,7 @@ end = struct
     let view_x = (Cursor.x t.cursor) - (Vec.x v) / 2 in
     let view_y = (Cursor.y t.cursor) - (Vec.y v) / 2 in {
       t with
-        view = mk_v2 (max view_x 0) (max view_y 0) ;
+        view = Vec.mk_v2 (max view_x 0) (max view_y 0) ;
     }
 
   (* TODO: move drawing in separate module ? *)
@@ -626,7 +625,7 @@ end = struct
         then (text_cursor_x, 0)
         else (base_scrolling_offset, (Vec.x t.view)) (* (Vec.x t.cursor) - base_scrolling_offset) *)
     in
-    let cursor = mk_v2 (screen_cursor_x + 6) (text_cursor_y - (Vec.y t.view)) in
+    let cursor = Vec.mk_v2 (screen_cursor_x + 6) (text_cursor_y - (Vec.y t.view)) in
     if is_focused then
       Screen.put_cursor screen cursor ;
 
@@ -888,7 +887,7 @@ end
 module Tileset = struct
 
   type op = Resize of rec2
-          | FileviewOp of (vec2 -> Fileview.t -> Fileview.t)
+          | FileviewOp of (Vec.vec2 -> Fileview.t -> Fileview.t)
           | RotateViewsLeft
           | RotateViewsRight
           | ScreenLayoutCycleNext
@@ -898,7 +897,7 @@ module Tileset = struct
           | FocusPrev
           | FocusMain
           | BringFocusToMain
-          | Selection of vec2
+          | Selection of Vec.vec2
 
   type t = {
     screen_size   : rec2 ;
@@ -1149,7 +1148,7 @@ module Ciseau = struct
     | Number ds -> Printf.sprintf "Repetition(%d) " (dequeue_digits ds)
 
   type editor = {
-    term_dim        : vec2 ;
+    term_dim        : Vec.vec2 ;
     term_dim_descr  : string ;
     frame_buffer    : Framebuffer.t ;
     running         : bool ;

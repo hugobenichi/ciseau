@@ -44,7 +44,6 @@ let terminal_set_raw () =
   Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
 
 module Keys = struct
-  open Util.Vec
 
   type click =
       Left
@@ -53,21 +52,21 @@ module Keys = struct
 
   type key =
       Key of char
-    | Click of vec2 * click (* esc[M + mod + mouse position *)
-    | ClickRelease of vec2  (* esc[M + mod + mouse position *)
-    | Escape_Z              (* esc[Z: shift + tab *)
-    | ArrowUp               (* esc[A *)
-    | ArrowDown             (* esc[B *)
-    | ArrowRight            (* esc[C *)
-    | ArrowLeft             (* esc[D *)
-    | EINTR                 (* usually happen when terminal is resized *)
+    | Click of Vec.vec2 * click         (* esc[M + mod + mouse position *)
+    | ClickRelease of Vec.vec2          (* esc[M + mod + mouse position *)
+    | Escape_Z                          (* esc[Z: shift + tab *)
+    | ArrowUp                           (* esc[A *)
+    | ArrowDown                         (* esc[B *)
+    | ArrowRight                        (* esc[C *)
+    | ArrowLeft                         (* esc[D *)
+    | EINTR                             (* usually happen when terminal is resized *)
 
   let descr_of =
     function
-      | Click (v, Left)                 ->  "ClickLeft" ^ (v2_string v)
-      | Click (v, Right)                ->  "ClickRight" ^ (v2_string v)
-      | Click (v, Middle)               ->  "ClickMiddle" ^ (v2_string v)
-      | ClickRelease v                  ->  "ClickRelease" ^ (v2_string v)
+      | Click (v, Left)                 ->  "ClickLeft" ^ (Vec.v2_string v)
+      | Click (v, Right)                ->  "ClickRight" ^ (Vec.v2_string v)
+      | Click (v, Middle)               ->  "ClickMiddle" ^ (Vec.v2_string v)
+      | ClickRelease v                  ->  "ClickRelease" ^ (Vec.v2_string v)
       | Escape_Z                        -> "Escape_z"
       | ArrowUp                         -> "ArrowUp"
       | ArrowDown                       -> "ArrowDown"
@@ -166,10 +165,10 @@ module Keys = struct
                 |> Char.code
                 |> (land) 3 (* Ignore modifier keys *)
                 |> (function
-                  | 0   ->  Click (mk_v2 cx cy, Left)
-                  | 1   ->  Click (mk_v2 cx cy, Middle)
-                  | 2   ->  Click (mk_v2 cx cy, Right)
-                  | 3   ->  ClickRelease (mk_v2 cx cy)
+                  | 0   ->  Click (Vec.mk_v2 cx cy, Left)
+                  | 1   ->  Click (Vec.mk_v2 cx cy, Middle)
+                  | 2   ->  Click (Vec.mk_v2 cx cy, Right)
+                  | 3   ->  ClickRelease (Vec.mk_v2 cx cy)
                   | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
       (* This happens when typing CTRL + [ followed by another key *)
       | n  ->
@@ -262,7 +261,6 @@ end
 
 module Framebuffer = struct
   open Util.Arrays
-  open Util.Vec
   open Util.Rec
 
   let buffer = Buffer.create 4096
@@ -284,21 +282,21 @@ module Framebuffer = struct
     bg_colors                 : int array ;
     z_index                   : int array ;
     len                       : int ;
-    window                    : vec2 ;
-    mutable cursor            : vec2 ;
+    window                    : Vec.vec2 ;
+    mutable cursor            : Vec.vec2 ;
   }
 
   let mk_framebuffer v =
-    let len = v2_area v
+    let len = Vec.area v
     in {
       text        = Bytes.make len Default.text ;
-      line_lengths = Array.make (x v) 0 ; (* CLEANUP: rename me *)
+      line_lengths = Array.make (Vec.x v) 0 ; (* CLEANUP: rename me *)
       fg_colors   = Array.make len Default.fg_color_code ;
       bg_colors   = Array.make len Default.bg_color_code ;
       z_index     = Array.make len Default.z ;
       len         = len ;
       window      = v ;
-      cursor      = v2_zero ;
+      cursor      = Vec.zero ;
     }
 
   let framebuffer_size  { window } = window
@@ -445,7 +443,7 @@ module Framebuffer = struct
     done
 
   let put_cursor t cursor =
-    assert_that (is_v2_inside t.window cursor) ;
+    assert_that (Vec.is_v2_inside t.window cursor) ;
     t.cursor <- cursor
 
   let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =

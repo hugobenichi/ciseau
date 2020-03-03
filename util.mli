@@ -113,10 +113,13 @@ module Vec : sig
   val x                       : vec2 -> int
   val y                       : vec2 -> int
   val mk_v2                   : int -> int -> vec2
-  val v2_zero                 : vec2
+  val zero                    : vec2
   val v2_add                  : vec2 -> vec2 -> vec2
   val v2_sub                  : vec2 -> vec2 -> vec2
-  val v2_area                 : vec2 -> int
+  val area                    : vec2 -> int
+  val (+)                     : vec2 -> vec2 -> vec2
+  val (-)                     : vec2 -> vec2 -> vec2
+  val ( * )                   : int -> vec2 -> vec2
   (* Check if second vec2 argument is inside the implicit rectangle woth topleft (0,0)
    * and first vec2 argument as bottomright corner. *)
   val is_v2_inside            : vec2 -> vec2 -> bool

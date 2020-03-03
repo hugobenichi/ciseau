@@ -1,7 +1,6 @@
 open Util
 open Util.Arrays
 open Util.Rec
-open Util.Vec
 
 module Cursor = struct
   type step = Nomore
