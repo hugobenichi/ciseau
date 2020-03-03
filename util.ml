@@ -347,18 +347,25 @@ module Vec = struct
   let y { x ; y }   = y
   let mk_v2 x y     = { x ; y }
   let v2_zero       = mk_v2 0 0
-  let v2_add t1 t2  = mk_v2 (t1.x + t2.x) (t1.y + t2.y)
-  let v2_sub t1 t2  = mk_v2 (t1.x - t2.x) (t1.y - t2.y)
+  let v2_add t1 t2  = mk_v2 ((x t1) + (x t2)) ((y t1) + (y t2))
+  let v2_sub t1 t2  = mk_v2 ((x t1) - (x t2)) ((y t1) - (y t2))
 
-  let is_v2_inside { x = xlim ; y = ylim } { x ; y } =
-    (0 <= x) && (0 <= y) && (x <= xlim) && (y <= ylim)
+  let is_v2_inside vlim v =
+    let vx = x v in
+    let vy = y v in
+    0 <= vx && 0 <= vy && vx <= (x vlim) && vy <= (y vlim)
 
-  let is_v2_outside { x = xlim ; y = ylim } { x ; y } =
-    (x < 0) || (y < 0) || (x > xlim) || (y > ylim)
+  let is_v2_outside vlim v =
+    let vx = x v in
+    let vy = y v in
+    vx < 0 || vy < 0 || vx > (x vlim) || vy > (y vlim)
 
-  let assert_v2_inside box_v2 v2 =
-    if is_v2_outside box_v2 v2
-      then fail (Printf.sprintf "(%d,%d) out of bound of (%d,%d)" v2.x v2.y box_v2.x box_v2.y)
+  let vec2_string v =
+    Printf.sprintf "{x=%d ; y=%d}" (x v) (y v)
+
+  let assert_v2_inside box v =
+    if is_v2_outside box v
+      then fail (Printf.sprintf "%s out of bound of %s" (vec2_string v) (vec2_string box))
 end
 
 module Rec = struct
@@ -396,8 +403,10 @@ module Rec = struct
   let rect_w      { w }         = w
   let rect_h      { h }         = h
 
-  let rect_mv { Vec.x ; Vec.y } {x0 ; y0 ; x1 ; y1 } =
-    mk_rect (x + x0) (y + y0) (x + x1) (y + y1)
+  let rect_mv v {x0 ; y0 ; x1 ; y1 } =
+    let vx = Vec.x v in
+    let vy = Vec.y v in
+    mk_rect (vx + x0) (vy + y0) (vx + x1) (vy + y1)
 
   let assert_rect_inside bounds r =
     r |> rect_offset  |> Vec.assert_v2_inside bounds ;

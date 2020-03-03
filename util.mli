@@ -113,6 +113,8 @@ module Vec : sig
     x : int ;
     y : int ;
   }
+  val x                       : vec2 -> int
+  val y                       : vec2 -> int
   val mk_v2                   : int -> int -> vec2
   val v2_zero                 : vec2
   val v2_add                  : vec2 -> vec2 -> vec2
@@ -122,6 +124,7 @@ module Vec : sig
   val is_v2_inside            : vec2 -> vec2 -> bool
   val is_v2_outside           : vec2 -> vec2 -> bool
   val assert_v2_inside        : vec2 -> vec2 -> unit
+  val vec2_string             : vec2 -> string
 end
 
 module Rec : sig
@@ -133,6 +136,10 @@ module Rec : sig
     w   : int ;
     h   : int ;
   }
+  val x0                      : rec2 -> int
+  val y0                      : rec2 -> int
+  val x1                      : rec2 -> int
+  val y1                      : rec2 -> int
   val mk_rect                 : int -> int -> int -> int -> rec2 (* TODO: use named parameters *)
   val rect_size               : rec2 -> Vec.vec2
   val rect_offset             : rec2 -> Vec.vec2
