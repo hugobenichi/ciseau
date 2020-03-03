@@ -349,6 +349,7 @@ module Vec = struct
   let v2_zero       = mk_v2 0 0
   let v2_add t1 t2  = mk_v2 ((x t1) + (x t2)) ((y t1) + (y t2))
   let v2_sub t1 t2  = mk_v2 ((x t1) - (x t2)) ((y t1) - (y t2))
+  let v2_area v     = (x v) * (y v)
 
   let is_v2_inside vlim v =
     let vx = x v in
@@ -360,12 +361,12 @@ module Vec = struct
     let vy = y v in
     vx < 0 || vy < 0 || vx > (x vlim) || vy > (y vlim)
 
-  let vec2_string v =
+  let v2_string v =
     Printf.sprintf "{x=%d ; y=%d}" (x v) (y v)
 
   let assert_v2_inside box v =
     if is_v2_outside box v
-      then fail (Printf.sprintf "%s out of bound of %s" (vec2_string v) (vec2_string box))
+      then fail (Printf.sprintf "%s out of bound of %s" (v2_string v) (v2_string box))
 end
 
 module Rec = struct

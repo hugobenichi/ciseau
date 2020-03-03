@@ -109,22 +109,20 @@ end
 val keys : ('a, 'b) Hashtbl.t -> 'a array
 
 module Vec : sig
-  type vec2 = {
-    x : int ;
-    y : int ;
-  }
+  type vec2
   val x                       : vec2 -> int
   val y                       : vec2 -> int
   val mk_v2                   : int -> int -> vec2
   val v2_zero                 : vec2
   val v2_add                  : vec2 -> vec2 -> vec2
   val v2_sub                  : vec2 -> vec2 -> vec2
+  val v2_area                 : vec2 -> int
   (* Check if second vec2 argument is inside the implicit rectangle woth topleft (0,0)
    * and first vec2 argument as bottomright corner. *)
   val is_v2_inside            : vec2 -> vec2 -> bool
   val is_v2_outside           : vec2 -> vec2 -> bool
   val assert_v2_inside        : vec2 -> vec2 -> unit
-  val vec2_string             : vec2 -> string
+  val v2_string               : vec2 -> string
 end
 
 module Rec : sig

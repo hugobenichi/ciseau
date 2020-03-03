@@ -64,10 +64,10 @@ module Keys = struct
 
   let descr_of =
     function
-      | Click ({x ; y}, Left)           ->  Printf.sprintf "ClickLeft(%d,%d)" x y
-      | Click ({x ; y}, Right)          ->  Printf.sprintf "ClickRight(%d,%d)" x y
-      | Click ({x ; y}, Middle)         ->  Printf.sprintf "ClickMiddle(%d,%d)" x y
-      | ClickRelease {x ; y}            ->  Printf.sprintf "ClickRelease(%d,%d)" x y
+      | Click (v, Left)                 ->  "ClickLeft" ^ (v2_string v)
+      | Click (v, Right)                ->  "ClickRight" ^ (v2_string v)
+      | Click (v, Middle)               ->  "ClickMiddle" ^ (v2_string v)
+      | ClickRelease v                  ->  "ClickRelease" ^ (v2_string v)
       | Escape_Z                        -> "Escape_z"
       | ArrowUp                         -> "ArrowUp"
       | ArrowDown                       -> "ArrowDown"
@@ -288,16 +288,16 @@ module Framebuffer = struct
     mutable cursor            : vec2 ;
   }
 
-  let mk_framebuffer v2 =
-    let len = v2.x * v2.y
+  let mk_framebuffer v =
+    let len = v2_area v
     in {
       text        = Bytes.make len Default.text ;
-      line_lengths = Array.make v2.x 0 ; (* CLEANUP: rename me *)
+      line_lengths = Array.make (x v) 0 ; (* CLEANUP: rename me *)
       fg_colors   = Array.make len Default.fg_color_code ;
       bg_colors   = Array.make len Default.bg_color_code ;
       z_index     = Array.make len Default.z ;
       len         = len ;
-      window      = v2 ;
+      window      = v ;
       cursor      = v2_zero ;
     }
 
@@ -336,14 +336,14 @@ module Framebuffer = struct
       Array.fill t.bg_colors 0 t.len Default.fg_color_code ;
       ()
       (*
-      array_blit default_line_length 0 t.line_lengths 0 t.window.y
+      array_blit default_line_length 0 t.line_lengths 0 (Vec.y t.window)
       *)
 
   let clear_rect t rect =
     assert_rect_inside t.window rect ;
     let len = rect_w rect in
     for y = (rect_y rect) to (rect_y_end rect) - 1 do
-      let offset = y * t.window.x + (rect_x rect) in
+      let offset = y * (Vec.x t.window) + (rect_x rect) in
       Bytes.fill t.text offset len Default.text ;
       array_blit default_fg_colors 0 t.fg_colors offset len ;
       array_blit default_bg_colors 0 t.bg_colors offset len ;
@@ -351,8 +351,8 @@ module Framebuffer = struct
 
   let clear_line t ~x:x ~y:y ~len:len =
     assert_that (0 <= y) ;
-    assert_that (y < t.window.y) ;
-    let offset = y * t.window.x + x in
+    assert_that (y < (Vec.y t.window)) ;
+    let offset = y * (Vec.x t.window) + x in
     Bytes.fill t.text offset len Default.text ;
     array_blit default_fg_colors 0 t.fg_colors offset len ;
     array_blit default_bg_colors 0 t.bg_colors offset len
@@ -365,7 +365,7 @@ module Framebuffer = struct
     Buffer.add_string buffer "\027[H" ;       (* go home *)
 
     (* Push lines one by one, one color segment at a time *)
-    let linestop = ref framebuffer.window.x in
+    let linestop = ref (Vec.x framebuffer.window) in
     let start = ref 0 in
     let len = ref 0 in
     let fg = ref 0 in
@@ -385,7 +385,7 @@ module Framebuffer = struct
         ) else if stop > !linestop then (
           (* End of line, also put new line control characters for previous line *)
           Buffer.add_string buffer newline ;
-          linestop += framebuffer.window.x ;
+          linestop += (Vec.x framebuffer.window) ;
           true
         ) else
           (* Otherwise, just check colors *)
@@ -404,9 +404,11 @@ module Framebuffer = struct
 
     (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
     Buffer.add_string buffer "\027[" ;
-    Buffer.add_string buffer (string_of_int (framebuffer.cursor.y + 1)) ;
+    (* PERF: make a add_number function *)
+    Buffer.add_string buffer (string_of_int ((Vec.y framebuffer.cursor) + 1)) ;
+    (* PERF: make a add_char function *)
     Buffer.add_string buffer ";" ;
-    Buffer.add_string buffer (string_of_int (framebuffer.cursor.x + 1)) ;
+    Buffer.add_string buffer (string_of_int ((Vec.x framebuffer.cursor) + 1)) ;
     Buffer.add_string buffer "H" ;
     Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
 
@@ -424,16 +426,16 @@ module Framebuffer = struct
       *)
 
   let to_offset window x y =
-    assert_that (x <= window.x) ;
-    assert_that (y <= window.y) ;
-    y * window.x + x
+    assert_that (x <= (Vec.x window)) ;
+    assert_that (y <= (Vec.y window)) ;
+    y * (Vec.x window) + x
 
   let put_color_rect t { Color.fg ; Color.bg } rect =
     (* Clip rectangle vertically to framebuffer's window *)
     let x_start = max 0 (rect_x rect) in
     let y_start = max 0 (rect_y rect) in
-    let x_end   = min t.window.x (rect_x_end rect) in
-    let y_end   = min (t.window.y - 1) (rect_y_end rect) in
+    let x_end   = min (Vec.x t.window) (rect_x_end rect) in
+    let y_end   = min ((Vec.y t.window) - 1) (rect_y_end rect) in
     let len     = x_end - x_start in
     for y = y_start to y_end do
       let offset = to_offset t.window x_start y in
@@ -449,7 +451,7 @@ module Framebuffer = struct
   let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
     let bytes_offset = to_offset framebuffer.window x y in
     let linelen = if len < 0 then slen s else len in
-    let blitlen = min linelen (framebuffer.window.x - x) in
+    let blitlen = min linelen ((Vec.x framebuffer.window) - x) in
     (*
     if not (x + blitlen <= framebuffer.window.x) then
       fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
@@ -462,7 +464,7 @@ module Framebuffer = struct
    * Copy cursor in 'dst' if 'copy_cursor' is true. *)
   let put_framebuffer dst dst_rect src =
     assert_rect_inside dst.window dst_rect ;
-    assert_that (src.window.y >= rect_h dst_rect) ;
+    assert_that ((Vec.y src.window) >= rect_h dst_rect) ;
 
     let w_dst = rect_w dst_rect in
     let x_dst = ref (rect_x dst_rect) in

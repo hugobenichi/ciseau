@@ -356,8 +356,14 @@ end
 
 module SelectionMovement = struct
 
-  let is_v2_less_or_equal va vb = (va.y < vb.y) || (va.y = vb.y) && (va.x <= vb.x)
-  let is_v2_less          va vb = (va.y < vb.y) || (va.y = vb.y) && (va.x < vb.x)
+  let is_v2_less_or_equal va vb =
+    let ay = Vec.y va in
+    let by = Vec.y vb in
+    ay < by || ay = by && (Vec.x va) <= (Vec.x vb)
+  let is_v2_less va vb =
+    let ay = Vec.y va in
+    let by = Vec.y vb in
+    ay < by || ay = by && (Vec.x va) < (Vec.x vb)
 
   (* PERF: do binary search instead *)
   let selection_prev selection_context cursor =
@@ -627,8 +633,8 @@ module Movement = struct
   end)
 
   let selection_movement mov_context direction cursor =
-    let { x ; y } = SelectionMovement.movement mov_context direction cursor in
-    Cursor.goto ~x:x ~y:y cursor
+    let v = SelectionMovement.movement mov_context direction cursor in
+    Cursor.goto ~x:(Vec.x v) ~y:(Vec.y v) cursor
 
   let move movement_context =
     function

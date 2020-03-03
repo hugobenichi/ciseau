@@ -190,7 +190,7 @@ let print_entries = Array.iter print_stringln
 let print_frame framebuffer stats path entries input =
   let open Term in
   let x_offset = 1 in (* BUG: why do I need a +1 offset !!??!! *)
-  let fb_height = (Framebuffer.framebuffer_size framebuffer).Vec.y in
+  let fb_height = framebuffer |> Framebuffer.framebuffer_size |> Vec.y in
   let max_entry = min (alen entries) (fb_height - 1 (* header *) - 1 (* stats *) - 1 (* input *)) in
   Framebuffer.clear framebuffer ;
   for i = 0 to max_entry - 1 do

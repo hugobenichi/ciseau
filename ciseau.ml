@@ -234,9 +234,9 @@ end = struct
 
   let put_line screen ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) line =
     let len' = if len < 0 then slen line else len in
-    let blitend = min screen.size.x (offset + len') in
+    let blitend = min (Vec.x screen.size) (offset + len') in
     let blitlen = blitend - offset in
-    if 0 <= y && y < screen.size.y then (
+    if 0 <= y && y < (Vec.y screen.size) then (
       Framebuffer.clear_line
         screen.frame_buffer
         ~x:(rect_x screen.window)
@@ -286,8 +286,8 @@ end = struct
     buflen      : int ;                   (* number of lines in buffer, may be less than buffer array length *)
   }
 
-  let cursor { buffer } { x ; y } =
-    Cursor.mk_cursor buffer x y
+  let cursor { buffer } v =
+    Cursor.mk_cursor buffer (Vec.x v) (Vec.y v)
 
   let read_file f =
     let rec loop lines ch =
@@ -509,31 +509,35 @@ end = struct
     cursor
 
   let view_height { view ; filebuffer } =
-    (Filebuffer.file_length filebuffer) - view.y
+    (Filebuffer.file_length filebuffer) - (Vec.y view)
 
-  let adjust_view { x ; y } t =
+  let adjust_view v t =
+    let x = Vec.x v in
+    let y = Vec.y v in
+    let view_x = Vec.x t.view in
+    let view_y = Vec.y t.view in
     let text_height = y - 2 in (* -1 for header line, -1 for indexing starting at 0 *)
     let text_width  = x - 6 in (* -6 for line numbering CLEANUP: remove this hardcoded offset *)
-    let view_x =
+    let new_view_x =
       let x = Cursor.x t.cursor in
-      if x < t.view.x then
+      if x < view_x then
         0
-      else if x > t.view.x + text_width then
+      else if x > view_x + text_width then
         x - text_width
       else
-        t.view.x
+        view_x
     in
-    let view_y =
+    let new_view_y =
       let y = Cursor.y t.cursor in
-      if y < t.view.y then
+      if y < view_y then
         y
-      else if y > t.view.y + text_height then
+      else if y > view_y + text_height then
         y - text_height
       else
-        t.view.y
+        view_y
     in {
       t with
-        view  = mk_v2 view_x view_y ;
+        view  = mk_v2 new_view_x new_view_y ;
     }
 
   let apply_movement mov screen_size t =
@@ -585,9 +589,9 @@ end = struct
   }
 
   (* TODO: should y_recenter and x_recenter together or separately ? *)
-  let recenter_view { x ; y } t =
-    let view_x = (Cursor.x t.cursor) - x / 2 in
-    let view_y = (Cursor.y t.cursor) - y / 2 in {
+  let recenter_view v t =
+    let view_x = (Cursor.x t.cursor) - (Vec.x v) / 2 in
+    let view_y = (Cursor.y t.cursor) - (Vec.y v) / 2 in {
       t with
         view = mk_v2 (max view_x 0) (max view_y 0) ;
     }
@@ -603,8 +607,8 @@ end = struct
   (* TODO: fileview should remember the last x scrolling offset and make it sticky, like the y scrolling *)
   let fill_framebuffer t is_focused screen framebuffer =
     let screen_size = Screen.screen_size screen in
-    let text_width  = screen_size.x in
-    let text_height = screen_size.y in
+    let text_width  = Vec.x screen_size in
+    let text_height = Vec.y screen_size in
     let text_stop_y = min text_height (view_height t) in
     let text_cursor_x = Cursor.x t.cursor in
     let text_cursor_y = Cursor.y t.cursor in
@@ -620,9 +624,9 @@ end = struct
     let (screen_cursor_x, scrolling_offset) =
       if text_cursor_x < last_x_index
         then (text_cursor_x, 0)
-        else (base_scrolling_offset, t.view.x) (* t.cursor.x - base_scrolling_offset) *)
+        else (base_scrolling_offset, (Vec.x t.view)) (* (Vec.x t.cursor) - base_scrolling_offset) *)
     in
-    let cursor = mk_v2 (screen_cursor_x + 6) (text_cursor_y - t.view.y) in
+    let cursor = mk_v2 (screen_cursor_x + 6) (text_cursor_y - (Vec.y t.view)) in
     if is_focused then
       Screen.put_cursor screen cursor ;
 
@@ -630,7 +634,7 @@ end = struct
 
     (* Text area *)
     for i = 0 to text_stop_y - 1 do
-      let line_idx = i + t.view.y in
+      let line_idx = i + (Vec.y t.view) in
       let l = Filebuffer.line_at t.filebuffer line_idx in
       let x_len = (slen l) - x_scrolling_offset in
       Framebuffer.put_line framebuffer ~x:0 ~y:i ~len:6 (LineNumberCache.get line_number_offset line_idx) ;
@@ -648,7 +652,7 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
-      (mk_rect 6 (text_cursor_y - t.view.y) text_width (text_cursor_y - t.view.y)) ;
+      (mk_rect 6 (text_cursor_y - (Vec.y t.view)) text_width (text_cursor_y - (Vec.y t.view))) ;
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.cursor_line
@@ -660,11 +664,11 @@ end = struct
     if t.show_token then (
       let token_s = Movement.apply_movement t.context t.mov_mode Movement.Start t.filebuffer t.cursor |> Cursor.pos in
       let token_e = Movement.apply_movement t.context t.mov_mode Movement.End t.filebuffer token_s |> Cursor.pos in
-      let y_start = token_s.y - t.view.y in
-      let y_end   = token_e.y - t.view.y in
+      let y_start = token_s.y - (Vec.y t.view) in
+      let y_end   = token_e.y - (Vec.y t.view) in
       (* The current token can leak out of the current screen: bound start and stop to the screen *)
       for y = max 0 y_start to min y_end text_stop_y do
-        let len = Filebuffer.line_length t.filebuffer (y + t.view.y) in
+        let len = Filebuffer.line_length t.filebuffer (y + (Vec.y t.view)) in
         let x0 =
           if y = y_start then token_s.x else 0 in       (* start from x=0 for lines after the first *)
         let x1 =
@@ -684,9 +688,9 @@ end = struct
     if t.show_selection then (
       let show_selection selection_rect =
           let tl_x = 6 + (max 0 ((rect_x selection_rect) - x_scrolling_offset)) in
-          let tl_y = (rect_y selection_rect) - t.view.y in
+          let tl_y = (rect_y selection_rect) - (Vec.y t.view) in
           let br_x = (rect_x_end selection_rect) + 7 - x_scrolling_offset in
-          let br_y = (rect_y_end selection_rect) - t.view.y in
+          let br_y = (rect_y_end selection_rect) - (Vec.y t.view) in
           if 0 <= br_y && tl_y < text_height && tl_x < br_x then (
             let r = mk_rect tl_x tl_y br_x br_y in
             Framebuffer.put_color_rect framebuffer Config.default.colors.selection r
@@ -701,7 +705,7 @@ end = struct
     if t.show_neighbor then (
       let lightup_pixel t framebuffer colors pos =
           let x = pos.x + 6 - x_scrolling_offset in
-          let y = pos.y - t.view.y  in
+          let y = pos.y - (Vec.y t.view)  in
           if 6 <= x then
             Framebuffer.put_color_rect framebuffer colors (mk_rect x y (x + 1) y)
       in
@@ -734,7 +738,7 @@ end = struct
     Framebuffer.put_color_rect
       framebuffer
       Config.default.colors.string
-      (mk_rect 0 cursor.y 6 cursor.y)
+      (mk_rect 0 (Vec.y cursor) 6 (Vec.y cursor))
 
   let put_border_frame t screen header_color =
     Screen.put_line screen ~x:0 ~y:0
@@ -1035,7 +1039,9 @@ module Tileset = struct
             array_set t'.redrawing focus_index' Redraw ;
             t'
       | Selection pos ->
-          let pos_in_tile {x ; y } r =
+          let pos_in_tile v r =
+            let x = Vec.x v in
+            let y = Vec.y v in
             let x0 = rect_x r in
             let y0 = rect_y r in
             let x1 = rect_x_end r in
@@ -1043,7 +1049,7 @@ module Tileset = struct
             x0 <= x && x < x1 && y0 <= y && y < y1
           in
           let i = array_find (pos_in_tile pos) t.screen_tiles in
-          Printf.fprintf logs "selecting tile %d for pos %d,%d\n" i pos.x pos.y ;
+          Printf.fprintf logs "selecting tile %d for pos %s\n" i (Vec.v2_string pos) ;
           flush logs ;
           if i < 0
             then t
@@ -1158,16 +1164,16 @@ module Ciseau = struct
   }
 
   let main_screen_dimensions term_dim =
-    mk_rect 0 0 term_dim.x (term_dim.y - 2)
+    mk_rect 0 0 (Vec.x term_dim) ((Vec.y term_dim) - 2)
 
   let status_screen_dimensions term_dim =
-    mk_rect 0 (term_dim.y - 2) term_dim.x term_dim.y
+    mk_rect 0 ((Vec.y term_dim) - 2) (Vec.x term_dim) (Vec.y term_dim)
 
   let mk_status_screen frame_buffer term_dim =
     term_dim |> status_screen_dimensions |> Screen.mk_screen frame_buffer
 
-  let mk_window_size_descr { x = w ; y = h } =
-    Printf.sprintf "(%d x %d)" w h
+  let mk_window_size_descr v =
+    Printf.sprintf "(%d x %d)" (Vec.x v) (Vec.y v)
 
   let test_mk_filebuffers file = [|
       Filebuffer.init_filebuffer file ;
@@ -1298,7 +1304,7 @@ module Ciseau = struct
     in
     Screen.put_line editor.status_screen ~x:0 ~y:0 status_text1 ;
     Screen.put_line editor.status_screen ~x:0 ~y:1 status_text2 ;
-    Screen.put_color_rect editor.status_screen (mode_to_color editor.mode) (mk_rect 0 0 editor.term_dim.x 0)
+    Screen.put_color_rect editor.status_screen (mode_to_color editor.mode) (mk_rect 0 0 (Vec.x editor.term_dim) 0)
 
   let refresh_screen editor =
     Tileset.draw_fileviews editor.tileset editor.frame_buffer ;
@@ -1390,8 +1396,8 @@ module Ciseau = struct
                    ^ editor.user_input
     in
     let user_input' =
-      if slen user_input > editor.term_dim.x
-        then String.sub user_input 0 editor.term_dim.x
+      if slen user_input > (Vec.x editor.term_dim)
+        then String.sub user_input 0 (Vec.x editor.term_dim)
         else user_input
     in {
       editor with
