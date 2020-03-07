@@ -12,12 +12,11 @@ module Keys : sig
       Left
     | Right
     | Middle
-    (* TODO: add Release here *)
+    | Release
 
   type key =
       Key of char
     | Click of Vec.vec2 * click
-    | ClickRelease of Vec.vec2
     | Escape_Z
     | ArrowUp
     | ArrowDown

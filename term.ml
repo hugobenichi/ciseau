@@ -49,11 +49,11 @@ module Keys = struct
       Left
     | Right
     | Middle
+    | Release
 
   type key =
       Key of char
     | Click of Vec.vec2 * click         (* esc[M + mod + mouse position *)
-    | ClickRelease of Vec.vec2          (* esc[M + mod + mouse position *)
     | Escape_Z                          (* esc[Z: shift + tab *)
     | ArrowUp                           (* esc[A *)
     | ArrowDown                         (* esc[B *)
@@ -63,10 +63,10 @@ module Keys = struct
 
   let key_to_string =
     function
-      | Click (v, Left)                 ->  "ClickLeft" ^ (Vec.v2_string v)
-      | Click (v, Right)                ->  "ClickRight" ^ (Vec.v2_string v)
-      | Click (v, Middle)               ->  "ClickMiddle" ^ (Vec.v2_string v)
-      | ClickRelease v                  ->  "ClickRelease" ^ (Vec.v2_string v)
+      | Click (v, Left)                 -> "ClickLeft" ^ (Vec.v2_string v)
+      | Click (v, Right)                -> "ClickRight" ^ (Vec.v2_string v)
+      | Click (v, Middle)               -> "ClickMiddle" ^ (Vec.v2_string v)
+      | Click (v, Release)              -> "ClickRelease" ^ (Vec.v2_string v)
       | Escape_Z                        -> "Escape_z"
       | ArrowUp                         -> "ArrowUp"
       | ArrowDown                       -> "ArrowDown"
@@ -110,10 +110,24 @@ module Keys = struct
       | Key '\''                        -> "'"
       | Key k                           ->  Char.escaped k
 
-  (* x10 mouse click coordinate reader *)
-  let mouse_position_conversion_x10 c =
-    let c' = (Char.code c) - 33 in
-    if c' < 0 then c' + 255 else c'
+  (* x10 mouse click reader *)
+  let mouse_x10_reader buffer =
+    let convert_click_type c =
+      c |> (land) 3 (* Ignore modifier keys and keep the 2 LSBs only *)
+        |> (function
+          | 0   ->  Left
+          | 1   ->  Middle
+          | 2   ->  Right
+          | 3   ->  Release
+          | cb  ->  fail "mouse_x10_reader bug")
+    in
+    let adjust_coordinate c =
+      let c' = c - 33 in if c' < 0 then c' + 255 else c'
+    in
+    let c = Bytes.get buffer 0 |> Char.code |> convert_click_type in
+    let x = Bytes.get buffer 1 |> Char.code |> adjust_coordinate in
+    let y = Bytes.get buffer 2 |> Char.code |> adjust_coordinate in
+    Click (Vec.mk_v2 x y, c)
 
   (* Terminal input needs to be read 3 bytes at a time to detect escape sequences *)
   let input_buffer_len = 3
@@ -154,20 +168,9 @@ module Keys = struct
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'D' -> ArrowLeft
       (* mouse click *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
-            ->
-              Unix.read input_parser.input_fd buffer 0 input_buffer_len |> ignore ;
-              (* TODO: add support for other modes: xterm-262, ... *)
-              let cx = Bytes.get buffer 1 |> mouse_position_conversion_x10 in
-              let cy = Bytes.get buffer 2 |> mouse_position_conversion_x10 in
-              Bytes.get buffer 0
-                |> Char.code
-                |> (land) 3 (* Ignore modifier keys and keep the 2 LSBs only *)
-                |> (function
-                  | 0   ->  Click (Vec.mk_v2 cx cy, Left)
-                  | 1   ->  Click (Vec.mk_v2 cx cy, Middle)
-                  | 2   ->  Click (Vec.mk_v2 cx cy, Right)
-                  | 3   ->  ClickRelease (Vec.mk_v2 cx cy)
-                  | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
+            -> Unix.read input_parser.input_fd buffer 0 input_buffer_len |> ignore ;
+               (* TODO: add support for other modes: xterm-262, ... *)
+               mouse_x10_reader buffer
       (* This happens when typing CTRL + [ followed by another key: just buffer the input. *)
       | n  ->
           input_parser.cursor <- 1 ;

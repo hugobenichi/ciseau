@@ -1373,8 +1373,8 @@ module Ciseau = struct
     let open Keys in
     function
       | Key c               -> array_get command_key_table (Char.code c)
+      | Click (pos, Release)-> Noop
       | Click (pos, _)      -> TilesetOp (Tileset.Selection pos)
-      | ClickRelease _      -> Noop
       | Escape_Z            -> Noop
       | ArrowUp             -> MoveOp Movement.Up
       | ArrowDown           -> MoveOp Movement.Down
@@ -1427,8 +1427,7 @@ module Ciseau = struct
       | ArrowDown
       | ArrowLeft
       | ArrowRight
-      | Click _
-      | ClickRelease _                    ->  id
+      | Click _                           ->  id
       | EINTR                             ->  resize_editor
       | Escape_Z                          ->  change_mode Normal
       | Key c when c = Input.ctrl_c
