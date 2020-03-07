@@ -10,7 +10,7 @@ let starttime = Sys.time ()
 let logs = open_out "/tmp/ciseau.log"
 
 
-(* TODO: it would be nice to pair this with the reverse mapping in Term.Keys.descr_of to have
+(* TODO: it would be nice to pair this with the reverse mapping in Term.Keys.key_to_string to have
  * one place for handling input mapping and configuration reading better *)
 module Input = struct
   let ctrl_at               = '\x00'
@@ -873,7 +873,7 @@ module Stats = struct
     output_float f (stats.gc_stats.Gc.minor_words -. stats.last_minor_words) ;
     output_string logs "\n" ;
     output_string f "key " ;
-    output_string f (Keys.descr_of stats.last_key_input) ;
+    output_string f (Keys.key_to_string stats.last_key_input) ;
     let open Keys in
     match stats.last_key_input with
       | Key c -> 
@@ -1390,7 +1390,7 @@ module Ciseau = struct
   (* TODO: replace by a proper history of previous inputs *)
   let update_normal_mode_command key editor =
     let user_input = (pending_command_to_string editor.pending_input)
-                   ^  Keys.descr_of key
+                   ^  Keys.key_to_string key
                    ^ " "
                    ^ editor.user_input
     in
@@ -1486,7 +1486,7 @@ module Ciseau = struct
         Term.terminal_set_raw () ;
         file
           |> init_editor
-          |> loop (Keys.make_next_key_fn ()) ;
+          |> loop Keys.get_next_key ;
         Term.terminal_restore ()
     with
       e ->  Term.terminal_restore () ;

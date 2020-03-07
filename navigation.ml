@@ -221,9 +221,8 @@ let navigation_test () =
   print_entries (file_index_entries file_index) ;
   if true then exit 0 ;
   *)
-  let next_key = Keys.make_next_key_fn () in
   let rec loop framebuffer path index pattern =
-    next_key ()
+    Keys.get_next_key ()
       |> (function
         | Key c when c = '\x03'   -> None
         | Key c when c = '\x7f'   -> Some (String.sub pattern 0 (max 0 ((slen pattern) - 1)))

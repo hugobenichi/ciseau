@@ -61,7 +61,7 @@ module Keys = struct
     | ArrowLeft                         (* esc[D *)
     | EINTR                             (* usually happen when terminal is resized *)
 
-  let descr_of =
+  let key_to_string =
     function
       | Click (v, Left)                 ->  "ClickLeft" ^ (Vec.v2_string v)
       | Click (v, Right)                ->  "ClickRight" ^ (Vec.v2_string v)
@@ -110,78 +110,79 @@ module Keys = struct
       | Key '\''                        -> "'"
       | Key k                           ->  Char.escaped k
 
+  (* x10 mouse click coordinate reader *)
+  let mouse_position_conversion_x10 c =
+    let c' = (Char.code c) - 33 in
+    if c' < 0 then c' + 255 else c'
+
   (* Terminal input needs to be read 3 bytes at a time to detect escape sequences *)
   let input_buffer_len = 3
 
-  (* Buffer inputs across next_key calls in order to correclty segment escape key codes *)
-  type input_buffer = {
-    buffer : Bytes.t ;
-    mutable cursor : int ;    (* indicate if there is some pending input from last read *)
-    mutable lastread : int ;
+  (* Buffer inputs across next_key calls in order to correcty segment escape key codes *)
+  type input_parser = {
+    input_fd          : Unix.file_descr ;
+    buffer            : Bytes.t ;
+    mutable cursor    : int ;    (* indicate if there is some pending input from last read *)
+    mutable lastread  : int ;
   }
 
-  let rec next_key input_buffer () =
-    let { buffer ; cursor ; lastread } = input_buffer in
-    if cursor > 0 then
-      let c = Bytes.get buffer cursor in
-      input_buffer.cursor <- (cursor + 1) mod lastread ;
+  let rec read_next_key input_parser () =
+    let buffer = input_parser.buffer in
+    (* First, consume any pending input that did not match a sequence *)
+    if input_parser.cursor > 0 then
+      let c = Bytes.get buffer input_parser.cursor in
+      input_parser.cursor <- (input_parser.cursor + 1) mod input_parser.lastread ;
       Key c
     else
+    (* Else read available data *)
     match
-      Unix.read Unix.stdin buffer 0 input_buffer_len
+      Unix.read input_parser.input_fd buffer 0 input_buffer_len
     with
       (* interrupt: probably a screen resize event *)
       | exception Unix.Unix_error (Unix.EINTR, _, _)
             -> EINTR
       (* timeout: retry *)
       | 0   ->
-              next_key input_buffer ()
+              read_next_key input_parser ()
       (* one normal key *)
       | 1   -> Key (Bytes.get buffer 0)
       (* escape sequences *)
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z'
-            -> Escape_Z
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'A'
-            -> ArrowUp
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'B'
-            -> ArrowDown
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'C'
-            -> ArrowRight
-      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'D'
-            -> ArrowLeft
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'Z' -> Escape_Z
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'A' -> ArrowUp
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'B' -> ArrowDown
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'C' -> ArrowRight
+      | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'D' -> ArrowLeft
       (* mouse click *)
       | 3 when Bytes.get buffer 1 = '[' && Bytes.get buffer 2 = 'M'
             ->
-              Unix.read Unix.stdin buffer 0 input_buffer_len |> ignore ;
-              (* x10 mouse click mode. *)
+              Unix.read input_parser.input_fd buffer 0 input_buffer_len |> ignore ;
               (* TODO: add support for other modes: xterm-262, ... *)
-              let x10_position_reader c =
-                let c' = (Char.code c) - 33 in
-                if c' < 0 then c' + 255 else c'
-              in
-              let cx = Bytes.get buffer 1 |> x10_position_reader in
-              let cy = Bytes.get buffer 2 |> x10_position_reader in
+              let cx = Bytes.get buffer 1 |> mouse_position_conversion_x10 in
+              let cy = Bytes.get buffer 2 |> mouse_position_conversion_x10 in
               Bytes.get buffer 0
                 |> Char.code
-                |> (land) 3 (* Ignore modifier keys *)
+                |> (land) 3 (* Ignore modifier keys and keep the 2 LSBs only *)
                 |> (function
                   | 0   ->  Click (Vec.mk_v2 cx cy, Left)
                   | 1   ->  Click (Vec.mk_v2 cx cy, Middle)
                   | 2   ->  Click (Vec.mk_v2 cx cy, Right)
                   | 3   ->  ClickRelease (Vec.mk_v2 cx cy)
                   | cb  ->  fail (Printf.sprintf "unexpected mouse event %d,%d,%d" cb cx cy))
-      (* This happens when typing CTRL + [ followed by another key *)
+      (* This happens when typing CTRL + [ followed by another key: just buffer the input. *)
       | n  ->
-          input_buffer.cursor <- 1 ;
-          input_buffer.lastread <- n ;
+          input_parser.cursor <- 1 ;
+          input_parser.lastread <- n ;
           Key (Bytes.get buffer 0)
 
-  let make_next_key_fn () =
+  let make_next_key_fn input_fd =
     {
+      input_fd  = input_fd ;
       buffer    = Bytes.make input_buffer_len '\000' ;
       cursor    = 0 ;
       lastread  = 0;
-    } |> next_key
+    } |> read_next_key
+
+  let get_next_key = make_next_key_fn Unix.stdin
 
 end
 

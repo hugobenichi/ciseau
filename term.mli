@@ -1,8 +1,8 @@
-
 (* main module for interacting with the terminal *)
 
-val terminal_restore          : unit -> unit
+(* Basic terminal manipulation funcions*)
 val terminal_set_raw          : unit -> unit
+val terminal_restore          : unit -> unit
 val terminal_dimensions       : unit -> Util.Vec.vec2
 
 module Keys : sig
@@ -12,6 +12,7 @@ module Keys : sig
       Left
     | Right
     | Middle
+    (* TODO: add Release here *)
 
   type key =
       Key of char
@@ -24,8 +25,13 @@ module Keys : sig
     | ArrowLeft
     | EINTR
 
-  val descr_of                : key -> string
-  val make_next_key_fn        : unit -> unit -> key  (* created unit -> key function is not reentrant and keeps state between inputs *)
+  val key_to_string           : key -> string
+  (* Returns a function that will block until the next input is available
+   * That function is not reentrant and keeps state between input in order to *)
+  val make_next_key_fn        : Unix.file_descr -> unit -> key  (* created unit -> key function is not reentrant and keeps state between inputs *)
+
+  (* Stateful function for getting inputs from stdin. Not reentrant. *)
+  val get_next_key : unit -> key
 end
 
 module Color : sig
