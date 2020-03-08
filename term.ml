@@ -413,3 +413,47 @@ module Framebuffer = struct
     let y = clamp 0 (wy - 1) y_raw in
     bytes_blit_string s offset t.text (y + wx + x) (min len (wx - x))
 end
+
+module Source = struct
+  type t = {
+    origin                : Util.Vec.vec2 ;
+    size                  : Util.Vec.vec2 ;
+    cursors               : Util.Vec.vec2 list ;
+    lineno                : int ;
+    get_line_length       : int -> int ;
+    fill_line_by_segment  : lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit ;
+  }
+
+  let draw_line framebuffer source y lineno =
+    (* TODO: draw lineno and "..." on wrapped lines *)
+    let open Framebuffer in
+    let linelen = source.get_line_length lineno in
+    let bx = Vec.x framebuffer.window in
+    let wx = Vec.x source.size in
+    let nsegments = linelen / wx + (if linelen mod wx = 0 then 0 else 1) in
+    for seg = 0 to nsegments - 1 do
+      source.fill_line_by_segment
+        ~lineno:lineno
+        ~lineoffset:(seg * wx)
+        ~byteoffset:(((Vec.y source.origin) + y) * bx + (Vec.x source.origin))
+        ~segmentlength:wx
+        framebuffer.Framebuffer.text
+    done ;
+    y + nsegments
+
+  let draw_source framebuffer source =
+    (* TODO: add "cursor anchor mode" *)
+    let rec loop framebuffer source y lineno =
+      if y < (Vec.y source.size)
+        then
+          let y' = draw_line framebuffer source y lineno in
+          loop framebuffer source y' (lineno + 1)
+    in
+    loop framebuffer source 0 source.lineno
+
+  let draw_sources framebuffer =
+    List.iter (draw_source framebuffer)
+    (* TODO: draw cursors *)
+    (* TODO: put colors *)
+
+end

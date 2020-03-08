@@ -79,3 +79,17 @@ module Framebuffer : sig
   (* Color rectangle in framebuffer,  inclusive borders: left and top, exclusive borders: right and bottom *)
   val put_color_rect    : t -> Color.color_cell -> Rec.rec2 -> unit
 end
+
+module Source : sig
+  type t = {
+    origin                : Util.Vec.vec2 ;
+    size                  : Util.Vec.vec2 ;
+    cursors               : Util.Vec.vec2 list ;
+    lineno                : int ;
+    get_line_length       : int -> int ;
+    (* TOOD: doc me *)
+    fill_line_by_segment  : lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit ;
+  }
+
+  val draw_sources : Framebuffer.t -> t list -> unit
+end
