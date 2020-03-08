@@ -237,17 +237,13 @@ module Color = struct
                            assert_that (0 <= b && b < 6) ;
                            16 + 36 * r + 6 * g + b
 
+  let color_code_fg =  color_code_raw
   let color_code_bg =  color_code_raw >> ((+) 256)
 
   type color_cell = {
     fg : color ;
     bg : color ;
   }
-
-  let color_code =
-    function
-      | Foreground -> color_code_raw
-      | Background -> color_code_bg
 
   let fg_color_control_strings = Array.init 256 (Printf.sprintf "38;5;%d")
   let bg_color_control_strings = Array.init 256 (Printf.sprintf ";48;5;%dm")
@@ -265,26 +261,20 @@ end
 
 module Framebuffer = struct
   open Util.Arrays
-  open Util.Rec
 
   let buffer = Buffer.create 4096
 
   (* TODO: this should be platform specific *)
   let newline = "\r\n"
 
-  module Default = struct
-    let fg_color_code    = Color.color_code Color.Foreground Color.White
-    let bg_color_code    = Color.color_code Color.Background (Color.Gray 2)
-    let z     = 0
-    let text  = ' '
-  end
+  let default_text            = ' '
+  let default_fg_color_code   = Color.color_code_fg Color.White
+  let default_bg_color_code   = Color.color_code_bg (Color.Gray 2)
 
   type t = {
     text                      : Bytes.t ;
-    line_lengths              : int array ;
     fg_colors                 : int array ;
     bg_colors                 : int array ;
-    z_index                   : int array ;
     len                       : int ;
     window                    : Vec.vec2 ;
     mutable cursor            : Vec.vec2 ;
@@ -293,79 +283,44 @@ module Framebuffer = struct
   let mk_framebuffer v =
     let len = Vec.area v
     in {
-      text        = Bytes.make len Default.text ;
-      line_lengths = Array.make (Vec.x v) 0 ; (* CLEANUP: rename me *)
-      fg_colors   = Array.make len Default.fg_color_code ;
-      bg_colors   = Array.make len Default.bg_color_code ;
-      z_index     = Array.make len Default.z ;
+      text        = Bytes.make len default_text ;
+      fg_colors   = Array.make len default_fg_color_code ;
+      bg_colors   = Array.make len default_bg_color_code ;
       len         = len ;
       window      = v ;
       cursor      = Vec.zero ;
     }
 
-  let framebuffer_size  { window } = window
-
-  let default_fill_len    = 8192
-  let default_fg_colors   = Array.make default_fill_len Default.fg_color_code
-  let default_bg_colors   = Array.make default_fill_len Default.bg_color_code
-  let default_line_length = Array.make 256 0
-
-  let fill_fg_color t offset len color =
-    color
-      |> Color.color_code Color.Foreground
-      |> array_fill t.fg_colors offset len
-
-  let fill_bg_color t offset len color =
-    color
-      |> Color.color_code Color.Background
-      |> array_fill t.bg_colors offset len
+  let framebuffer_size { window } = window
 
   let clear t =
-    (*
-    let rec loop t offset remaining =
-      if remaining > 0 then (
-        let len = min remaining default_fill_len in
-        array_blit default_fg_colors 0 t.fg_colors offset len ;
-        array_blit default_bg_colors 0 t.bg_colors offset len ;
-        (* TODO: also clear z_index if I ever start using it *)
-        loop t (offset + len) (remaining - len)
-      )
-    in
-      loop t 0 t.len ;
-      *)
-      Bytes.fill t.text 0 t.len Default.text ;
-      Array.fill t.fg_colors 0 t.len Default.fg_color_code ;
-      Array.fill t.bg_colors 0 t.len Default.fg_color_code ;
-      ()
-      (*
-      array_blit default_line_length 0 t.line_lengths 0 (Vec.y t.window)
-      *)
+    Bytes.fill t.text 0 t.len default_text ;
+    Array.fill t.fg_colors 0 t.len default_fg_color_code ;
+    Array.fill t.bg_colors 0 t.len default_fg_color_code
 
   let clear_rect t rect =
-    assert_rect_inside t.window rect ;
-    let len = rect_w rect in
-    for y = (rect_y rect) to (rect_y_end rect) - 1 do
-      let offset = y * (Vec.x t.window) + (rect_x rect) in
-      Bytes.fill t.text offset len Default.text ;
-      array_blit default_fg_colors 0 t.fg_colors offset len ;
-      array_blit default_bg_colors 0 t.bg_colors offset len ;
+    Rec.assert_rect_inside t.window rect ;
+    let len = Rec.rect_w rect in
+    for y = (Rec.rect_y rect) to (Rec.rect_y_end rect) - 1 do
+      let offset = y * (Vec.x t.window) + (Rec.rect_x rect) in
+      Bytes.fill t.text offset len default_text ;
+      Array.fill t.fg_colors offset len default_fg_color_code ;
+      Array.fill t.bg_colors offset len default_fg_color_code
     done
 
   let clear_line t ~x:x ~y:y ~len:len =
     assert_that (0 <= y) ;
     assert_that (y < (Vec.y t.window)) ;
     let offset = y * (Vec.x t.window) + x in
-    Bytes.fill t.text offset len Default.text ;
-    array_blit default_fg_colors 0 t.fg_colors offset len ;
-    array_blit default_bg_colors 0 t.bg_colors offset len
+    Bytes.fill t.text offset len default_text ;
+    Array.fill t.fg_colors offset len default_fg_color_code ;
+    Array.fill t.bg_colors offset len default_fg_color_code
 
   let render framebuffer =
-    (* Prep buffer *)
     Buffer.clear buffer ;
     (* Do not clear the screen with \027c as it causes flickering *)
-    Buffer.add_string buffer "\027[?25l" ;    (* cursor hide *)
+    Buffer.add_string buffer "\027[?25l" ;    (* hide cursor *)
     Buffer.add_string buffer "\027[H" ;       (* go home *)
-
     (* Push lines one by one, one color segment at a time *)
     let linestop = ref (Vec.x framebuffer.window) in
     let start = ref 0 in
@@ -403,29 +358,19 @@ module Framebuffer = struct
         len := 0
       )
     done ;
-
     (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
     Buffer.add_string buffer "\027[" ;
     (* PERF: make a add_number function *)
     Buffer.add_string buffer (string_of_int ((Vec.y framebuffer.cursor) + 1)) ;
-    (* PERF: make a add_char function *)
-    Buffer.add_string buffer ";" ;
+    Buffer.add_char buffer ';' ;
     Buffer.add_string buffer (string_of_int ((Vec.x framebuffer.cursor) + 1)) ;
-    Buffer.add_string buffer "H" ;
+    Buffer.add_char buffer 'H' ;
     Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
-
     (* and finally, push to terminal *)
     if kDRAW_SCREEN then (
       Buffer.output_buffer stdout buffer ;
       flush stdout
     )
-
-  let update_line_end t x y =
-    ()
-    (*
-    if (array_get t.line_lengths y) < x then
-      array_set t.line_lengths y x
-      *)
 
   let to_offset window x y =
     assert_that (x <= (Vec.x window)) ;
@@ -434,16 +379,15 @@ module Framebuffer = struct
 
   let put_color_rect t { Color.fg ; Color.bg } rect =
     (* Clip rectangle vertically to framebuffer's window *)
-    let x_start = max 0 (rect_x rect) in
-    let y_start = max 0 (rect_y rect) in
-    let x_end   = min (Vec.x t.window) (rect_x_end rect) in
-    let y_end   = min ((Vec.y t.window) - 1) (rect_y_end rect) in
+    let x_start = max 0 (Rec.rect_x rect) in
+    let y_start = max 0 (Rec.rect_y rect) in
+    let x_end   = min (Vec.x t.window) (Rec.rect_x_end rect) in
+    let y_end   = min ((Vec.y t.window) - 1) (Rec.rect_y_end rect) in
     let len     = x_end - x_start in
     for y = y_start to y_end do
       let offset = to_offset t.window x_start y in
-      fill_fg_color t offset len fg ;
-      fill_bg_color t offset len bg ;
-      update_line_end t x_end y
+      fg |> Color.color_code_fg |> array_fill t.fg_colors offset len ;
+      bg |> Color.color_code_bg |> array_fill t.bg_colors offset len ;
     done
 
   let put_cursor t cursor =
@@ -458,39 +402,5 @@ module Framebuffer = struct
     if not (x + blitlen <= framebuffer.window.x) then
       fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
       *)
-    update_line_end framebuffer (x + blitlen) y ;
     bytes_blit_string s offset framebuffer.text bytes_offset blitlen
-
-  (* TODO: eliminate this once remains of Overflow mdoe is gone and Fileview draws directly to a screen
-   * Blit content of framebuffer 'src' into a rectangle 'src_rect' of framebuffer 'dst'.
-   * Copy cursor in 'dst' if 'copy_cursor' is true. *)
-  let put_framebuffer dst dst_rect src =
-    assert_rect_inside dst.window dst_rect ;
-    assert_that ((Vec.y src.window) >= rect_h dst_rect) ;
-
-    let w_dst = rect_w dst_rect in
-    let x_dst = ref (rect_x dst_rect) in
-    let y_dst = ref (rect_y dst_rect) in
-
-    let x_src = ref 0 in
-    let y_src = ref 0 in
-    let x_src_stop = ref 0 in
-
-    while !y_dst < (rect_y_end dst_rect) do
-      let o_dst = to_offset dst.window !x_dst !y_dst in
-      let o_src = to_offset src.window !x_src !y_src in
-
-      if 0 = !x_src then
-        x_src_stop := array_get src.line_lengths !y_src ;
-
-      let len = w_dst in
-
-      bytes_blit src.text o_src dst.text o_dst len ;
-      array_blit src.fg_colors o_src dst.fg_colors o_dst len ;
-      array_blit src.bg_colors o_src dst.bg_colors o_dst len ;
-
-      incr y_dst;
-      incr y_src
-    done
-
 end

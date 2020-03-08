@@ -62,9 +62,6 @@ module Color : sig
     fg : color ;
     bg : color ;
   }
-
-  val color_code              : color_layer -> color -> int
-  val color_code_to_string    : int -> string
 end
 
 module Framebuffer : sig
@@ -80,13 +77,4 @@ module Framebuffer : sig
   (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> Vec.vec2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
-  val put_framebuffer   : t -> Rec.rec2 -> t -> unit
 end
-
-(* Is this interface useful for drawing ? how to pass colors, lines segments
-module Drawview : sig
-  type t
-  val mk_drawview       : Rec.rec2 -> Framebuffer.t -> t
-  val iter_lines        : t -> (i -> string) -> unit
-end
-*)

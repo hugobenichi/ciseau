@@ -257,7 +257,8 @@ end = struct
       |> Framebuffer.put_cursor screen.frame_buffer
 
   let put_framebuffer screen src =
-    Framebuffer.put_framebuffer screen.frame_buffer screen.window src
+    (* TOOD: reimplement drawing to the framebuffer ! *)
+    ()
 end
 
 
@@ -779,7 +780,7 @@ end = struct
         Screen.clear textscreen ;
         Framebuffer.clear framebuffer ;
         fill_framebuffer t is_focused textscreen framebuffer ;
-        Screen.put_framebuffer textscreen framebuffer ;
+        Screen.put_framebuffer textscreen framebuffer
       )
 
 
