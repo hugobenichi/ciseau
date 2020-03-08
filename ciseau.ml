@@ -253,7 +253,7 @@ end = struct
   let put_cursor screen pos =
     screen.window
       |> rect_offset
-      |> Vec.v2_add pos
+      |> Vec.add pos
       |> Framebuffer.put_cursor screen.frame_buffer
 
   let put_framebuffer screen src =

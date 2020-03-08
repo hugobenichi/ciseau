@@ -347,11 +347,11 @@ module Vec = struct
   let y { x ; y }   = y
   let mk_v2 x y     = { x ; y }
   let zero          = mk_v2 0 0
-  let v2_add t1 t2  = mk_v2 ((x t1) + (x t2)) ((y t1) + (y t2))
-  let v2_sub t1 t2  = mk_v2 ((x t1) - (x t2)) ((y t1) - (y t2))
+  let add t1 t2     = mk_v2 ((x t1) + (x t2)) ((y t1) + (y t2))
+  let sub t1 t2     = mk_v2 ((x t1) - (x t2)) ((y t1) - (y t2))
   let area v        = (x v) * (y v)
-  let (+)           = v2_add
-  let (-)           = v2_sub
+  let (+)           = add
+  let (-)           = sub
   let ( * ) a v     = mk_v2 (a * (x v)) (a * (y v))
 
   let is_v2_inside vlim v =

@@ -114,8 +114,8 @@ module Vec : sig
   val y                       : vec2 -> int
   val mk_v2                   : int -> int -> vec2
   val zero                    : vec2
-  val v2_add                  : vec2 -> vec2 -> vec2
-  val v2_sub                  : vec2 -> vec2 -> vec2
+  val add                     : vec2 -> vec2 -> vec2
+  val sub                     : vec2 -> vec2 -> vec2
   val area                    : vec2 -> int
   val (+)                     : vec2 -> vec2 -> vec2
   val (-)                     : vec2 -> vec2 -> vec2

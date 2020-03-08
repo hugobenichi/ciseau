@@ -1,6 +1,7 @@
 open Util
 
 let kDRAW_SCREEN = true
+let kFAIL_ON_GEOMETRY_ASSERTS = true
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 let terminal_dimensions  =
@@ -262,6 +263,18 @@ end
 module Framebuffer = struct
   open Util.Arrays
 
+  let clamp a b x =
+    let x' = x |> max a |> min b in
+    if kFAIL_ON_GEOMETRY_ASSERTS && x' <> x then fail (Printf.sprintf "%d was not in [%d, %d]" x a b) ;
+    x'
+
+  let clampv vlim v =
+    let x = clamp 0 (Vec.x vlim) (Vec.x v) in
+    let y = clamp 0 (Vec.y vlim) (Vec.y v) in
+    Vec.mk_v2 x y
+
+  let v11 = Vec.mk_v2 1 1
+
   let buffer = Buffer.create 4096
 
   (* TODO: this should be platform specific *)
@@ -299,19 +312,23 @@ module Framebuffer = struct
     Array.fill t.bg_colors 0 t.len default_fg_color_code
 
   let clear_rect t rect =
-    Rec.assert_rect_inside t.window rect ;
-    let len = Rec.rect_w rect in
-    for y = (Rec.rect_y rect) to (Rec.rect_y_end rect) - 1 do
-      let offset = y * (Vec.x t.window) + (Rec.rect_x rect) in
+    let startv = rect |> Rec.rect_offset |> clampv (Vec.sub t.window v11) in (* startv must be strictly inside window *)
+    let stopv  = rect |> Rec.rect_end |> clampv t.window in
+    for y = (Vec.y startv) to (Vec.y stopv) - 1 do
+      let offset = y * (Vec.x t.window) + (Vec.x startv) in
+      let len = (Vec.x stopv) - (Vec.x startv) in
       Bytes.fill t.text offset len default_text ;
       Array.fill t.fg_colors offset len default_fg_color_code ;
       Array.fill t.bg_colors offset len default_fg_color_code
     done
 
-  let clear_line t ~x:x ~y:y ~len:len =
-    assert_that (0 <= y) ;
-    assert_that (y < (Vec.y t.window)) ;
-    let offset = y * (Vec.x t.window) + x in
+  let clear_line t ~x:x_raw ~y:y_raw ~len:len_raw =
+    let wx = Vec.x t.window in
+    let wy = Vec.y t.window in
+    let x = clamp 0 (wx - 1) x_raw in (* x and y must be strictly inside t.window *)
+    let y = clamp 0 (wy - 1) y_raw in
+    let len = clamp 0 (wx - x) len_raw in
+    let offset = y * wx + x in
     Bytes.fill t.text offset len default_text ;
     Array.fill t.fg_colors offset len default_fg_color_code ;
     Array.fill t.bg_colors offset len default_fg_color_code
@@ -372,35 +389,27 @@ module Framebuffer = struct
       flush stdout
     )
 
-  let to_offset window x y =
-    assert_that (x <= (Vec.x window)) ;
-    assert_that (y <= (Vec.y window)) ;
-    y * (Vec.x window) + x
-
   let put_color_rect t { Color.fg ; Color.bg } rect =
-    (* Clip rectangle vertically to framebuffer's window *)
-    let x_start = max 0 (Rec.rect_x rect) in
-    let y_start = max 0 (Rec.rect_y rect) in
-    let x_end   = min (Vec.x t.window) (Rec.rect_x_end rect) in
-    let y_end   = min ((Vec.y t.window) - 1) (Rec.rect_y_end rect) in
-    let len     = x_end - x_start in
-    for y = y_start to y_end do
-      let offset = to_offset t.window x_start y in
+    let startv = rect |> Rec.rect_offset |> clampv (Vec.sub t.window v11) in (* startv must be strictly inside window *)
+    let stopv  = rect |> Rec.rect_end |> clampv t.window in
+    for y = (Vec.y startv) to (Vec.y stopv) - 1 do
+      let offset = y * (Vec.x t.window) + (Vec.x startv) in
+      let len = (Vec.x stopv) - (Vec.x startv) in
       fg |> Color.color_code_fg |> array_fill t.fg_colors offset len ;
-      bg |> Color.color_code_bg |> array_fill t.bg_colors offset len ;
+      bg |> Color.color_code_bg |> array_fill t.bg_colors offset len
     done
 
   let put_cursor t cursor =
-    assert_that (Vec.is_v2_inside t.window cursor) ;
-    t.cursor <- cursor
+    let cursor' = clampv (Vec.sub t.window v11) cursor in
+    if cursor' = cursor
+      then t.cursor <- cursor
 
-  let put_line framebuffer ~x:x ~y:y ?offset:(offset=0) ?len:(len=0-1) s =
-    let bytes_offset = to_offset framebuffer.window x y in
-    let linelen = if len < 0 then slen s else len in
-    let blitlen = min linelen ((Vec.x framebuffer.window) - x) in
-    (*
-    if not (x + blitlen <= framebuffer.window.x) then
-      fail  (Printf.sprintf "x:%d + blitlen:%d was not leq than framebuffer.window.x:%d" x blitlen framebuffer.window.x);
-      *)
-    bytes_blit_string s offset framebuffer.text bytes_offset blitlen
+  let put_line t ~x:x_raw ~y:y_raw ?offset:(offset_raw=0) ?len:(len_raw=0-1) s =
+    let offset = clamp 0 (slen s) offset_raw in
+    let len = if len_raw < 0 then slen s else len_raw in
+    let wx = Vec.x t.window in
+    let wy = Vec.y t.window in
+    let x = clamp 0 (wx - 1) x_raw in (* x and y must be strictly inside t.window *)
+    let y = clamp 0 (wy - 1) y_raw in
+    bytes_blit_string s offset t.text (y + wx + x) (min len (wx - x))
 end

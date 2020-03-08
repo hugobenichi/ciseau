@@ -69,12 +69,13 @@ module Framebuffer : sig
   type t
   val mk_framebuffer    : Vec.vec2 -> t
   val framebuffer_size  : t -> Vec.vec2
+  val render            : t -> unit
   val clear             : t -> unit
+  (* Clear rectangle in framebuffer inclusive borders: left and top, exclusive borders: right and bottom *)
   val clear_rect        : t -> Rec.rec2 -> unit
   val clear_line        : t -> x:int -> y:int -> len:int -> unit
-  val render            : t -> unit
-  val put_color_rect    : t -> Color.color_cell -> Rec.rec2 -> unit
-  (* TODO: add a put_color_segment function *)
   val put_cursor        : t -> Vec.vec2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
+  (* Color rectangle in framebuffer,  inclusive borders: left and top, exclusive borders: right and bottom *)
+  val put_color_rect    : t -> Color.color_cell -> Rec.rec2 -> unit
 end
