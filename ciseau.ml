@@ -1546,8 +1546,8 @@ end
 
 
 let () =
-  (* Automatic resize support requires requesting SIFWINCH events from the terminal.
-   * No handling is needed as SGIWINCH events interrupt blocking reads on input,
+  (* Automatic resize support requires requesting SIGFWINCH events from the terminal.
+   * No handling is needed as SIGWINCH events interrupt blocking reads on input,
    * which is detected and processed in the input parser. *)
   let handler sig_n = () in
   let sigwinch_code = 28 in

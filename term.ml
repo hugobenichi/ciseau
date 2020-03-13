@@ -415,13 +415,15 @@ module Framebuffer = struct
 end
 
 module Source = struct
+  type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
+
   type t = {
     origin                : Util.Vec.vec2 ;
     size                  : Util.Vec.vec2 ;
     cursors               : Util.Vec.vec2 list ;
     lineno                : int ;
     get_line_length       : int -> int ;
-    fill_line_by_segment  : lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit ;
+    fill_line_by_segment  : fill_line_by_segment_t ;
   }
 
   let draw_line framebuffer source y lineno =
@@ -456,4 +458,60 @@ module Source = struct
     (* TODO: draw cursors *)
     (* TODO: put colors *)
 
+  let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
+    Arrays.bytes_blit_string (Arrays.array_get strings lineno) lineoffset bytes byteoffset segmentlength
+
+  let string_array_to_source strings =
+    (Arrays.array_get strings >> slen, fill_line_by_segment_from_string_array strings)
+
 end
+
+let lorem_ipsum = [|
+  "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor";
+  "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation";
+  "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in";
+  "reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.";
+  "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
+  "";
+  "Curabitur pretium tincidunt lacus. Nulla gravida orci a odio. Nullam varius, turpis";
+  "et commodo pharetra, est eros bibendum elit, nec luctus magna felis sollicitudin mauris.";
+  "Integer in mauris eu nibh euismod gravida. Duis ac tellus et risus vulputate vehicula.";
+  "Donec lobortis risus a elit. Etiam tempor. Ut ullamcorper, ligula eu tempor congue, eros";
+  "est euismod turpis, id tincidunt sapien risus a quam. Maecenas fermentum consequat mi.";
+  "Donec fermentum. Pellentesque malesuada nulla a mi.";
+  "Duis sapien sem, aliquet nec, commodo eget, consequat quis, neque.";
+  "Aliquam faucibus, elit ut dictum aliquet, felis nisl adipiscing sapien, sed malesuada diam lacus eget erat.";
+  "Cras mollis scelerisque nunc. Nullam arcu. Aliquam consequat.";
+  "Curabitur augue lorem, dapibus quis, laoreet et, pretium ac, nisi.";
+  "Aenean magna nisl, mollis quis, molestie eu, feugiat in, orci. In hac habitasse platea dictumst.";
+|]
+
+
+let smoke_test () =
+  (* Register SIGWINCH handler to react on terminal resize events *)
+  let handler sig_n = () in
+  let sigwinch_code = 28 in
+  Sys.set_signal sigwinch_code (Sys.Signal_handle handler) ;
+  (* Prepare terminal *)
+  try
+    terminal_set_raw () ;
+    let term_dim = terminal_dimensions () in
+    let framebuffer = Framebuffer.mk_framebuffer term_dim in
+    let (get_line_length, fill_line_by_segment) = Source.string_array_to_source lorem_ipsum in
+    let source = {
+      Source.origin                = Util.Vec.mk_v2 0 0 ;
+      Source.size                  = Util.Vec.mk_v2 30 30 ;
+      Source.cursors               = [] ;
+      Source.lineno                = 0 ;
+      Source.get_line_length;
+      Source.fill_line_by_segment;
+    } in
+    Source.draw_sources framebuffer [source] ;
+    let _ = Keys.get_next_key () in
+    terminal_restore ()
+  with
+    e ->  terminal_restore () ;
+          Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
+          Printexc.print_backtrace stdout
+
+let () = smoke_test ()

@@ -65,6 +65,7 @@ module Options : sig
 end
 
 (* Wrappers around common Array/String/Bytes operations to get useful backtraces *)
+(* TODO: add argument names to the fill and blit functions, or add overloads with argument names *)
 module Arrays : sig
   (* Useful for writing loop conditions *)
   val astop                   : 'a array -> int
