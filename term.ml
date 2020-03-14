@@ -3,7 +3,7 @@ open Util
 let kTERM_ESCAPE = true
 let kCHANGE_TERM = true
 let kDRAW_SCREEN = true
-let kFORCE_TERM_DIM = Some (Vec.mk_v2 12 20)
+let kFORCE_TERM_DIM = Some (Vec.mk_v2 60 40)
 let kFAIL_ON_GEOMETRY_ASSERTS = false
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
@@ -347,46 +347,34 @@ module Framebuffer = struct
 
   let render framebuffer =
     Buffer.clear buffer ;
-    (* Do not clear the screen with \027c as it causes flickering *)
+    (* Do not clear with \027c to avoid flickering *)
     buffer_add_escape buffer ; Buffer.add_string buffer "?25l" ;    (* hide cursor *)
     buffer_add_escape buffer ; Buffer.add_string buffer "H" ;       (* go home *)
-    (* Push lines one by one, one color segment at a time *)
-    let linestop = ref (Vec.x framebuffer.window) in
-    let start = ref 0 in
-    let len = ref 0 in
-    let fg = ref 0 in
-    let bg = ref 0 in
-    while !start < framebuffer.len do
-      if !len = 0 then (
-        fg := array_get framebuffer.fg_colors !start ;
-        bg := array_get framebuffer.bg_colors !start
-      ) ;
-      incr len ;
-      let stop = !start + !len in
-      (* Push a color segment if: 1) end of line, 2) color switch *)
-      let should_draw_line =
-        if stop = framebuffer.len then (
-          (* End of last line, do no append new line, do not read colors *)
-          true
-        ) else if stop > !linestop then (
-          (* End of line, also put new line control characters for previous line *)
-          Buffer.add_string buffer newline ;
-          linestop += (Vec.x framebuffer.window) ;
-          true
-        ) else
-          (* Otherwise, just check colors *)
-          !fg <> (array_get framebuffer.fg_colors stop) || !bg <> (array_get framebuffer.bg_colors stop)
-      in
-      if should_draw_line then (
+    let xstop = (Vec.x framebuffer.window) - 1 in
+    let ystop = (Vec.y framebuffer.window) - 1 in
+    let k = ref 0 in
+    for y = 0 to ystop do
+      let x = ref 0 in
+      while !x < xstop do
+        let fg = array_get framebuffer.fg_colors !k in
+        let bg = array_get framebuffer.bg_colors !k in
+        let same_color = ref true in
         buffer_add_escape buffer ;
-        Buffer.add_string buffer (Color.color_code_to_string !fg) ;
-        Buffer.add_string buffer (Color.color_code_to_string !bg) ;
-        Buffer.add_subbytes buffer framebuffer.text !start !len ;
+        Buffer.add_string buffer (Color.color_code_to_string fg) ;
+        Buffer.add_string buffer (Color.color_code_to_string bg) ;
+        while !x < xstop && !same_color do
+          x += 1 ;
+          same_color :=
+            (fg = array_get framebuffer.fg_colors (!k + !x)) &&
+            (bg = array_get framebuffer.bg_colors (!k + !x))
+        done ;
+        Buffer.add_subbytes buffer framebuffer.text !k !x ;
         buffer_add_escape buffer ;
         Buffer.add_string buffer "0m" ;
-        start += !len ;
-        len := 0
-      )
+        k += !x
+      done ;
+      if y < ystop then
+        Buffer.add_string buffer newline
     done ;
     (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
     buffer_add_escape buffer ;
@@ -533,8 +521,10 @@ let smoke_test () =
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     Framebuffer.clear framebuffer ;
-    let source = Source.string_array_to_source (Vec.mk_v2 1 1) (Vec.mk_v2 30 30) 0 source0 in
-    Source.draw_sources framebuffer [source] ;
+    if true then begin
+      let source = Source.string_array_to_source (Vec.mk_v2 0 0) (Vec.mk_v2 50 30) 0 source0 in
+      Source.draw_sources framebuffer [source] ;
+    end ;
     Framebuffer.render framebuffer ;
     let _ = Keys.get_next_key () in
     terminal_restore ()
