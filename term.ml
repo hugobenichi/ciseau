@@ -439,19 +439,28 @@ module Source = struct
     let oy = Vec.y origin in
     let wx = Vec.x size in
     let wy = Vec.y size in
-    let left = ref (line_len lineno) in
     let seg = ref 0 in
+    let left = ref (line_len lineno) in
+    if !left = 0
+      then 1
+      else
+    let lineoffset = ref 0 in
+    let byteoffset = ref ((oy + y) * bx + ox - y) in (* BUG: why -y ??? *)
     while 0 < !left && y + !seg < wy do
       fill_line
         ~lineno:lineno
-        ~lineoffset:(wx * !seg)
-        ~byteoffset:(bx * (oy + y + !seg) + ox)
+        ~lineoffset:!lineoffset
+        ~byteoffset:!byteoffset
         ~segmentlength:(min wx !left)
         framebuffer.text ;
       seg += 1 ;
-      left -= wx
+      left -= wx ;
+      lineoffset += wx ;
+      byteoffset += (bx - 1) ; (* BUG: why -1 ??? *)
     done ;
-    y + !seg
+    let s = string_of_int lineno in
+    Bytes.blit_string s 0 framebuffer.text ((oy + y) * bx + ox - y) (slen s) ;
+    !seg
 
   let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line } =
     let origin' = origin |> clampv (Vec.sub framebuffer.window v11) in
@@ -522,7 +531,7 @@ let smoke_test () =
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     Framebuffer.clear framebuffer ;
     if true then begin
-      let source = Source.string_array_to_source (Vec.mk_v2 0 0) (Vec.mk_v2 50 30) 0 source0 in
+      let source = Source.string_array_to_source (Vec.mk_v2 1 1) (Vec.mk_v2 50 40) 0 source0 in
       Source.draw_sources framebuffer [source] ;
     end ;
     Framebuffer.render framebuffer ;
