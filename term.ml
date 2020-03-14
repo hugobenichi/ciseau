@@ -415,54 +415,68 @@ module Framebuffer = struct
 end
 
 module Source = struct
+  open Util
+
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
 
   type t = {
-    origin                : Util.Vec.vec2 ;
-    size                  : Util.Vec.vec2 ;
-    cursors               : Util.Vec.vec2 list ;
+    origin                : Vec.vec2 ;
+    size                  : Vec.vec2 ;
+    cursors               : Vec.vec2 list ;
     lineno                : int ;
+    lineno_stop           : int ;
     get_line_length       : int -> int ;
     fill_line_by_segment  : fill_line_by_segment_t ;
   }
 
-  let draw_line framebuffer source y lineno =
+  let draw_line framebuffer source lineno y =
     (* TODO: draw lineno and "..." on wrapped lines *)
     let open Framebuffer in
-    let linelen = source.get_line_length lineno in
     let bx = Vec.x framebuffer.window in
     let wx = Vec.x source.size in
-    let nsegments = linelen / wx + (if linelen mod wx = 0 then 0 else 1) in
-    for seg = 0 to nsegments - 1 do
+    let basebyteoffset = bx * (Vec.y source.origin + y) + (Vec.x source.origin) in
+    let linelen = ref (source.get_line_length lineno) in
+    let seg = ref 0 in
+    while !linelen > 0 do
       source.fill_line_by_segment
         ~lineno:lineno
-        ~lineoffset:(seg * wx)
-        ~byteoffset:(((Vec.y source.origin) + y) * bx + (Vec.x source.origin))
-        ~segmentlength:wx
-        framebuffer.Framebuffer.text
+        ~lineoffset:(!seg * wx)
+        ~byteoffset:(!seg * bx + basebyteoffset)
+        ~segmentlength:(min wx !linelen)
+        framebuffer.Framebuffer.text ;
+      seg += 1 ;
+      linelen -= wx
     done ;
-    y + nsegments
+    y + !seg
 
   let draw_source framebuffer source =
     (* TODO: add "cursor anchor mode" *)
-    let rec loop framebuffer source y lineno =
-      if y < (Vec.y source.size)
+    let rec loop framebuffer source lineno y =
+      if y < (Vec.y source.size) && lineno < source.lineno_stop
         then
-          let y' = draw_line framebuffer source y lineno in
-          loop framebuffer source y' (lineno + 1)
+          let y' = draw_line framebuffer source lineno y in
+          loop framebuffer source (lineno + 1) y'
     in
-    loop framebuffer source 0 source.lineno
+    loop framebuffer source source.lineno 0
 
   let draw_sources framebuffer =
     List.iter (draw_source framebuffer)
     (* TODO: draw cursors *)
     (* TODO: put colors *)
 
+  (* TODO: add named arguments to bytes_blit_string and just uses these here as well *)
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
     Arrays.bytes_blit_string (Arrays.array_get strings lineno) lineoffset bytes byteoffset segmentlength
 
-  let string_array_to_source strings =
-    (Arrays.array_get strings >> slen, fill_line_by_segment_from_string_array strings)
+  let string_array_to_source origin size lineno strings = {
+    origin ;
+    size ;
+    lineno ;
+    lineno_stop = alen strings ;
+    cursors = [] ; (* TODO *)
+    get_line_length = Arrays.array_get strings >> slen ;
+    fill_line_by_segment = fill_line_by_segment_from_string_array strings ;
+  }
 
 end
 
@@ -486,6 +500,10 @@ let lorem_ipsum = [|
   "Aenean magna nisl, mollis quis, molestie eu, feugiat in, orci. In hac habitasse platea dictumst.";
 |]
 
+let source0 = lorem_ipsum
+let source1 = [| "a"; "a"; "a"; "a"; "a"; |]
+let source2 = [| "a" |]
+
 
 let smoke_test () =
   (* Register SIGWINCH handler to react on terminal resize events *)
@@ -497,16 +515,10 @@ let smoke_test () =
     terminal_set_raw () ;
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
-    let (get_line_length, fill_line_by_segment) = Source.string_array_to_source lorem_ipsum in
-    let source = {
-      Source.origin                = Util.Vec.mk_v2 0 0 ;
-      Source.size                  = Util.Vec.mk_v2 30 30 ;
-      Source.cursors               = [] ;
-      Source.lineno                = 0 ;
-      Source.get_line_length;
-      Source.fill_line_by_segment;
-    } in
+    Framebuffer.clear framebuffer ;
+    let source = Source.string_array_to_source (Vec.mk_v2 0 0) (Vec.mk_v2 30 30) 0 source0 in
     Source.draw_sources framebuffer [source] ;
+    Framebuffer.render framebuffer ;
     let _ = Keys.get_next_key () in
     terminal_restore ()
   with
@@ -514,4 +526,6 @@ let smoke_test () =
           Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
           Printexc.print_backtrace stdout
 
-let () = smoke_test ()
+let () =
+  smoke_test () ;
+  exit 0

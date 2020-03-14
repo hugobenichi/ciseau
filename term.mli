@@ -81,18 +81,21 @@ module Framebuffer : sig
 end
 
 module Source : sig
+  open Util
+
   (* TOOD: doc me *)
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
 
   type t = {
-    origin                : Util.Vec.vec2 ;
-    size                  : Util.Vec.vec2 ;
-    cursors               : Util.Vec.vec2 list ;
+    origin                : Vec.vec2 ;
+    size                  : Vec.vec2 ;
+    cursors               : Vec.vec2 list ;
     lineno                : int ;
+    lineno_stop           : int ;
     get_line_length       : int -> int ;
     fill_line_by_segment  : fill_line_by_segment_t ;
   }
 
   val draw_sources            : Framebuffer.t -> t list -> unit
-  val string_array_to_source  : string array -> (int -> int) * fill_line_by_segment_t
+  val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> int -> string array -> t
 end
