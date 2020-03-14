@@ -1,5 +1,7 @@
 open Util
 
+let kNO_ESCAPE = true
+let kCHANGE_TERM = false
 let kDRAW_SCREEN = true
 let kFAIL_ON_GEOMETRY_ASSERTS = true
 
@@ -7,23 +9,31 @@ external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 let terminal_dimensions  =
   get_terminal_size >> apply_tup2 Vec.mk_v2
 
-let stdout_write_string s =
-  let l = slen s in
-  let n = Unix.write_substring Unix.stdout s 0 l in
-  if l <> n then fail ("sdtout write failed for " ^ s)
+let term_escape = if kNO_ESCAPE then "ESC[" else "\027["
+let term_escape_len = slen term_escape
+
+let write_escape s =
+  Unix.write_substring Unix.stdout term_escape 0 term_escape_len |> ignore ;
+  Unix.write_substring Unix.stdout s 0 (slen s) |> ignore
+
+let buffer_add_escape buffer =
+  Buffer.add_string buffer term_escape
 
 (* Used for restoring terminal state at program exit *)
 let terminal_initial = Unix.tcgetattr Unix.stdin
 
 let terminal_restore () =
+  if kCHANGE_TERM then begin
   Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH terminal_initial ;
-  stdout_write_string "\027[?1000l" ; (* mouse event off *)
-  stdout_write_string "\027[?1002l" ; (* mouse tracking off *)
-  stdout_write_string "\027[?1004l" ; (* switch focus event off *)
-  stdout_write_string "\027[?47l" ;   (* switch back to main screen *)
-  stdout_write_string "\027[u"        (* cursor restore *)
+  write_escape "?1000l" ; (* mouse event off *)
+  write_escape "?1002l" ; (* mouse tracking off *)
+  write_escape "?1004l" ; (* switch focus event off *)
+  write_escape "?47l" ;   (* switch back to main screen *)
+  write_escape "u"        (* cursor restore *)
+  end
 
 let terminal_set_raw () =
+  if kCHANGE_TERM then begin
   let want = Unix.tcgetattr Unix.stdin in
   want.c_brkint  <- false ;   (* no break *)
   want.c_icrnl   <- false ;   (* no CR to NL *)
@@ -37,12 +47,13 @@ let terminal_set_raw () =
   want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
   want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
   want.c_csize   <- 8;        (* 8 bit chars *)
-  stdout_write_string "\027[s" ;      (* cursor save *)
-  stdout_write_string "\027[?47h" ;   (* switch offscreen *)
-  stdout_write_string "\027[?1000h" ; (* mouse event on *)
-  stdout_write_string "\027[?1002h" ; (* mouse tracking on *)
-  (* stdout_write_string "\027[?1004h" ; *) (* switch focus event off *)
+  write_escape "s" ;          (* cursor save *)
+  write_escape "?47h" ;       (* switch offscreen *)
+  write_escape "?1000h" ;     (* mouse event on *)
+  write_escape "?1002h" ;     (* mouse tracking on *)
+  (* write_escape "?1004h" ; *) (* switch focus event off *)
   Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
+  end
 
 module Keys = struct
 
@@ -246,11 +257,7 @@ module Color = struct
     bg : color ;
   }
 
-  let fg_color_control_strings = Array.init 256 (Printf.sprintf "38;5;%d")
-  let bg_color_control_strings = Array.init 256 (Printf.sprintf ";48;5;%dm")
-
   let color_control_strings = Array.make (2 * 256) ""
-
   let _ =
     for i = 0 to 255 do
       Arrays.array_set color_control_strings (i)       (Printf.sprintf "38;5;%d" i) ;
@@ -309,7 +316,7 @@ module Framebuffer = struct
   let clear t =
     Bytes.fill t.text 0 t.len default_text ;
     Array.fill t.fg_colors 0 t.len default_fg_color_code ;
-    Array.fill t.bg_colors 0 t.len default_fg_color_code
+    Array.fill t.bg_colors 0 t.len default_bg_color_code
 
   let clear_rect t rect =
     let startv = rect |> Rec.rect_offset |> clampv (Vec.sub t.window v11) in (* startv must be strictly inside window *)
@@ -319,7 +326,7 @@ module Framebuffer = struct
       let len = (Vec.x stopv) - (Vec.x startv) in
       Bytes.fill t.text offset len default_text ;
       Array.fill t.fg_colors offset len default_fg_color_code ;
-      Array.fill t.bg_colors offset len default_fg_color_code
+      Array.fill t.bg_colors offset len default_bg_color_code
     done
 
   let clear_line t ~x:x_raw ~y:y_raw ~len:len_raw =
@@ -331,13 +338,13 @@ module Framebuffer = struct
     let offset = y * wx + x in
     Bytes.fill t.text offset len default_text ;
     Array.fill t.fg_colors offset len default_fg_color_code ;
-    Array.fill t.bg_colors offset len default_fg_color_code
+    Array.fill t.bg_colors offset len default_bg_color_code
 
   let render framebuffer =
     Buffer.clear buffer ;
     (* Do not clear the screen with \027c as it causes flickering *)
-    Buffer.add_string buffer "\027[?25l" ;    (* hide cursor *)
-    Buffer.add_string buffer "\027[H" ;       (* go home *)
+    buffer_add_escape buffer ; Buffer.add_string buffer "?25l" ;    (* hide cursor *)
+    buffer_add_escape buffer ; Buffer.add_string buffer "H" ;       (* go home *)
     (* Push lines one by one, one color segment at a time *)
     let linestop = ref (Vec.x framebuffer.window) in
     let start = ref 0 in
@@ -366,23 +373,25 @@ module Framebuffer = struct
           !fg <> (array_get framebuffer.fg_colors stop) || !bg <> (array_get framebuffer.bg_colors stop)
       in
       if should_draw_line then (
-        Buffer.add_string buffer "\027[" ;
+        buffer_add_escape buffer ;
         Buffer.add_string buffer (Color.color_code_to_string !fg) ;
         Buffer.add_string buffer (Color.color_code_to_string !bg) ;
         Buffer.add_subbytes buffer framebuffer.text !start !len ;
-        Buffer.add_string buffer "\027[0m" ;
+        buffer_add_escape buffer ;
+        Buffer.add_string buffer "0m" ;
         start += !len ;
         len := 0
       )
     done ;
     (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
-    Buffer.add_string buffer "\027[" ;
+    buffer_add_escape buffer ;
     (* PERF: make a add_number function *)
     Buffer.add_string buffer (string_of_int ((Vec.y framebuffer.cursor) + 1)) ;
     Buffer.add_char buffer ';' ;
     Buffer.add_string buffer (string_of_int ((Vec.x framebuffer.cursor) + 1)) ;
     Buffer.add_char buffer 'H' ;
-    Buffer.add_string buffer "\027[?25h" ; (* show cursor *)
+    buffer_add_escape buffer ;
+    Buffer.add_string buffer "?25h" ; (* show cursor *)
     (* and finally, push to terminal *)
     if kDRAW_SCREEN then (
       Buffer.output_buffer stdout buffer ;
@@ -434,10 +443,11 @@ module Source = struct
     let open Framebuffer in
     let bx = Vec.x framebuffer.window in
     let wx = Vec.x source.size in
+    let wy = Vec.y source.size in
     let basebyteoffset = bx * (Vec.y source.origin + y) + (Vec.x source.origin) in
     let linelen = ref (source.get_line_length lineno) in
     let seg = ref 0 in
-    while !linelen > 0 do
+    while 0 < !linelen && y !seg < wy do
       source.fill_line_by_segment
         ~lineno:lineno
         ~lineoffset:(!seg * wx)
@@ -516,7 +526,7 @@ let smoke_test () =
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     Framebuffer.clear framebuffer ;
-    let source = Source.string_array_to_source (Vec.mk_v2 0 0) (Vec.mk_v2 30 30) 0 source0 in
+    let source = Source.string_array_to_source (Vec.mk_v2 0 0) (Vec.mk_v2 30 30) 0 source1 in
     Source.draw_sources framebuffer [source] ;
     Framebuffer.render framebuffer ;
     let _ = Keys.get_next_key () in
