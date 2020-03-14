@@ -1,15 +1,18 @@
 open Util
 
-let kNO_ESCAPE = true
-let kCHANGE_TERM = false
+let kTERM_ESCAPE = true
+let kCHANGE_TERM = true
 let kDRAW_SCREEN = true
-let kFAIL_ON_GEOMETRY_ASSERTS = true
+let kFORCE_TERM_DIM = Some (Vec.mk_v2 12 20)
+let kFAIL_ON_GEOMETRY_ASSERTS = false
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 let terminal_dimensions  =
-  get_terminal_size >> apply_tup2 Vec.mk_v2
+  match kFORCE_TERM_DIM with
+  | None          -> get_terminal_size >> apply_tup2 Vec.mk_v2
+  | Some fake_dim -> fun () -> fake_dim
 
-let term_escape = if kNO_ESCAPE then "ESC[" else "\027["
+let term_escape = if kTERM_ESCAPE then "\027[" else "ESC["
 let term_escape_len = slen term_escape
 
 let write_escape s =
@@ -267,20 +270,22 @@ module Color = struct
   let color_code_to_string = Arrays.array_get color_control_strings
 end
 
+
+let clamp a b x =
+  let x' = x |> max a |> min b in
+  if kFAIL_ON_GEOMETRY_ASSERTS && x' <> x then fail (Printf.sprintf "%d was not in [%d, %d]" x a b) ;
+  x'
+
+let clampv vlim v =
+  let x = clamp 0 (Vec.x vlim) (Vec.x v) in
+  let y = clamp 0 (Vec.y vlim) (Vec.y v) in
+  Vec.mk_v2 x y
+
+let v11 = Vec.mk_v2 1 1
+
+
 module Framebuffer = struct
   open Util.Arrays
-
-  let clamp a b x =
-    let x' = x |> max a |> min b in
-    if kFAIL_ON_GEOMETRY_ASSERTS && x' <> x then fail (Printf.sprintf "%d was not in [%d, %d]" x a b) ;
-    x'
-
-  let clampv vlim v =
-    let x = clamp 0 (Vec.x vlim) (Vec.x v) in
-    let y = clamp 0 (Vec.y vlim) (Vec.y v) in
-    Vec.mk_v2 x y
-
-  let v11 = Vec.mk_v2 1 1
 
   let buffer = Buffer.create 4096
 
@@ -425,6 +430,7 @@ end
 
 module Source = struct
   open Util
+  open Framebuffer
 
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
 
@@ -434,40 +440,41 @@ module Source = struct
     cursors               : Vec.vec2 list ;
     lineno                : int ;
     lineno_stop           : int ;
-    get_line_length       : int -> int ;
-    fill_line_by_segment  : fill_line_by_segment_t ;
+    line_len              : int -> int ;
+    fill_line             : fill_line_by_segment_t ;
   }
 
-  let draw_line framebuffer source lineno y =
+  let draw_line framebuffer origin size line_len fill_line lineno y =
     (* TODO: draw lineno and "..." on wrapped lines *)
-    let open Framebuffer in
     let bx = Vec.x framebuffer.window in
-    let wx = Vec.x source.size in
-    let wy = Vec.y source.size in
-    let basebyteoffset = bx * (Vec.y source.origin + y) + (Vec.x source.origin) in
-    let linelen = ref (source.get_line_length lineno) in
+    let ox = Vec.x origin in
+    let oy = Vec.y origin in
+    let wx = Vec.x size in
+    let wy = Vec.y size in
+    let left = ref (line_len lineno) in
     let seg = ref 0 in
-    while 0 < !linelen && y !seg < wy do
-      source.fill_line_by_segment
+    while 0 < !left && y + !seg < wy do
+      fill_line
         ~lineno:lineno
-        ~lineoffset:(!seg * wx)
-        ~byteoffset:(!seg * bx + basebyteoffset)
-        ~segmentlength:(min wx !linelen)
-        framebuffer.Framebuffer.text ;
+        ~lineoffset:(wx * !seg)
+        ~byteoffset:(bx * (oy + y + !seg) + ox)
+        ~segmentlength:(min wx !left)
+        framebuffer.text ;
       seg += 1 ;
-      linelen -= wx
+      left -= wx
     done ;
     y + !seg
 
-  let draw_source framebuffer source =
+  let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line } =
+    let origin' = origin |> clampv (Vec.sub framebuffer.window v11) in
+    let size'   = size   |> clampv (Vec.sub framebuffer.window origin') in
     (* TODO: add "cursor anchor mode" *)
-    let rec loop framebuffer source lineno y =
-      if y < (Vec.y source.size) && lineno < source.lineno_stop
-        then
-          let y' = draw_line framebuffer source lineno y in
-          loop framebuffer source (lineno + 1) y'
-    in
-    loop framebuffer source source.lineno 0
+    let y = ref 0 in
+    let linenor = ref lineno in
+    while !y < (Vec.y size') && !linenor < lineno_stop do
+      y += draw_line framebuffer origin' size' line_len fill_line !linenor !y ;
+      linenor += 1
+    done
 
   let draw_sources framebuffer =
     List.iter (draw_source framebuffer)
@@ -484,8 +491,8 @@ module Source = struct
     lineno ;
     lineno_stop = alen strings ;
     cursors = [] ; (* TODO *)
-    get_line_length = Arrays.array_get strings >> slen ;
-    fill_line_by_segment = fill_line_by_segment_from_string_array strings ;
+    line_len = Arrays.array_get strings >> slen ;
+    fill_line = fill_line_by_segment_from_string_array strings ;
   }
 
 end
@@ -526,7 +533,7 @@ let smoke_test () =
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     Framebuffer.clear framebuffer ;
-    let source = Source.string_array_to_source (Vec.mk_v2 0 0) (Vec.mk_v2 30 30) 0 source1 in
+    let source = Source.string_array_to_source (Vec.mk_v2 1 1) (Vec.mk_v2 30 30) 0 source0 in
     Source.draw_sources framebuffer [source] ;
     Framebuffer.render framebuffer ;
     let _ = Keys.get_next_key () in

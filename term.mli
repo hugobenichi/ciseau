@@ -92,8 +92,8 @@ module Source : sig
     cursors               : Vec.vec2 list ;
     lineno                : int ;
     lineno_stop           : int ;
-    get_line_length       : int -> int ;
-    fill_line_by_segment  : fill_line_by_segment_t ;
+    line_len              : int -> int ;
+    fill_line             : fill_line_by_segment_t ;
   }
 
   val draw_sources            : Framebuffer.t -> t list -> unit
