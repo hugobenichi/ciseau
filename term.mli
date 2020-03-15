@@ -77,6 +77,8 @@ module Framebuffer : sig
   val put_cursor        : t -> Vec.vec2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
   (* Color rectangle in framebuffer,  inclusive borders: left and top, exclusive borders: right and bottom *)
+  val put_fg_color      : t -> Color.color -> Vec.vec2 -> Vec.vec2 -> unit
+  val put_bg_color      : t -> Color.color -> Vec.vec2 -> Vec.vec2 -> unit
   val put_color_rect    : t -> Color.color_cell -> Rec.rec2 -> unit
 end
 

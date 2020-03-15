@@ -355,18 +355,18 @@ module Framebuffer = struct
     let k = ref 0 in
     for y = 0 to ystop do
       let x = ref 0 in
-      while !x < xstop do
+      while !x <= xstop do
         let fg = array_get framebuffer.fg_colors !k in
         let bg = array_get framebuffer.bg_colors !k in
         let same_color = ref true in
         buffer_add_escape buffer ;
         Buffer.add_string buffer (Color.color_code_to_string fg) ;
         Buffer.add_string buffer (Color.color_code_to_string bg) ;
-        while !x < xstop && !same_color do
-          x += 1 ;
+        while !x <= xstop && !same_color do
           same_color :=
             (fg = array_get framebuffer.fg_colors (!k + !x)) &&
-            (bg = array_get framebuffer.bg_colors (!k + !x))
+            (bg = array_get framebuffer.bg_colors (!k + !x)) ;
+          x += 1 ;
         done ;
         Buffer.add_subbytes buffer framebuffer.text !k !x ;
         buffer_add_escape buffer ;
@@ -391,15 +391,23 @@ module Framebuffer = struct
       flush stdout
     )
 
-  let put_color_rect t { Color.fg ; Color.bg } rect =
-    let startv = rect |> Rec.rect_offset |> clampv (Vec.sub t.window v11) in (* startv must be strictly inside window *)
-    let stopv  = rect |> Rec.rect_end |> clampv t.window in
+  let put_color_proto window color_array color_code origin size =
+    let startv = origin |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *)
+    let stopv  = (Vec.add origin size) |> clampv window in
     for y = (Vec.y startv) to (Vec.y stopv) - 1 do
-      let offset = y * (Vec.x t.window) + (Vec.x startv) in
+      let offset = y * (Vec.x window) + (Vec.x startv) in
       let len = (Vec.x stopv) - (Vec.x startv) in
-      fg |> Color.color_code_fg |> array_fill t.fg_colors offset len ;
-      bg |> Color.color_code_bg |> array_fill t.bg_colors offset len
+      array_fill color_array offset len color_code
     done
+
+  let put_fg_color t color = put_color_proto t.window t.fg_colors (Color.color_code_fg color)
+  let put_bg_color t color = put_color_proto t.window t.bg_colors (Color.color_code_bg color)
+
+  let put_color_rect t { Color.fg ; Color.bg } rect =
+    let origin = Rec.rect_offset rect in
+    let size  = Rec.rect_size rect in
+    put_fg_color t fg origin size ;
+    put_bg_color t bg origin size
 
   let put_cursor t cursor =
     let cursor' = clampv (Vec.sub t.window v11) cursor in
@@ -445,7 +453,7 @@ module Source = struct
       then 1
       else
     let lineoffset = ref 0 in
-    let byteoffset = ref ((oy + y) * bx + ox - y) in (* BUG: why -y ??? *)
+    let byteoffset = ref ((oy + y) * bx + ox) in
     while 0 < !left && y + !seg < wy do
       fill_line
         ~lineno:lineno
@@ -456,10 +464,8 @@ module Source = struct
       seg += 1 ;
       left -= wx ;
       lineoffset += wx ;
-      byteoffset += (bx - 1) ; (* BUG: why -1 ??? *)
+      byteoffset += bx ;
     done ;
-    let s = string_of_int lineno in
-    Bytes.blit_string s 0 framebuffer.text ((oy + y) * bx + ox - y) (slen s) ;
     !seg
 
   let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line } =
@@ -530,22 +536,25 @@ let smoke_test () =
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     let origin = ref (Vec.mk_v2 0 0) in
+    let size = Vec.mk_v2 30 40 in
     let running = ref true in
     while !running do
       Framebuffer.clear framebuffer ;
-      let source = Source.string_array_to_source !origin (Vec.mk_v2 50 40) 0 source0 in
+      let source = Source.string_array_to_source !origin size 0 source0 in
       Source.draw_sources framebuffer [source] ;
+      if false then
+      Framebuffer.put_fg_color framebuffer Color.Red Vec.zero (Vec.mk_v2 10 10) ;
       Framebuffer.render framebuffer ;
       Keys.get_next_key () |>
-        function
+        begin function
           | ArrowUp     -> origin := Vec.sub !origin (Vec.mk_v2 0 1)
           | ArrowDown   -> origin := Vec.add !origin (Vec.mk_v2 0 1)
           | ArrowRight  -> origin := Vec.add !origin (Vec.mk_v2 1 0)
           | ArrowLeft   -> origin := Vec.sub !origin (Vec.mk_v2 1 0)
           | Key '\x03'  -> running := false
           | _           -> ()
-        ;
-      origin := clampv framebuffer.window !origin
+        end ;
+      origin := clampv (Vec.sub framebuffer.window v11) !origin
     done ;
     terminal_restore ()
   with
