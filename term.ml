@@ -354,6 +354,7 @@ module Framebuffer = struct
     let ystop = (Vec.y framebuffer.window) - 1 in
     let k = ref 0 in
     for y = 0 to ystop do
+      let k' = ref !k in
       let x = ref 0 in
       while !x <= xstop do
         let fg = array_get framebuffer.fg_colors !k in
@@ -364,14 +365,15 @@ module Framebuffer = struct
         Buffer.add_string buffer (Color.color_code_to_string bg) ;
         while !x <= xstop && !same_color do
           same_color :=
-            (fg = array_get framebuffer.fg_colors (!k + !x)) &&
-            (bg = array_get framebuffer.bg_colors (!k + !x)) ;
+            (fg = array_get framebuffer.fg_colors !k') &&
+            (bg = array_get framebuffer.bg_colors !k') ;
+          k' += 1 ;
           x += 1 ;
         done ;
-        Buffer.add_subbytes buffer framebuffer.text !k !x ;
+        Buffer.add_subbytes buffer framebuffer.text !k (!k' - !k) ;
         buffer_add_escape buffer ;
         Buffer.add_string buffer "0m" ;
-        k += !x
+        k := !k' ;
       done ;
       if y < ystop then
         Buffer.add_string buffer newline
@@ -520,10 +522,6 @@ let lorem_ipsum = [|
   "Aenean magna nisl, mollis quis, molestie eu, feugiat in, orci. In hac habitasse platea dictumst.";
 |]
 
-let source0 = lorem_ipsum
-let source1 = [| "a"; "a"; "a"; "a"; "a"; |]
-let source2 = [| "a" |]
-
 
 let smoke_test () =
   (* Register SIGWINCH handler to react on terminal resize events *)
@@ -540,10 +538,10 @@ let smoke_test () =
     let running = ref true in
     while !running do
       Framebuffer.clear framebuffer ;
-      let source = Source.string_array_to_source !origin size 0 source0 in
+      let source = Source.string_array_to_source !origin size 0 lorem_ipsum in
       Source.draw_sources framebuffer [source] ;
-      if false then
       Framebuffer.put_fg_color framebuffer Color.Red Vec.zero (Vec.mk_v2 10 10) ;
+      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
       Framebuffer.render framebuffer ;
       Keys.get_next_key () |>
         begin function
