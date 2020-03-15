@@ -98,6 +98,6 @@ module Source : sig
     fill_line             : fill_line_by_segment_t ;
   }
 
-  val draw_sources            : Framebuffer.t -> t list -> unit
+  val draw_source             : Framebuffer.t -> t -> unit
   val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> int -> string array -> t
 end

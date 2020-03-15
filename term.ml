@@ -471,6 +471,8 @@ module Source = struct
     !seg
 
   let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line } =
+    (* TODO: draw cursors *)
+    (* TODO: put colors *)
     let origin' = origin |> clampv (Vec.sub framebuffer.window v11) in
     let size'   = size   |> clampv (Vec.sub framebuffer.window origin') in
     (* TODO: add "cursor anchor mode" *)
@@ -480,11 +482,6 @@ module Source = struct
       y += draw_line framebuffer origin' size' line_len fill_line !linenor !y ;
       linenor += 1
     done
-
-  let draw_sources framebuffer =
-    List.iter (draw_source framebuffer)
-    (* TODO: draw cursors *)
-    (* TODO: put colors *)
 
   (* TODO: add named arguments to bytes_blit_string and just uses these here as well *)
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
@@ -539,7 +536,7 @@ let smoke_test () =
     while !running do
       Framebuffer.clear framebuffer ;
       let source = Source.string_array_to_source !origin size 0 lorem_ipsum in
-      Source.draw_sources framebuffer [source] ;
+      Source.draw_source framebuffer source ;
       Framebuffer.put_fg_color framebuffer Color.Red Vec.zero (Vec.mk_v2 10 10) ;
       Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
       Framebuffer.render framebuffer ;
@@ -563,3 +560,18 @@ let smoke_test () =
 let () =
   smoke_test () ;
   exit 0
+
+(*
+ * BUGS: - put_fg_color has incorrect x size and incorrect x offset
+ * TEST: - if draw_source has the correct offsets and size as well
+ * NEXT: - draw cursors
+ *       - add non-wrapping mode
+ *       - add lineno
+ *       - turn source into a enum type StringArray, Line, Generic, ...,
+ *
+ *
+ *
+ *
+ *
+ *
+ *)
