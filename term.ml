@@ -529,13 +529,24 @@ let smoke_test () =
     terminal_set_raw () ;
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
-    Framebuffer.clear framebuffer ;
-    if true then begin
-      let source = Source.string_array_to_source (Vec.mk_v2 1 1) (Vec.mk_v2 50 40) 0 source0 in
+    let origin = ref (Vec.mk_v2 0 0) in
+    let running = ref true in
+    while !running do
+      Framebuffer.clear framebuffer ;
+      let source = Source.string_array_to_source !origin (Vec.mk_v2 50 40) 0 source0 in
       Source.draw_sources framebuffer [source] ;
-    end ;
-    Framebuffer.render framebuffer ;
-    let _ = Keys.get_next_key () in
+      Framebuffer.render framebuffer ;
+      Keys.get_next_key () |>
+        function
+          | ArrowUp     -> origin := Vec.sub !origin (Vec.mk_v2 0 1)
+          | ArrowDown   -> origin := Vec.add !origin (Vec.mk_v2 0 1)
+          | ArrowRight  -> origin := Vec.add !origin (Vec.mk_v2 1 0)
+          | ArrowLeft   -> origin := Vec.sub !origin (Vec.mk_v2 1 0)
+          | Key '\x03'  -> running := false
+          | _           -> ()
+        ;
+      origin := clampv framebuffer.window !origin
+    done ;
     terminal_restore ()
   with
     e ->  terminal_restore () ;
