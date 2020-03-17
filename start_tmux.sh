@@ -8,8 +8,7 @@ LOGS=/tmp/ciseau.log
 
 tmux kill-session -t $SESSION || echo "no previous session"
 
-tmux new-session -P -d -s $SESSION -n 'Editor' $EDITOR ciseau.ml
-tmux send-keys ':vs' C-m
+tmux new-session -P -d -s $SESSION -n 'Editor' $EDITOR .
 
 tmux new-window -P -n 'Build'
 tmux send-keys '. Build' C-m
