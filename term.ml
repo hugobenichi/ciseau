@@ -423,7 +423,7 @@ module Framebuffer = struct
     let wy = Vec.y t.window in
     let x = clamp 0 (wx - 1) x_raw in (* x and y must be strictly inside t.window *)
     let y = clamp 0 (wy - 1) y_raw in
-    bytes_blit_string s offset t.text (y + wx + x) (min len (wx - x))
+    bytes_blit_string s offset t.text (y * wx + x) (min len (wx - x))
 end
 
 module Source = struct
@@ -431,6 +431,16 @@ module Source = struct
   open Framebuffer
 
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
+
+  type options_t = {
+    wrap_lines                : bool ;
+    show_lineno               : bool ;
+    current_line_highlight    : bool ;
+    current_colm_highlight    : bool ;
+    (* TODO:
+    relative_lineno           : bool ;
+    *)
+  }
 
   type t = {
     origin                : Vec.vec2 ;
@@ -440,6 +450,16 @@ module Source = struct
     lineno_stop           : int ;
     line_len              : int -> int ;
     fill_line             : fill_line_by_segment_t ;
+    options               : options_t ;
+  }
+
+  (* TODO: move to Constants module somewhere else *)
+  let wrapped_line_continuation = " ..."
+  let default_options = {
+    wrap_lines                = false ;
+    show_lineno               = true ;
+    current_line_highlight    = true ;
+    current_colm_highlight    = true ;
   }
 
   let draw_line framebuffer origin size line_len fill_line lineno y =
@@ -470,16 +490,53 @@ module Source = struct
     done ;
     !seg
 
-  let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line } =
+  let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line ; options } =
     (* TODO: draw cursors *)
     (* TODO: put colors *)
-    let origin' = origin |> clampv (Vec.sub framebuffer.window v11) in
-    let size'   = size   |> clampv (Vec.sub framebuffer.window origin') in
+    let origin = origin |> clampv (Vec.sub framebuffer.window v11) in
     (* TODO: add "cursor anchor mode" *)
+    (* compute horizontal offset for showing lineno *)
+    let text_origin =
+      if options.show_lineno
+        then let dx = lineno_stop |> (+) 1 (* lineno display starts at 1 *)
+                                  |> string_of_int
+                                  |> slen
+                                  |> max (slen wrapped_line_continuation)
+                                  |> (+) 1 (* margin *)
+             in Vec.add origin (Vec.mk_v2 dx 0)
+        else origin
+    in
+    let text_size = size |> clampv (Vec.sub framebuffer.window text_origin) in
     let y = ref 0 in
     let linenor = ref lineno in
-    while !y < (Vec.y size') && !linenor < lineno_stop do
-      y += draw_line framebuffer origin' size' line_len fill_line !linenor !y ;
+    while !y < (Vec.y text_size) && !linenor < lineno_stop do
+      (* BUG: clamping of origin does not take into account the text_origin dx, which can cause
+       * crashes when drawing sufficiently on the right. draw_line must skip blits in that case *)
+      let text_size =
+        if options.wrap_lines
+          then text_size
+          else Vec.mk_v2 (Vec.x text_size) (!y + 1) in (* force 1 line max *)
+      let dy =
+        draw_line framebuffer text_origin text_size line_len fill_line !linenor !y
+      in
+      (* put lineno *)
+      if options.show_lineno then begin
+        let lineno_string = string_of_int (!linenor + 1) in (* lineno display starts at 1 *)
+        Framebuffer.put_line
+          framebuffer
+          ~x:((Vec.x text_origin) - (slen lineno_string) - 1) (* right aligned *)
+          ~y:((Vec.y origin) + !y)
+          lineno_string ;
+        if options.wrap_lines then
+          for y' = 1 to dy - 1 do
+            Framebuffer.put_line
+              framebuffer
+              ~x:(Vec.x origin)
+              ~y:((Vec.y origin) + !y + y')
+              wrapped_line_continuation
+          done
+      end ;
+      y += dy ;
       linenor += 1
     done
 
@@ -491,10 +548,11 @@ module Source = struct
     origin ;
     size ;
     lineno ;
-    lineno_stop = alen strings ;
-    cursors = [] ; (* TODO *)
-    line_len = Arrays.array_get strings >> slen ;
-    fill_line = fill_line_by_segment_from_string_array strings ;
+    lineno_stop   = alen strings ;
+    cursors       = [] ; (* TODO *)
+    line_len      = Arrays.array_get strings >> slen ;
+    fill_line     = fill_line_by_segment_from_string_array strings ;
+    options       = default_options ;
   }
 
 end
@@ -563,10 +621,11 @@ let () =
 
 (*
  * BUGS: - put_fg_color has incorrect x size and incorrect x offset
+ *       - crash when show_lineno = true and drawing text beyond the right limit due to lineno x offset
  * TEST: - if draw_source has the correct offsets and size as well
  * NEXT: - draw cursors
- *       - add non-wrapping mode
- *       - add lineno
+ *       - add colors
+ *       - add frame options
  *       - turn source into a enum type StringArray, Line, Generic, ...,
  *
  *

@@ -88,6 +88,13 @@ module Source : sig
   (* TOOD: doc me *)
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
 
+  type options_t = {
+    wrap_lines                : bool ;
+    show_lineno               : bool ;
+    current_line_highlight    : bool ;
+    current_colm_highlight    : bool ;
+  }
+
   type t = {
     origin                : Vec.vec2 ;
     size                  : Vec.vec2 ;
@@ -96,6 +103,7 @@ module Source : sig
     lineno_stop           : int ;
     line_len              : int -> int ;
     fill_line             : fill_line_by_segment_t ;
+    options               : options_t ;
   }
 
   val draw_source             : Framebuffer.t -> t -> unit
