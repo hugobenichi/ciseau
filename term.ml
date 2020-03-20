@@ -1,6 +1,6 @@
 open Util
 
-let kTERM_ESCAPE = false
+let kTERM_ESCAPE = true
 let kCHANGE_TERM = true
 let kDRAW_SCREEN = true
 let kFORCE_TERM_DIM = Some (Vec.mk_v2 60 40)
@@ -338,23 +338,7 @@ module Framebuffer = struct
     let k = ref 0 in
     for y = 0 to (Vec.y t.window) - 1 do
       for x = 0 to (Vec.x t.window) - 1 do
-        array_set t.bg_colors !k (!k mod 16) ;
-        array_set t.fg_colors !k (!k mod 16) ;
-        k += 1
-      done
-    done
-
-  let debug_color_to_text t =
-    let k = ref 0 in
-    for y = 0 to (Vec.y t.window) - 1 do
-      for x = 0 to (Vec.x t.window) - 1 do
-        let xy = (array_get t.bg_colors !k) mod 16 in
-        let c =
-          if xy < 10
-            then (Char.code '0') + xy
-            else (Char.code 'a') + xy - 10
-        in
-        Bytes.set t.text !k (Char.chr c) ;
+        array_set t.bg_colors !k (!k mod 256) ;
         k += 1
       done
     done
@@ -389,6 +373,11 @@ module Framebuffer = struct
   let render framebuffer =
     Buffer.clear buffer ;
     (* Do not clear with \027c to avoid flickering *)
+    if kTERM_ESCAPE = false then begin
+      Buffer.add_string buffer newline ;
+      Buffer.add_string buffer "--- NEW FRAME ---" ;
+      Buffer.add_string buffer newline
+    end ;
     buffer_add_escape buffer ; Buffer.add_string buffer "?25l" ;    (* hide cursor *)
     buffer_add_escape buffer ; Buffer.add_string buffer "H" ;       (* go home *)
     let xstop = (Vec.x framebuffer.window) - 1 in
@@ -405,11 +394,11 @@ module Framebuffer = struct
         Buffer.add_string buffer (Color.color_code_to_string fg) ;
         Buffer.add_string buffer (Color.color_code_to_string bg) ;
         while !x <= xstop && !same_color do
-          same_color :=
-            (fg = array_get framebuffer.fg_colors !k') &&
-            (bg = array_get framebuffer.bg_colors !k') ;
           k' += 1 ;
           x += 1 ;
+          same_color := !x <= xstop &&
+            (fg = array_get framebuffer.fg_colors !k') &&
+            (bg = array_get framebuffer.bg_colors !k') ;
         done ;
         Buffer.add_subbytes buffer framebuffer.text !k (!k' - !k) ;
         buffer_add_escape buffer ;
@@ -435,8 +424,8 @@ module Framebuffer = struct
     )
 
   let put_color_proto window color_array color_code origin size =
-    let startv = origin in (* |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *) *)
-    let stopv  = (Vec.add origin size) in (*|> clampv window in*)
+    let startv = origin |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *)
+    let stopv  = (Vec.add origin size) |> clampv window in
     let segment_len = (Vec.x stopv) - (Vec.x startv) in
     for y = (Vec.y startv) to (Vec.y stopv) - 1 do
       array_fill color_array (y * (Vec.x window) + (Vec.x startv)) segment_len color_code
@@ -641,21 +630,17 @@ let color_square_origin = ref (* Vec.zero *) (Vec.mk_v2 1 0) in
 let color_square_len = 2 in (* TODO: make this resizable *)
     while !running do
       Framebuffer.clear framebuffer ;
-      (*
-      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
       let source = Source.string_array_to_source !origin size 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
+      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
+      (*
       Framebuffer.put_fg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
       Framebuffer.put_bg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
       Framebuffer.debug_color framebuffer ;
-      Framebuffer.debug_color_to_text framebuffer ;
-      *)
       Framebuffer.debug_text framebuffer ;
+      *)
       Framebuffer.render framebuffer ;
-      (*
       let target = origin in
-*)
-      let target = color_square_origin in
       Keys.get_next_key () |>
         begin function
           | ArrowUp     -> target := Vec.sub !target (Vec.mk_v2 0 1)
@@ -678,17 +663,8 @@ let () =
   exit 0
 
 (*
- * BUGS: - put_fg_color has incorrect x size and incorrect x offset
- *       - crash when show_lineno = true and drawing text beyond the right limit due to lineno x offset
- * TEST: - if draw_source has the correct offsets and size as well
+ * BUGS: - crash when show_lineno = true and drawing text beyond the right limit due to lineno x offset
  * NEXT: - draw cursors
- *       - add colors
  *       - add frame options
  *       - turn source into a enum type StringArray, Line, Generic, ...,
- *
- *
- *
- *
- *
- *
  *)
