@@ -1,6 +1,6 @@
 open Util
 
-let kTERM_ESCAPE = true
+let kTERM_ESCAPE = false
 let kCHANGE_TERM = true
 let kDRAW_SCREEN = true
 let kFORCE_TERM_DIM = Some (Vec.mk_v2 60 40)
@@ -293,6 +293,7 @@ module Framebuffer = struct
   let newline = "\r\n"
 
   let default_text            = ' '
+  (* TODO: move these to constant/config module somewhere else *)
   let default_fg_color_code   = Color.color_code_fg Color.White
   let default_bg_color_code   = Color.color_code_bg (Color.Gray 2)
 
@@ -317,6 +318,46 @@ module Framebuffer = struct
     }
 
   let framebuffer_size { window } = window
+
+  let debug_text t =
+    let k = ref 0 in
+    for y = 0 to (Vec.y t.window) - 1 do
+      for x = 0 to (Vec.x t.window) - 1 do
+        let xy = (x + y) mod 16 in
+        let c =
+          if xy < 10
+            then (Char.code '0') + xy
+            else (Char.code 'a') + xy - 10
+        in
+        Bytes.set t.text !k (Char.chr c) ;
+        k += 1
+      done
+    done
+
+  let debug_color t =
+    let k = ref 0 in
+    for y = 0 to (Vec.y t.window) - 1 do
+      for x = 0 to (Vec.x t.window) - 1 do
+        array_set t.bg_colors !k (!k mod 16) ;
+        array_set t.fg_colors !k (!k mod 16) ;
+        k += 1
+      done
+    done
+
+  let debug_color_to_text t =
+    let k = ref 0 in
+    for y = 0 to (Vec.y t.window) - 1 do
+      for x = 0 to (Vec.x t.window) - 1 do
+        let xy = (array_get t.bg_colors !k) mod 16 in
+        let c =
+          if xy < 10
+            then (Char.code '0') + xy
+            else (Char.code 'a') + xy - 10
+        in
+        Bytes.set t.text !k (Char.chr c) ;
+        k += 1
+      done
+    done
 
   let clear t =
     Bytes.fill t.text 0 t.len default_text ;
@@ -394,12 +435,11 @@ module Framebuffer = struct
     )
 
   let put_color_proto window color_array color_code origin size =
-    let startv = origin |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *)
-    let stopv  = (Vec.add origin size) |> clampv window in
+    let startv = origin in (* |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *) *)
+    let stopv  = (Vec.add origin size) in (*|> clampv window in*)
+    let segment_len = (Vec.x stopv) - (Vec.x startv) in
     for y = (Vec.y startv) to (Vec.y stopv) - 1 do
-      let offset = y * (Vec.x window) + (Vec.x startv) in
-      let len = (Vec.x stopv) - (Vec.x startv) in
-      array_fill color_array offset len color_code
+      array_fill color_array (y * (Vec.x window) + (Vec.x startv)) segment_len color_code
     done
 
   let put_fg_color t color = put_color_proto t.window t.fg_colors (Color.color_code_fg color)
@@ -455,8 +495,9 @@ module Source = struct
 
   (* TODO: move to Constants module somewhere else *)
   let wrapped_line_continuation = " ..."
+  let lineno_color = Color.Green
   let default_options = {
-    wrap_lines                = false ;
+    wrap_lines                = true ;
     show_lineno               = true ;
     current_line_highlight    = true ;
     current_colm_highlight    = true ;
@@ -496,26 +537,27 @@ module Source = struct
     let origin = origin |> clampv (Vec.sub framebuffer.window v11) in
     (* TODO: add "cursor anchor mode" *)
     (* compute horizontal offset for showing lineno *)
-    let text_origin =
+    let text_dx =
       if options.show_lineno
-        then let dx = lineno_stop |> (+) 1 (* lineno display starts at 1 *)
-                                  |> string_of_int
-                                  |> slen
-                                  |> max (slen wrapped_line_continuation)
-                                  |> (+) 1 (* margin *)
-             in Vec.add origin (Vec.mk_v2 dx 0)
-        else origin
+        then lineno_stop |> (+) 1 (* lineno display starts at 1 *)
+                         |> string_of_int
+                         |> slen
+                         |> max (slen wrapped_line_continuation)
+                         |> (+) 1 (* margin *)
+        else 0
     in
+    let text_origin = Vec.add origin (Vec.mk_v2 text_dx 0) in
     let text_size = size |> clampv (Vec.sub framebuffer.window text_origin) in
     let y = ref 0 in
     let linenor = ref lineno in
     while !y < (Vec.y text_size) && !linenor < lineno_stop do
-      (* BUG: clamping of origin does not take into account the text_origin dx, which can cause
+      (* BUG: clamping of origin does not take into account the text_origin text_dx, which can cause
        * crashes when drawing sufficiently on the right. draw_line must skip blits in that case *)
       let text_size =
         if options.wrap_lines
           then text_size
-          else Vec.mk_v2 (Vec.x text_size) (!y + 1) in (* force 1 line max *)
+          else Vec.mk_v2 (Vec.x text_size) (!y + 1) (* force 1 line max *)
+      in
       let dy =
         draw_line framebuffer text_origin text_size line_len fill_line !linenor !y
       in
@@ -538,7 +580,11 @@ module Source = struct
       end ;
       y += dy ;
       linenor += 1
-    done
+    done ;
+    if options.show_lineno then begin
+      Framebuffer.put_fg_color framebuffer lineno_color origin (Vec.mk_v2 text_dx (Vec.y size)) ;
+      Framebuffer.put_bg_color framebuffer Color.Black origin (Vec.mk_v2 text_dx (Vec.y size))
+    end
 
   (* TODO: add named arguments to bytes_blit_string and just uses these here as well *)
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
@@ -588,26 +634,38 @@ let smoke_test () =
     terminal_set_raw () ;
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
-    let origin = ref (Vec.mk_v2 0 0) in
+    let origin = ref Vec.zero in
     let size = Vec.mk_v2 30 40 in
     let running = ref true in
+let color_square_origin = ref (* Vec.zero *) (Vec.mk_v2 1 0) in
+let color_square_len = 2 in (* TODO: make this resizable *)
     while !running do
       Framebuffer.clear framebuffer ;
+      (*
+      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
       let source = Source.string_array_to_source !origin size 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
-      Framebuffer.put_fg_color framebuffer Color.Red Vec.zero (Vec.mk_v2 10 10) ;
-      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
+      Framebuffer.put_fg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
+      Framebuffer.put_bg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
+      Framebuffer.debug_color framebuffer ;
+      Framebuffer.debug_color_to_text framebuffer ;
+      *)
+      Framebuffer.debug_text framebuffer ;
       Framebuffer.render framebuffer ;
+      (*
+      let target = origin in
+*)
+      let target = color_square_origin in
       Keys.get_next_key () |>
         begin function
-          | ArrowUp     -> origin := Vec.sub !origin (Vec.mk_v2 0 1)
-          | ArrowDown   -> origin := Vec.add !origin (Vec.mk_v2 0 1)
-          | ArrowRight  -> origin := Vec.add !origin (Vec.mk_v2 1 0)
-          | ArrowLeft   -> origin := Vec.sub !origin (Vec.mk_v2 1 0)
+          | ArrowUp     -> target := Vec.sub !target (Vec.mk_v2 0 1)
+          | ArrowDown   -> target := Vec.add !target (Vec.mk_v2 0 1)
+          | ArrowRight  -> target := Vec.add !target (Vec.mk_v2 1 0)
+          | ArrowLeft   -> target := Vec.sub !target (Vec.mk_v2 1 0)
           | Key '\x03'  -> running := false
           | _           -> ()
         end ;
-      origin := clampv (Vec.sub framebuffer.window v11) !origin
+      target := clampv (Vec.sub framebuffer.window v11) !target
     done ;
     terminal_restore ()
   with
