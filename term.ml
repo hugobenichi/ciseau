@@ -475,7 +475,7 @@ module Source = struct
   type t = {
     origin                : Vec.vec2 ;
     size                  : Vec.vec2 ;
-    cursors               : Vec.vec2 list ;
+    cursor                : Vec.vec2 ;
     lineno                : int ;
     lineno_stop           : int ;
     line_len              : int -> int ;
@@ -486,6 +486,8 @@ module Source = struct
   (* TODO: move to Constants module somewhere else *)
   let wrapped_line_continuation = " ..."
   let lineno_color = Color.Green
+  let cursor_highlight_background = Color.Gray 4
+  let cursor_highlight_lineno = Color.Yellow
   let default_options = {
     wrap_lines                = false ;
     show_lineno               = true ;
@@ -521,9 +523,7 @@ module Source = struct
     done ;
     !seg
 
-  let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line ; options } =
-    (* TODO: draw cursors *)
-    (* TODO: draw cursor column and line *)
+  let draw_source framebuffer { origin ; size ; cursor ; lineno ; lineno_stop ; line_len ; fill_line ; options } =
     let origin = origin |> clampv (Vec.sub framebuffer.window v11) in
     (* TODO: add "cursor anchor mode" *)
     (* compute horizontal offset for showing lineno *)
@@ -540,6 +540,7 @@ module Source = struct
     let text_size = size |> clampv (Vec.sub framebuffer.window text_origin) in
     let y = ref 0 in
     let linenor = ref lineno in
+    let cursor_y = ref (-1) in
     while !y < (Vec.y text_size) && !linenor < lineno_stop do
       let text_size =
         if options.wrap_lines
@@ -566,24 +567,50 @@ module Source = struct
               wrapped_line_continuation
           done
       end ;
+      if Vec.y cursor = !linenor then
+        cursor_y := !y ;
       y += dy ;
       linenor += 1
     done ;
     if options.show_lineno then begin
       Framebuffer.put_fg_color framebuffer lineno_color origin (Vec.mk_v2 text_dx (Vec.y size)) ;
       Framebuffer.put_bg_color framebuffer Color.Black origin (Vec.mk_v2 text_dx (Vec.y size))
-    end
+    end ;
+    (* Show cursor. Must go after most other coloring *)
+    if 0 <= !cursor_y then begin
+      if options.current_line_highlight then
+        Framebuffer.put_bg_color
+          framebuffer
+          cursor_highlight_background
+          (Vec.add origin (Vec.mk_v2 0 !cursor_y))
+          (Vec.mk_v2 (Vec.x size) 1) ;
+      if options.current_colm_highlight then
+        (* TODO: consider skipping wrapped segments of lines *)
+        Framebuffer.put_bg_color
+          framebuffer
+          cursor_highlight_background
+          (Vec.add text_origin (Vec.mk_v2 (Vec.x cursor) 0)) (* TODO: add horizontal offset from text_view_origin when text_view_origin is added *)
+          (Vec.mk_v2 1 (Vec.y text_size)) ;
+      if options.show_lineno then (* must go after normal lineno coloring *)
+        Framebuffer.put_fg_color
+          framebuffer
+          cursor_highlight_lineno
+          (Vec.add origin (Vec.mk_v2 0 !cursor_y))
+          (Vec.mk_v2 text_dx 1)
+    end ;
+    (* TODO: skip if not principal cursor ! *)
+    Framebuffer.put_cursor framebuffer (Vec.add cursor text_origin)
 
   (* TODO: add named arguments to bytes_blit_string and just uses these here as well *)
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
     Arrays.bytes_blit_string (Arrays.array_get strings lineno) lineoffset bytes byteoffset segmentlength
 
-  let string_array_to_source origin size lineno strings = {
+  let string_array_to_source origin size cursor lineno strings = {
     origin ;
     size ;
+    cursor ;
     lineno ;
     lineno_stop   = alen strings ;
-    cursors       = [] ; (* TODO *)
     line_len      = Arrays.array_get strings >> slen ;
     fill_line     = fill_line_by_segment_from_string_array strings ;
     options       = default_options ;
@@ -622,6 +649,7 @@ let smoke_test () =
     terminal_set_raw () ;
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
+    let cursor = ref Vec.zero in
     let origin = ref Vec.zero in
     let size = Vec.mk_v2 30 40 in
     let running = ref true in
@@ -629,7 +657,7 @@ let color_square_origin = ref (* Vec.zero *) (Vec.mk_v2 1 0) in
 let color_square_len = 2 in (* TODO: make this resizable *)
     while !running do
       Framebuffer.clear framebuffer ;
-      let source = Source.string_array_to_source !origin size 0 lorem_ipsum in
+      let source = Source.string_array_to_source !origin size !cursor 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
       Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
       (*
@@ -646,10 +674,15 @@ let color_square_len = 2 in (* TODO: make this resizable *)
           | ArrowDown   -> target := Vec.add !target (Vec.mk_v2 0 1)
           | ArrowRight  -> target := Vec.add !target (Vec.mk_v2 1 0)
           | ArrowLeft   -> target := Vec.sub !target (Vec.mk_v2 1 0)
+          | Key 'h'     -> cursor := Vec.sub !cursor (Vec.mk_v2 1 0)
+          | Key 'j'     -> cursor := Vec.add !cursor (Vec.mk_v2 0 1)
+          | Key 'k'     -> cursor := Vec.sub !cursor (Vec.mk_v2 0 1)
+          | Key 'l'     -> cursor := Vec.add !cursor (Vec.mk_v2 1 0)
           | Key '\x03'  -> running := false
           | _           -> ()
         end ;
-      target := clampv (Vec.sub framebuffer.window v11) !target
+      target := clampv (Vec.sub framebuffer.window v11) !target ;
+      cursor := clampv (Vec.mk_v2 20 (Arrays.astop lorem_ipsum)) !cursor
     done ;
     terminal_restore ()
   with
@@ -662,7 +695,8 @@ let () =
   exit 0
 
 (*
- * NEXT: - draw cursors
+ * NEXT: - add text_view_origin
+ *       - draw secondary cursors
  *       - add frame options
  *       - turn source into a enum type StringArray, Line, Generic, ...,
  *)

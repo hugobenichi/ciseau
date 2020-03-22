@@ -98,7 +98,8 @@ module Source : sig
   type t = {
     origin                : Vec.vec2 ;
     size                  : Vec.vec2 ;
-    cursors               : Vec.vec2 list ;
+    cursor                : Vec.vec2 ;
+    (* TODO: change lineno to text origin that also take into account x offset *)
     lineno                : int ;
     lineno_stop           : int ;
     line_len              : int -> int ;
@@ -107,5 +108,5 @@ module Source : sig
   }
 
   val draw_source             : Framebuffer.t -> t -> unit
-  val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> int -> string array -> t
+  val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> Vec.vec2 -> int -> string array -> t
 end
