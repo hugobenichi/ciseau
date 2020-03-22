@@ -445,14 +445,15 @@ module Framebuffer = struct
     if cursor' = cursor
       then t.cursor <- cursor
 
-  let put_line t ~x:x_raw ~y:y_raw ?offset:(offset_raw=0) ?len:(len_raw=0-1) s =
-    let offset = clamp 0 (slen s) offset_raw in
-    let len = if len_raw < 0 then slen s else len_raw in
+  let put_line t ~x:x_raw ~y:y ?offset:(offset_raw=0) ?len:(len_raw=0-1) s =
     let wx = Vec.x t.window in
     let wy = Vec.y t.window in
-    let x = clamp 0 (wx - 1) x_raw in (* x and y must be strictly inside t.window *)
-    let y = clamp 0 (wy - 1) y_raw in
-    bytes_blit_string s offset t.text (y * wx + x) (min len (wx - x))
+    if x_raw < wx && 0 <= y && y < wy then
+      let offset = clamp 0 (slen s) offset_raw in
+      let len = if len_raw < 0 then slen s else len_raw in
+      (*BUG: if x is less than 0, I must adjust len and offset to take into account that *)
+      let x = clamp 0 (wx - 1) x_raw in (* x and y must be strictly inside t.window *)
+      bytes_blit_string s offset t.text (y * wx + x) (min len (wx - x))
 end
 
 module Source = struct
@@ -486,14 +487,13 @@ module Source = struct
   let wrapped_line_continuation = " ..."
   let lineno_color = Color.Green
   let default_options = {
-    wrap_lines                = true ;
+    wrap_lines                = false ;
     show_lineno               = true ;
     current_line_highlight    = true ;
     current_colm_highlight    = true ;
   }
 
   let draw_line framebuffer origin size line_len fill_line lineno y =
-    (* TODO: draw lineno and "..." on wrapped lines *)
     let bx = Vec.x framebuffer.window in
     let ox = Vec.x origin in
     let oy = Vec.y origin in
@@ -507,12 +507,13 @@ module Source = struct
     let lineoffset = ref 0 in
     let byteoffset = ref ((oy + y) * bx + ox) in
     while 0 < !left && y + !seg < wy do
-      fill_line
-        ~lineno:lineno
-        ~lineoffset:!lineoffset
-        ~byteoffset:!byteoffset
-        ~segmentlength:(min wx !left)
-        framebuffer.text ;
+      if ox < bx then (* origin clamping does not take into account horizal dx when showing lineno *)
+        fill_line
+          ~lineno:lineno
+          ~lineoffset:!lineoffset
+          ~byteoffset:!byteoffset
+          ~segmentlength:(min wx !left)
+          framebuffer.text ;
       seg += 1 ;
       left -= wx ;
       lineoffset += wx ;
@@ -522,7 +523,7 @@ module Source = struct
 
   let draw_source framebuffer { origin ; size ; lineno ; lineno_stop ; line_len ; fill_line ; options } =
     (* TODO: draw cursors *)
-    (* TODO: put colors *)
+    (* TODO: draw cursor column and line *)
     let origin = origin |> clampv (Vec.sub framebuffer.window v11) in
     (* TODO: add "cursor anchor mode" *)
     (* compute horizontal offset for showing lineno *)
@@ -540,8 +541,6 @@ module Source = struct
     let y = ref 0 in
     let linenor = ref lineno in
     while !y < (Vec.y text_size) && !linenor < lineno_stop do
-      (* BUG: clamping of origin does not take into account the text_origin text_dx, which can cause
-       * crashes when drawing sufficiently on the right. draw_line must skip blits in that case *)
       let text_size =
         if options.wrap_lines
           then text_size
@@ -552,7 +551,7 @@ module Source = struct
       in
       (* put lineno *)
       if options.show_lineno then begin
-        let lineno_string = string_of_int (!linenor + 1) in (* lineno display starts at 1 *)
+        let lineno_string = string_of_int (!linenor + 1) in (* lineno starts at 1 *)
         Framebuffer.put_line
           framebuffer
           ~x:((Vec.x text_origin) - (slen lineno_string) - 1) (* right aligned *)
@@ -663,7 +662,6 @@ let () =
   exit 0
 
 (*
- * BUGS: - crash when show_lineno = true and drawing text beyond the right limit due to lineno x offset
  * NEXT: - draw cursors
  *       - add frame options
  *       - turn source into a enum type StringArray, Line, Generic, ...,
