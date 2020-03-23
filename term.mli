@@ -100,6 +100,7 @@ module Source : sig
     show_lineno               : bool ;
     current_line_highlight    : bool ;
     current_colm_highlight    : bool ;
+    relative_lineno           : bool ;
   }
 
   type 's t = {

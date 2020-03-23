@@ -473,9 +473,7 @@ module Source = struct
     show_lineno               : bool ;
     current_line_highlight    : bool ;
     current_colm_highlight    : bool ;
-    (* TODO:
     relative_lineno           : bool ;
-    *)
   }
 
   type 's t = {
@@ -498,6 +496,7 @@ module Source = struct
     show_lineno               = true ;
     current_line_highlight    = true ;
     current_colm_highlight    = true ;
+    relative_lineno           = true ;
   }
 
   let draw_line framebuffer origin size source ops lineno y =
@@ -536,11 +535,13 @@ module Source = struct
     let lineno_stop = ops.lineno_stop source in
     let text_dx =
       if options.show_lineno
-        then lineno_stop |> (+) 1 (* lineno display starts at 1 *)
-                         |> string_of_int
-                         |> slen
-                         |> max (slen wrapped_line_continuation)
-                         |> (+) 1 (* margin *)
+        then
+          (if options.relative_lineno then (Vec.y size) + 1 (* minus sign *) else lineno_stop)
+            |> (+) 1 (* lineno display starts at 1 *)
+            |> string_of_int
+            |> slen
+            |> max (slen wrapped_line_continuation)
+            |> (+) 1 (* margin *)
         else 0
     in
     let text_origin = Vec.add origin (Vec.mk_v2 text_dx 0) in
@@ -559,10 +560,15 @@ module Source = struct
       in
       (* put lineno *)
       if options.show_lineno then begin
-        let lineno_string = string_of_int (!linenor + 1) in (* lineno starts at 1 *)
+        let lineno_offset =
+          if options.relative_lineno
+            then -(Vec.y cursor)
+            else 1  (* absolute lineno starts at 1 *)
+        in
+        let lineno_string = string_of_int (!linenor + lineno_offset) in
         Framebuffer.put_line
           framebuffer
-          ~x:((Vec.x text_origin) - (slen lineno_string) - 1) (* right aligned *)
+          ~x:((Vec.x text_origin) - (slen lineno_string) - 1) (* right aligned, with 1 char margin *)
           ~y:((Vec.y origin) + !y)
           lineno_string ;
         if options.wrap_lines then
@@ -709,5 +715,6 @@ let () =
 (*
  * NEXT: - add text_view_origin
  *       - draw secondary cursors
+ *       - draw colors ?
  *       - add frame options
  *)
