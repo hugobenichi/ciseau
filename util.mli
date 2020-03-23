@@ -6,6 +6,8 @@ val const                     : 'a -> 'b -> 'a
 val flip                      : ('a -> 'b -> 'c) -> 'b -> 'a -> 'c
 (* Compose two functions *)
 val (>>)                      : ('a -> 'b) -> ('b -> 'c) -> 'a -> 'c
+(* Compose two functions *)
+val (>>>)                      : ('a -> 'b -> 'c) -> ('c -> 'd) -> 'a -> 'b -> 'd
 (* Another 2-functions composer *)
 val psi                       : ('b -> 'b -> 'c) -> ('a -> 'b) -> 'a -> 'a -> 'c
 (* Inverse a predicate *)

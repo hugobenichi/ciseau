@@ -88,6 +88,13 @@ module Source : sig
   (* TOOD: doc me *)
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
 
+  (* Type class for basic operations on a source of type 's *)
+  type 's source_tc = {
+    lineno_stop               : 's -> int ;
+    line_len                  : 's -> int -> int ;
+    line_fill_by_segment      : 's -> lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit ;
+  }
+
   type options_t = {
     wrap_lines                : bool ;
     show_lineno               : bool ;
@@ -95,18 +102,17 @@ module Source : sig
     current_colm_highlight    : bool ;
   }
 
-  type t = {
+  type 's t = {
     origin                : Vec.vec2 ;
     size                  : Vec.vec2 ;
     cursor                : Vec.vec2 ;
     (* TODO: change lineno to text origin that also take into account x offset *)
     lineno                : int ;
-    lineno_stop           : int ;
-    line_len              : int -> int ;
-    fill_line             : fill_line_by_segment_t ;
+    source                : 's ;
+    ops                   : 's source_tc ;
     options               : options_t ;
   }
 
-  val draw_source             : Framebuffer.t -> t -> unit
-  val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> Vec.vec2 -> int -> string array -> t
+  val draw_source             : Framebuffer.t -> 's t -> unit
+  val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> Vec.vec2 -> int -> string array -> string array t
 end

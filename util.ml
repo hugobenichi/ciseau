@@ -3,6 +3,7 @@ let const a b     = a
 let flip f a b    = f b a
 let psi f g a1 a2 = f (g a1) (g a2)
 let (>>) f g x    = g (f x)
+let (>>>) f g x y  = g (f x y)
 let neg f x       = not (f x)
 
 let apply_tup2 fn (a, b) = fn a b

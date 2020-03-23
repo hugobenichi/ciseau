@@ -462,6 +462,12 @@ module Source = struct
 
   type fill_line_by_segment_t = lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit
 
+  type 's source_tc = {
+    lineno_stop               : 's -> int ;
+    line_len                  : 's -> int -> int ;
+    line_fill_by_segment      : 's -> lineno:int -> lineoffset:int -> byteoffset:int -> segmentlength:int -> Bytes.t -> unit ;
+  }
+
   type options_t = {
     wrap_lines                : bool ;
     show_lineno               : bool ;
@@ -472,14 +478,13 @@ module Source = struct
     *)
   }
 
-  type t = {
+  type 's t = {
     origin                : Vec.vec2 ;
     size                  : Vec.vec2 ;
     cursor                : Vec.vec2 ;
     lineno                : int ;
-    lineno_stop           : int ;
-    line_len              : int -> int ;
-    fill_line             : fill_line_by_segment_t ;
+    source                : 's ;
+    ops                   : 's source_tc ;
     options               : options_t ;
   }
 
@@ -495,14 +500,14 @@ module Source = struct
     current_colm_highlight    = true ;
   }
 
-  let draw_line framebuffer origin size line_len fill_line lineno y =
+  let draw_line framebuffer origin size source ops lineno y =
     let bx = Vec.x framebuffer.window in
     let ox = Vec.x origin in
     let oy = Vec.y origin in
     let wx = Vec.x size in
     let wy = Vec.y size in
     let seg = ref 0 in
-    let left = ref (line_len lineno) in
+    let left = ref (ops.line_len source lineno) in
     if !left = 0
       then 1
       else
@@ -510,7 +515,8 @@ module Source = struct
     let byteoffset = ref ((oy + y) * bx + ox) in
     while 0 < !left && y + !seg < wy do
       if ox < bx then (* origin clamping does not take into account horizal dx when showing lineno *)
-        fill_line
+        ops.line_fill_by_segment
+          source
           ~lineno:lineno
           ~lineoffset:!lineoffset
           ~byteoffset:!byteoffset
@@ -523,10 +529,11 @@ module Source = struct
     done ;
     !seg
 
-  let draw_source framebuffer { origin ; size ; cursor ; lineno ; lineno_stop ; line_len ; fill_line ; options } =
+  let draw_source framebuffer { origin ; size ; cursor ; lineno ; source ; ops ; options } =
     let origin = origin |> clampv (Vec.sub framebuffer.window v11) in
     (* TODO: add "cursor anchor mode" *)
     (* compute horizontal offset for showing lineno *)
+    let lineno_stop = ops.lineno_stop source in
     let text_dx =
       if options.show_lineno
         then lineno_stop |> (+) 1 (* lineno display starts at 1 *)
@@ -548,7 +555,7 @@ module Source = struct
           else Vec.mk_v2 (Vec.x text_size) (!y + 1) (* force 1 line max *)
       in
       let dy =
-        draw_line framebuffer text_origin text_size line_len fill_line !linenor !y
+        draw_line framebuffer text_origin text_size source ops !linenor !y
       in
       (* put lineno *)
       if options.show_lineno then begin
@@ -605,15 +612,20 @@ module Source = struct
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
     Arrays.bytes_blit_string (Arrays.array_get strings lineno) lineoffset bytes byteoffset segmentlength
 
-  let string_array_to_source origin size cursor lineno strings = {
-    origin ;
-    size ;
-    cursor ;
-    lineno ;
-    lineno_stop   = alen strings ;
-    line_len      = Arrays.array_get strings >> slen ;
-    fill_line     = fill_line_by_segment_from_string_array strings ;
-    options       = default_options ;
+  let string_array_typeclass = {
+    lineno_stop               = alen ;
+    line_len                  = Arrays.array_get >>> slen ;
+    line_fill_by_segment      = fill_line_by_segment_from_string_array ;
+  }
+
+  let string_array_to_source origin size cursor lineno source = {
+    origin  ;
+    size    ;
+    cursor  ;
+    lineno  ;
+    source  ;
+    ops     = string_array_typeclass ;
+    options = default_options ;
   }
 
 end
@@ -653,16 +665,16 @@ let smoke_test () =
     let origin = ref Vec.zero in
     let size = Vec.mk_v2 30 40 in
     let running = ref true in
-let color_square_origin = ref (* Vec.zero *) (Vec.mk_v2 1 0) in
-let color_square_len = 2 in (* TODO: make this resizable *)
+    let color_square_origin = ref (* Vec.zero *) (Vec.mk_v2 1 0) in
+    let color_square_len = 2 in (* TODO: make this resizable *)
     while !running do
       Framebuffer.clear framebuffer ;
+      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
+      Framebuffer.put_fg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
       let source = Source.string_array_to_source !origin size !cursor 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
-      Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
-      (*
-      Framebuffer.put_fg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
       Framebuffer.put_bg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
+      (*
       Framebuffer.debug_color framebuffer ;
       Framebuffer.debug_text framebuffer ;
       *)
@@ -698,5 +710,4 @@ let () =
  * NEXT: - add text_view_origin
  *       - draw secondary cursors
  *       - add frame options
- *       - turn source into a enum type StringArray, Line, Generic, ...,
  *)
