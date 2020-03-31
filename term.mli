@@ -80,6 +80,7 @@ module Framebuffer : sig
   val put_fg_color      : t -> Color.color -> Vec.vec2 -> Vec.vec2 -> unit
   val put_bg_color      : t -> Color.color -> Vec.vec2 -> Vec.vec2 -> unit
   val put_color_rect    : t -> Color.color_cell -> Rec.rec2 -> unit
+  val put_frame         : t -> ?wire:bool -> ?fg:Color.color -> ?bg:Color.color -> Vec.vec2 -> Vec.vec2 -> unit
 end
 
 module Source : sig

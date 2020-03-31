@@ -225,6 +225,9 @@ module Color = struct
               | RGB216 of int * int * int
               | Gray of int
 
+  (* TODO: introduce a Notacolor variant instead of this hack ! *)
+  let notacolor = Gray (-1)
+
   type color_layer = Foreground | Background
 
   let color_code_raw =
@@ -245,6 +248,7 @@ module Color = struct
       | Bold_Magenta    -> 13
       | Bold_Cyan       -> 14
       | Bold_White      -> 15
+      | Gray -1         -> -1
       | Gray g          -> assert_that (0 <= g && g < 24) ;
                            232 + g
       | RGB216 (r,g,b)  -> assert_that (0 <= r && r < 6) ;
@@ -424,12 +428,13 @@ module Framebuffer = struct
     )
 
   let put_color_proto window color_array color_code origin size =
-    let startv = origin |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *)
-    let stopv  = (Vec.add origin size) |> clampv window in
-    let segment_len = (Vec.x stopv) - (Vec.x startv) in
-    for y = (Vec.y startv) to (Vec.y stopv) - 1 do
-      array_fill color_array (y * (Vec.x window) + (Vec.x startv)) segment_len color_code
-    done
+    if 0 <= color_code then
+      let startv = origin |> clampv (Vec.sub window v11) in (* startv must be strictly inside window *)
+      let stopv  = (Vec.add origin size) |> clampv window in
+      let segment_len = (Vec.x stopv) - (Vec.x startv) in
+      for y = (Vec.y startv) to (Vec.y stopv) - 1 do
+        array_fill color_array (y * (Vec.x window) + (Vec.x startv)) segment_len color_code
+      done
 
   let put_fg_color t color = put_color_proto t.window t.fg_colors (Color.color_code_fg color)
   let put_bg_color t color = put_color_proto t.window t.bg_colors (Color.color_code_bg color)
@@ -454,6 +459,60 @@ module Framebuffer = struct
       (*BUG: if x is less than 0, I must adjust len and offset to take into account that *)
       let x = clamp 0 (wx - 1) x_raw in (* x and y must be strictly inside t.window *)
       bytes_blit_string s offset t.text (y * wx + x) (min len (wx - x))
+
+  let put_frame t ?wire:(wire=false) ?fg:(fg=Color.notacolor) ?bg:(bg=Color.notacolor) origin size =
+    let wx = Vec.x t.window in
+    let wy = Vec.y t.window in
+    let x = Vec.x origin in
+    let y = Vec.y origin in
+    let dx = Vec.x size in
+    let dy = Vec.y size in
+    if x <= wx && y <= wy then begin
+      let offset_topleft      = wx * y + x in
+      let offset_topright     = offset_topleft + dx in
+      let offset_bottomleft   = offset_topleft + dy * wx in
+      let offset_bottomright  = offset_bottomleft + dx in
+      let show_right_edge = x + dx < wx in
+      let show_bottom_edge = y + dy < wy in
+      let fgcode = Color.color_code_fg fg in
+      let bgcode = Color.color_code_bg bg in
+      let max_dx = min dx (wx - x) in
+      let max_dx = max_dx + if show_right_edge then 1 else 0 in
+      let max_y = min wy (dy + y) in
+      if wire then begin
+        Bytes.fill t.text offset_topleft max_dx '-' ;
+        Bytes.set t.text offset_topleft '+'
+      end ;
+      if 0 <= fgcode then array_fill t.fg_colors offset_topleft max_dx fgcode ;
+      if 0 <= bgcode then array_fill t.bg_colors offset_topleft max_dx bgcode ;
+      for y' = y + 1 to max_y - 1 do
+        let offset = wx * y' + x in
+        if wire then Bytes.set t.text offset '|' ;
+        if 0 <= fgcode then array_set t.fg_colors offset fgcode ;
+        if 0 <= bgcode then array_set t.bg_colors offset bgcode
+      done ;
+      if show_bottom_edge then begin
+        if wire then begin
+          Bytes.fill t.text offset_bottomleft max_dx '-' ;
+          Bytes.set t.text offset_bottomleft '+'
+        end ;
+        if 0 <= fgcode then array_fill t.fg_colors offset_bottomleft max_dx fgcode ;
+        if 0 <= bgcode then array_fill t.bg_colors offset_bottomleft max_dx bgcode ;
+      end ;
+      if show_right_edge then begin
+        if wire then Bytes.set t.text offset_topright '+' ;
+        for y' = y + 1 to max_y - 1 do
+          let offset = wx * y' + x + dx in
+          if wire then Bytes.set t.text offset '|' ;
+          if 0 <= fgcode then array_set t.fg_colors offset fgcode ;
+          if 0 <= bgcode then array_set t.bg_colors offset bgcode
+        done
+      end ;
+      if show_right_edge && show_bottom_edge then
+        Bytes.set t.text offset_bottomright '+'
+    end
+
+
 end
 
 module Source = struct
@@ -492,7 +551,7 @@ module Source = struct
   let cursor_highlight_background = Color.Gray 4
   let cursor_highlight_lineno = Color.Yellow
   let default_options = {
-    wrap_lines                = false ;
+    wrap_lines                = true ;
     show_lineno               = true ;
     current_line_highlight    = true ;
     current_colm_highlight    = true ;
@@ -668,7 +727,7 @@ let smoke_test () =
     let term_dim = terminal_dimensions () in
     let framebuffer = Framebuffer.mk_framebuffer term_dim in
     let cursor = ref Vec.zero in
-    let origin = ref Vec.zero in
+    let origin = ref v11 in
     let size = Vec.mk_v2 30 40 in
     let running = ref true in
     let color_square_origin = ref (* Vec.zero *) (Vec.mk_v2 1 0) in
@@ -680,6 +739,7 @@ let smoke_test () =
       let source = Source.string_array_to_source !origin size !cursor 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
       Framebuffer.put_bg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
+      Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin v11) (Vec.add size v11) ;
       (*
       Framebuffer.debug_color framebuffer ;
       Framebuffer.debug_text framebuffer ;
@@ -716,5 +776,7 @@ let () =
  * NEXT: - add text_view_origin
  *       - draw secondary cursors
  *       - draw colors ?
- *       - add frame options
+ * BUG: - in line wrapping mode, cursor y computation is incorrect
+ *      - put_frame crash if the top or left edges are off screen
+ *      - when showlineno is true, the text display width is not correctly reduced by the space needed for lineno
  *)
