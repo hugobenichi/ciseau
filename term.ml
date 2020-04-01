@@ -550,6 +550,7 @@ module Source = struct
   let lineno_color = Color.Green
   let cursor_highlight_background = Color.Gray 4
   let cursor_highlight_lineno = Color.Yellow
+  let cursor_color = Color.Red
   let default_options = {
     wrap_lines                = true ;
     show_lineno               = true ;
@@ -603,8 +604,9 @@ module Source = struct
             |> (+) 1 (* margin *)
         else 0
     in
-    let text_origin = Vec.add origin (Vec.mk_v2 text_dx 0) in
-    let text_size = size |> clampv (Vec.sub framebuffer.window text_origin) in
+    let lineno_size = Vec.mk_v2 text_dx 0 in
+    let text_origin = Vec.add origin lineno_size in
+    let text_size = (Vec.sub size lineno_size) |> clampv (Vec.sub framebuffer.window text_origin) in
     let y = ref 0 in
     let linenor = ref lineno in
     let cursor_y = ref (-1) in
@@ -649,12 +651,13 @@ module Source = struct
       Framebuffer.put_bg_color framebuffer Color.Black origin (Vec.mk_v2 text_dx (Vec.y size))
     end ;
     (* Show cursor. Must go after most other coloring *)
+    let cursor_y_correction = Vec.mk_v2 0 !cursor_y in
     if 0 <= !cursor_y then begin
       if options.current_line_highlight then
         Framebuffer.put_bg_color
           framebuffer
           cursor_highlight_background
-          (Vec.add origin (Vec.mk_v2 0 !cursor_y))
+          (Vec.add origin cursor_y_correction)
           (Vec.mk_v2 (Vec.x size) 1) ;
       if options.current_colm_highlight then
         (* TODO: consider skipping wrapped segments of lines *)
@@ -667,11 +670,13 @@ module Source = struct
         Framebuffer.put_fg_color
           framebuffer
           cursor_highlight_lineno
-          (Vec.add origin (Vec.mk_v2 0 !cursor_y))
+          (Vec.add origin cursor_y_correction)
           (Vec.mk_v2 text_dx 1)
     end ;
-    (* TODO: skip if not principal cursor ! *)
-    Framebuffer.put_cursor framebuffer (Vec.add cursor text_origin)
+    Framebuffer.put_bg_color framebuffer Color.Red (Vec.add (Vec.add cursor text_origin) cursor_y_correction) v11
+    (*
+    Framebuffer.put_cursor framebuffer 
+    *)
 
   (* TODO: add named arguments to bytes_blit_string and just uses these here as well *)
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
@@ -735,10 +740,12 @@ let smoke_test () =
     while !running do
       Framebuffer.clear framebuffer ;
       Framebuffer.put_bg_color framebuffer Color.Blue (Vec.mk_v2 5 5) (Vec.mk_v2 10 10) ;
+      (*
       Framebuffer.put_fg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
+      Framebuffer.put_bg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
+      *)
       let source = Source.string_array_to_source !origin size !cursor 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
-      Framebuffer.put_bg_color framebuffer Color.Red !color_square_origin (Vec.mk_v2 color_square_len color_square_len) ;
       Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin v11) (Vec.add size v11) ;
       (*
       Framebuffer.debug_color framebuffer ;
@@ -778,5 +785,4 @@ let () =
  *       - draw colors ?
  * BUG: - in line wrapping mode, cursor y computation is incorrect
  *      - put_frame crash if the top or left edges are off screen
- *      - when showlineno is true, the text display width is not correctly reduced by the space needed for lineno
  *)
