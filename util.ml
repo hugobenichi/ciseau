@@ -108,6 +108,10 @@ module Arrays = struct
     check_range len dst_o (alen dst) ;
     Array.blit src src_o dst dst_o len
 
+  let bytes_fill dst dst_o len value =
+    check_range len dst_o (blen dst) ;
+    Bytes.fill dst dst_o len value
+
   let bytes_blit src src_o dst dst_o len =
     check_range len src_o (blen src) ;
     check_range len dst_o (blen dst) ;

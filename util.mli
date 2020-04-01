@@ -76,6 +76,7 @@ module Arrays : sig
   val array_set               : 'a array -> int -> 'a -> unit
   val array_fill              : 'a array -> int -> int -> 'a -> unit
   val array_blit              : 'a array -> int -> 'a array -> int -> int -> unit
+  val bytes_fill              : Bytes.t -> int -> int -> char -> unit
   val bytes_blit              : Bytes.t -> int -> Bytes.t -> int -> int -> unit
   val bytes_blit_string       : string -> int -> Bytes.t -> int -> int -> unit
   val array_rev               : 'a array -> unit

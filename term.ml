@@ -469,47 +469,56 @@ module Framebuffer = struct
     let dy = Vec.y size in
     if x <= wx && y <= wy then begin
       let offset_topleft      = wx * y + x in
-      let offset_topright     = offset_topleft + dx in
       let offset_bottomleft   = offset_topleft + dy * wx in
-      let offset_bottomright  = offset_bottomleft + dx in
+      let show_top_edge = 0 <= y in
+      let show_left_edge = 0 <= x in
       let show_right_edge = x + dx < wx in
       let show_bottom_edge = y + dy < wy in
       let fgcode = Color.color_code_fg fg in
       let bgcode = Color.color_code_bg bg in
-      let max_dx = min dx (wx - x) in
-      let max_dx = max_dx + if show_right_edge then 1 else 0 in
-      let max_y = min wy (dy + y) in
-      if wire then begin
-        Bytes.fill t.text offset_topleft max_dx '-' ;
-        Bytes.set t.text offset_topleft '+'
+      let max_dx = min dx (wx - x) + if show_right_edge then 1 else 0 in
+      if show_top_edge then begin
+        let offscreen_offset = (max 0 x) - x in
+        let offset_topleft = offset_topleft + offscreen_offset in
+        let max_dx = max_dx - offscreen_offset in
+        if wire then bytes_fill t.text offset_topleft max_dx '-' ;
+        if 0 <= fgcode then array_fill t.fg_colors offset_topleft max_dx fgcode ;
+        if 0 <= bgcode then array_fill t.bg_colors offset_topleft max_dx bgcode
       end ;
-      if 0 <= fgcode then array_fill t.fg_colors offset_topleft max_dx fgcode ;
-      if 0 <= bgcode then array_fill t.bg_colors offset_topleft max_dx bgcode ;
-      for y' = y + 1 to max_y - 1 do
-        let offset = wx * y' + x in
-        if wire then Bytes.set t.text offset '|' ;
-        if 0 <= fgcode then array_set t.fg_colors offset fgcode ;
-        if 0 <= bgcode then array_set t.bg_colors offset bgcode
-      done ;
       if show_bottom_edge then begin
-        if wire then begin
-          Bytes.fill t.text offset_bottomleft max_dx '-' ;
-          Bytes.set t.text offset_bottomleft '+'
-        end ;
+        let offscreen_offset = (max 0 x) - x in
+        let offset_bottomleft = offset_bottomleft + offscreen_offset in
+        let max_dx = max_dx - offscreen_offset in
+        if wire then bytes_fill t.text offset_bottomleft max_dx '-' ;
         if 0 <= fgcode then array_fill t.fg_colors offset_bottomleft max_dx fgcode ;
         if 0 <= bgcode then array_fill t.bg_colors offset_bottomleft max_dx bgcode ;
       end ;
-      if show_right_edge then begin
-        if wire then Bytes.set t.text offset_topright '+' ;
-        for y' = y + 1 to max_y - 1 do
+      let min_y = max 0 y in
+      let max_y = min wy (dy + y) in
+      if show_left_edge then
+        for y' = min_y to max_y - 1 do
+          let offset = wx * y' + x in
+          if wire then Bytes.set t.text offset '|' ;
+          if 0 <= fgcode then array_set t.fg_colors offset fgcode ;
+          if 0 <= bgcode then array_set t.bg_colors offset bgcode
+        done ;
+      if show_right_edge then
+        for y' = min_y to max_y - 1 do
           let offset = wx * y' + x + dx in
           if wire then Bytes.set t.text offset '|' ;
           if 0 <= fgcode then array_set t.fg_colors offset fgcode ;
           if 0 <= bgcode then array_set t.bg_colors offset bgcode
-        done
-      end ;
-      if show_right_edge && show_bottom_edge then
-        Bytes.set t.text offset_bottomright '+'
+        done ;
+      if wire then begin
+        if show_top_edge && show_left_edge then
+          Bytes.set t.text offset_topleft '+' ;
+        if show_top_edge && show_right_edge then
+          Bytes.set t.text (offset_topleft + dx) '+' ;
+        if show_bottom_edge && show_left_edge then
+          Bytes.set t.text offset_bottomleft '+' ;
+        if show_bottom_edge && show_right_edge then
+          Bytes.set t.text (offset_bottomleft + dx) '+'
+      end
     end
 
 
@@ -746,6 +755,7 @@ let smoke_test () =
       *)
       let source = Source.string_array_to_source !origin size !cursor 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
+      Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin (Vec.mk_v2 5 5)) (Vec.mk_v2 10 10) ;
       Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin v11) (Vec.add size v11) ;
       (*
       Framebuffer.debug_color framebuffer ;
@@ -784,5 +794,4 @@ let () =
  *       - draw secondary cursors
  *       - draw colors ?
  * BUG: - in line wrapping mode, cursor y computation is incorrect
- *      - put_frame crash if the top or left edges are off screen
  *)
