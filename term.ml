@@ -5,6 +5,7 @@ let kCHANGE_TERM = true
 let kDRAW_SCREEN = true
 let kFORCE_TERM_DIM = Some (Vec.mk_v2 60 40)
 let kFAIL_ON_GEOMETRY_ASSERTS = false
+let kDRAW_TERMINAL_CURSOR = false
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 let terminal_dimensions  =
@@ -15,47 +16,46 @@ let terminal_dimensions  =
 let term_escape = if kTERM_ESCAPE then "\027[" else "ESC["
 let term_escape_len = slen term_escape
 
-let write_escape s =
+let with_escape s =
   Unix.write_substring Unix.stdout term_escape 0 term_escape_len |> ignore ;
   Unix.write_substring Unix.stdout s 0 (slen s) |> ignore
-
-let buffer_add_escape buffer =
-  Buffer.add_string buffer term_escape
 
 (* Used for restoring terminal state at program exit *)
 let terminal_initial = Unix.tcgetattr Unix.stdin
 
-let terminal_restore () =
-  if kCHANGE_TERM then begin
-  Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH terminal_initial ;
-  write_escape "?1000l" ; (* mouse event off *)
-  write_escape "?1002l" ; (* mouse tracking off *)
-  write_escape "?1004l" ; (* switch focus event off *)
-  write_escape "?47l" ;   (* switch back to main screen *)
-  write_escape "u"        (* cursor restore *)
-  end
-
 let terminal_set_raw () =
   if kCHANGE_TERM then begin
-  let want = Unix.tcgetattr Unix.stdin in
-  want.c_brkint  <- false ;   (* no break *)
-  want.c_icrnl   <- false ;   (* no CR to NL *)
-  want.c_inpck   <- false ;   (* no parity check *)
-  want.c_istrip  <- false ;   (* no strip character *)
-  want.c_ixon    <- false ;
-  want.c_opost   <- false ;
-  want.c_echo    <- false ;
-  want.c_icanon  <- false ;
-  want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
-  want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
-  want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
-  want.c_csize   <- 8;        (* 8 bit chars *)
-  write_escape "s" ;          (* cursor save *)
-  write_escape "?47h" ;       (* switch offscreen *)
-  write_escape "?1000h" ;     (* mouse event on *)
-  write_escape "?1002h" ;     (* mouse tracking on *)
-  (* write_escape "?1004h" ; *) (* switch focus event off *)
-  Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
+    let want = Unix.tcgetattr Unix.stdin in
+    want.c_brkint  <- false ;   (* no break *)
+    want.c_icrnl   <- false ;   (* no CR to NL *)
+    want.c_inpck   <- false ;   (* no parity check *)
+    want.c_istrip  <- false ;   (* no strip character *)
+    want.c_ixon    <- false ;
+    want.c_opost   <- false ;
+    want.c_echo    <- false ;
+    want.c_icanon  <- false ;
+    want.c_isig    <- false ;   (* no INTR, QUIT, SUSP signals *)
+    want.c_vmin    <- 0;        (* return each byte one by one, or 0 if timeout *)
+    want.c_vtime   <- 1;        (* 1 * 100 ms timeout for reading input *)
+    want.c_csize   <- 8;        (* 8 bit chars *)
+    with_escape "s" ;           (* cursor save *)
+    with_escape "?25l" ;        (* hide cursor *)
+    with_escape "?47h" ;        (* switch offscreen *)
+    with_escape "?1000h" ;      (* mouse event on *)
+    with_escape "?1002h" ;      (* mouse tracking on *)
+    (* with_escape "?1004h" ; *) (* switch focus event off *)
+    Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH want
+  end
+
+let terminal_restore () =
+  if kCHANGE_TERM then begin
+    Unix.tcsetattr Unix.stdin Unix.TCSAFLUSH terminal_initial ;
+    with_escape "?1000l" ;      (* mouse event off *)
+    with_escape "?1002l" ;      (* mouse tracking off *)
+    with_escape "?1004l" ;      (* switch focus event off *)
+    with_escape "?47l" ;        (* switch back to main screen *)
+    with_escape "?25h" ;        (* show cursor *)
+    with_escape "u"             (* cursor restore *)
   end
 
 module Keys = struct
@@ -291,6 +291,9 @@ let v11 = Vec.mk_v2 1 1
 module Framebuffer = struct
   open Util.Arrays
 
+  let buffer_add_escape buffer =
+    Buffer.add_string buffer term_escape
+
   let buffer = Buffer.create 4096
 
   (* TODO: this should be platform specific *)
@@ -300,6 +303,15 @@ module Framebuffer = struct
   (* TODO: move these to constant/config module somewhere else *)
   let default_fg_color_code   = Color.color_code_fg Color.White
   let default_bg_color_code   = Color.color_code_bg (Color.Gray 2)
+
+  (* Cursor colors, listed by decreasing precedence order:
+   *  active:     main cursor of the active source.
+   *  primary:    main cursor of any other source.
+   *  secondary:  any other cursor.
+   *)
+  let default_cursor_color_active     = Color.Bold_Red
+  let default_cursor_color_primary    = Color.Magenta
+  let default_cursor_color_secondary  = Color.Red
 
   type t = {
     text                      : Bytes.t ;
@@ -382,7 +394,6 @@ module Framebuffer = struct
       Buffer.add_string buffer "--- NEW FRAME ---" ;
       Buffer.add_string buffer newline
     end ;
-    buffer_add_escape buffer ; Buffer.add_string buffer "?25l" ;    (* hide cursor *)
     buffer_add_escape buffer ; Buffer.add_string buffer "H" ;       (* go home *)
     let xstop = (Vec.x framebuffer.window) - 1 in
     let ystop = (Vec.y framebuffer.window) - 1 in
@@ -412,15 +423,17 @@ module Framebuffer = struct
       if y < ystop then
         Buffer.add_string buffer newline
     done ;
-    (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
-    buffer_add_escape buffer ;
-    (* PERF: make a add_number function *)
-    Buffer.add_string buffer (string_of_int ((Vec.y framebuffer.cursor) + 1)) ;
-    Buffer.add_char buffer ';' ;
-    Buffer.add_string buffer (string_of_int ((Vec.x framebuffer.cursor) + 1)) ;
-    Buffer.add_char buffer 'H' ;
-    buffer_add_escape buffer ;
-    Buffer.add_string buffer "?25h" ; (* show cursor *)
+    if kDRAW_TERMINAL_CURSOR then begin
+      (* cursor position. ANSI terminal weirdness: cursor positions start at 1, not 0. *)
+      buffer_add_escape buffer ;
+      (* PERF: make a add_number function *)
+      Buffer.add_string buffer (string_of_int ((Vec.y framebuffer.cursor) + 1)) ;
+      Buffer.add_char buffer ';' ;
+      Buffer.add_string buffer (string_of_int ((Vec.x framebuffer.cursor) + 1)) ;
+      Buffer.add_char buffer 'H' ;
+      buffer_add_escape buffer ;
+      Buffer.add_string buffer "?25h" (* show cursor *)
+    end ;
     (* and finally, push to terminal *)
     if kDRAW_SCREEN then (
       Buffer.output_buffer stdout buffer ;
@@ -444,11 +457,6 @@ module Framebuffer = struct
     let size  = Rec.rect_size rect in
     put_fg_color t fg origin size ;
     put_bg_color t bg origin size
-
-  let put_cursor t cursor =
-    let cursor' = clampv (Vec.sub t.window v11) cursor in
-    if cursor' = cursor
-      then t.cursor <- cursor
 
   let put_line t ~x:x_raw ~y:y ?offset:(offset_raw=0) ?len:(len_raw=0-1) s =
     let wx = Vec.x t.window in
@@ -521,6 +529,19 @@ module Framebuffer = struct
       end
     end
 
+  (* TODO: stash cursor positions and colors in a separate datastruct and blit them last
+   *  caveat: does not work well with overlapping layers. Maybe multiple layers just
+   *  requires multiple fbs ? *)
+  let put_cursor t ?primary:(primary=false) ?active:(active=false) cursor =
+    let cursor' = clampv (Vec.sub t.window v11) cursor in
+    if cursor' = cursor then
+      let color =
+        match (active, primary) with
+          | (true, _)       -> default_cursor_color_active
+          | (false, true)   -> default_cursor_color_primary
+          | (false, false)  -> default_cursor_color_secondary
+      in
+      put_bg_color t color cursor v11
 
 end
 
@@ -559,13 +580,12 @@ module Source = struct
   let lineno_color = Color.Green
   let cursor_highlight_background = Color.Gray 4
   let cursor_highlight_lineno = Color.Yellow
-  let cursor_color = Color.Red
   let default_options = {
     wrap_lines                = true ;
     show_lineno               = true ;
     current_line_highlight    = true ;
     current_colm_highlight    = true ;
-    relative_lineno           = true ;
+    relative_lineno           = false ;
   }
 
   let draw_line framebuffer origin size source ops lineno y =
@@ -682,10 +702,10 @@ module Source = struct
           (Vec.add origin cursor_y_correction)
           (Vec.mk_v2 text_dx 1)
     end ;
-    Framebuffer.put_bg_color framebuffer Color.Red (Vec.add (Vec.add cursor text_origin) cursor_y_correction) v11
-    (*
-    Framebuffer.put_cursor framebuffer 
-    *)
+    let cursor_p = Vec.add (Vec.add cursor text_origin) cursor_y_correction in
+    Framebuffer.put_cursor framebuffer ~active:true cursor_p ;
+    Framebuffer.put_cursor framebuffer ~primary:true (Vec.add cursor_p v11) ;
+    Framebuffer.put_cursor framebuffer (Vec.add (Vec.add cursor_p v11) v11)
 
   (* TODO: add named arguments to bytes_blit_string and just uses these here as well *)
   let fill_line_by_segment_from_string_array strings ~lineno:lineno ~lineoffset:lineoffset ~byteoffset:byteoffset ~segmentlength:segmentlength bytes =
@@ -755,9 +775,9 @@ let smoke_test () =
       *)
       let source = Source.string_array_to_source !origin size !cursor 0 lorem_ipsum in
       Source.draw_source framebuffer source ;
-      Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin (Vec.mk_v2 5 5)) (Vec.mk_v2 10 10) ;
       Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin v11) (Vec.add size v11) ;
       (*
+      Framebuffer.put_frame ~wire:true ~bg:Color.White ~fg:Color.Cyan framebuffer (Vec.sub !origin (Vec.mk_v2 5 5)) (Vec.mk_v2 10 10) ;
       Framebuffer.debug_color framebuffer ;
       Framebuffer.debug_text framebuffer ;
       *)
