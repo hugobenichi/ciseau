@@ -2,13 +2,119 @@ open Util
 open Util.Arrays
 open Util.Rec
 open Term
+open Term.Color
 open Navigation
 open Motion
 
 let starttime = Sys.time ()
 
+type colors = {
+  operator            : color_cell ;
+  structure           : color_cell ;
+  string              : color_cell ;
+  spacing             : color_cell ;
+  numbers             : color_cell ;
+  default             : color_cell ;
+  cursor_line         : color_cell ;
+  current_token       : color_cell ;
+  selection           : color_cell ;
+  line_numbers        : color_cell ;
+  focus_header        : color_cell ;
+  header              : color_cell ;
+  status_normal       : color_cell ;
+  status_input        : color_cell ;
+  user_input          : color_cell ;
+  border              : color_cell ;
+  no_text             : color_cell ;
+  leftright_neighbor  : color_cell ;
+  updown_neighbor     : color_cell ;
+}
+
+let darkgray = Gray 2
+
+let default_colors = {
+  operator = {
+    fg    = Green ;
+    bg    = darkgray ;
+  } ;
+  structure = {
+    fg    = Red ;
+    bg    = darkgray ;
+  } ;
+  string  = {
+    fg    = Yellow ;
+    bg    = darkgray ;
+  } ;
+  spacing = {
+    fg    = darkgray ;
+    bg    = darkgray ;
+  } ;
+  numbers = {
+    fg    = Magenta ;
+    bg    = darkgray ;
+  } ;
+  default = {
+    fg    = White ;
+    bg    = darkgray ;
+  } ;
+  cursor_line = {
+    fg    = White ;
+    bg    = Black ;
+  } ;
+  current_token = {
+    fg    = White ;
+    bg    = Gray 4 ;
+  } ;
+  selection = {
+    fg    = White ;
+    bg    = Blue ;
+  } ;
+  leftright_neighbor = {
+    fg    = White ;
+    bg    = Red ;
+  } ;
+  updown_neighbor = {
+    fg    = White ;
+    bg    = Green ;
+  } ;
+  line_numbers = {
+    fg    = Green ;
+    bg    = darkgray ;
+  } ;
+  focus_header = {
+    fg    = darkgray ;
+    bg    = Yellow ;
+  } ;
+  header = {
+    fg    = darkgray ;
+    bg    = Cyan ;
+  } ;
+  status_normal = {
+    fg    = darkgray ;
+    bg    = White ;
+  } ;
+  status_input = {
+    fg    = darkgray ;
+    bg    = Red ;
+  } ;
+  user_input = {
+    fg    = White ;
+    bg    = darkgray ;
+  } ;
+  border = {
+    fg    = White ;
+    bg    = White ;
+  } ;
+  no_text = {
+    fg    = Bold_Magenta ;
+    bg    = darkgray ;
+  } ;
+}
+
 let logs = open_out "/tmp/ciseau.log"
 
+let kLOG_STATS = true
+let kDEBUG = false
 
 (* TODO: it would be nice to pair this with the reverse mapping in Term.Keys.key_to_string to have
  * one place for handling input mapping and configuration reading better *)
@@ -182,7 +288,7 @@ module Screen : sig
   val clear             : t -> unit
   val mk_screen         : Framebuffer.t -> rec2 -> t
   val mk_subscreen      : t -> rec2 -> t
-  val put_color_rect    : t -> Color.color_cell -> rec2 -> unit
+  val put_color_rect    : t -> color_cell -> rec2 -> unit
   val put_line          : t -> x:int -> y:int -> ?offset:int -> ?len:int -> string -> unit
   val put_cursor        : t -> Vec.vec2 -> unit
   val put_framebuffer   : t -> Framebuffer.t -> unit
@@ -548,7 +654,7 @@ end = struct
     let x' = Cursor.x t.cursor in
     let y' = Cursor.y t.cursor in
 
-    if Config.kDEBUG then (
+    if kDEBUG then (
       let msg =
         Printf.sprintf"apply_movement after mode=%s mov=%s %d,%d -> %d,%d\n"
           (Movement.mode_to_string t.mov_mode)
@@ -645,17 +751,17 @@ end = struct
     (* Text area color blocks *)
     Framebuffer.put_color_rect
       framebuffer
-      Config.default.colors.line_numbers
+      default_colors.line_numbers
       (mk_rect 0 0 6 text_stop_y) ;
 
     (* Show cursor lines *)
     Framebuffer.put_color_rect
       framebuffer
-      Config.default.colors.cursor_line
+      default_colors.cursor_line
       (mk_rect 6 (text_cursor_y - (Vec.y t.view)) text_width (text_cursor_y - (Vec.y t.view))) ;
     Framebuffer.put_color_rect
       framebuffer
-      Config.default.colors.cursor_line
+      default_colors.cursor_line
       (mk_rect (text_cursor_x + 6 - x_scrolling_offset) 0 (text_cursor_x + 7 - x_scrolling_offset) text_height) ;
 
     (* Show token where cursor currently is *)
@@ -679,7 +785,7 @@ end = struct
         (* BUG: add horizontal_scrolling correction ?? *)
         if 6 <= x0' && x0' < x1' then
           Framebuffer.put_color_rect
-            framebuffer Config.default.colors.current_token (mk_rect x0' y x1' y)
+            framebuffer default_colors.current_token (mk_rect x0' y x1' y)
       done ;
     ) ;
 *)
@@ -693,7 +799,7 @@ end = struct
           let br_y = (rect_y_end selection_rect) - (Vec.y t.view) in
           if 0 <= br_y && tl_y < text_height && tl_x < br_x then (
             let r = mk_rect tl_x tl_y br_x br_y in
-            Framebuffer.put_color_rect framebuffer Config.default.colors.selection r
+            Framebuffer.put_color_rect framebuffer default_colors.selection r
           )
       in
       Array.iter show_selection t.selection_context ;
@@ -712,16 +818,16 @@ end = struct
 
       Movement.apply_movement t.context t.mov_mode Movement.Left t.filebuffer t.cursor
         |> Cursor.pos
-        |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
+        |> lightup_pixel t framebuffer default_colors.leftright_neighbor ;
       Movement.apply_movement t.context t.mov_mode Movement.Right t.filebuffer t.cursor
         |> Cursor.pos
-        |> lightup_pixel t framebuffer Config.default.colors.leftright_neighbor ;
+        |> lightup_pixel t framebuffer default_colors.leftright_neighbor ;
       Movement.apply_movement t.context t.mov_mode Movement.Up t.filebuffer t.cursor
         |> Cursor.pos
-        |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
+        |> lightup_pixel t framebuffer default_colors.updown_neighbor ;
       Movement.apply_movement t.context t.mov_mode Movement.Down t.filebuffer t.cursor
         |> Cursor.pos
-        |> lightup_pixel t framebuffer Config.default.colors.updown_neighbor ;
+        |> lightup_pixel t framebuffer default_colors.updown_neighbor ;
     ) ;
 *)
 
@@ -731,13 +837,13 @@ end = struct
     done ;
     Framebuffer.put_color_rect
       framebuffer
-      Config.default.colors.no_text
+      default_colors.no_text
       (mk_rect 0 text_stop_y 1 text_height) ;
 
     (* Cursor vertical line *)
     Framebuffer.put_color_rect
       framebuffer
-      Config.default.colors.string
+      default_colors.string
       (mk_rect 0 (Vec.y cursor) 6 (Vec.y cursor))
 
   let put_border_frame t screen header_color =
@@ -755,7 +861,7 @@ end = struct
     (* border *)
     Screen.put_color_rect
       screen
-      Config.default.colors.border
+      default_colors.border
       (* BUG: this overlap with first char of top header ! *)
       (mk_rect 0 1 1 (Screen.screen_height screen))
 
@@ -766,8 +872,8 @@ end = struct
     in
     let header_color =
       if is_focused
-        then Config.default.colors.focus_header
-        else Config.default.colors.header
+        then default_colors.focus_header
+        else default_colors.header
     in
     let framebuffer = !fb in
     match redraw with
@@ -1113,8 +1219,8 @@ module Ciseau = struct
 
   let mode_to_color =
     function
-      | Normal      ->  Config.default.colors.status_normal
-      | RawInput    ->  Config.default.colors.status_input
+      | Normal      ->  default_colors.status_normal
+      | RawInput    ->  default_colors.status_input
 
   type pending_command_atom = Digit of int
 
@@ -1209,7 +1315,7 @@ module Ciseau = struct
       user_input      = "" ;
       pending_input   = None;
       stats           = Stats.init_stats () ;
-      log_stats       = Config.kLOG_STATS ;
+      log_stats       = kLOG_STATS ;
       mode            = Normal ;
     }
 
