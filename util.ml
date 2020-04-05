@@ -53,6 +53,30 @@ let string_last s = String.get s ((slen s) - 1)
 let string_drop n s = String.sub s n ((slen s) - n)
 let string_cut n s = String.sub s 0 ((slen s) - n)
 
+let rec string_find_index s fn i =
+  if slen s <= i then
+    -1
+  else if fn (String.get s i) then
+    i
+  else
+    string_find_index s fn (i + 1)
+
+let string_split is_split_char s =
+  let rec loop is_split_char is_not_split_char s i =
+    if slen s <= i
+      then []
+      else begin
+        let i = string_find_index s is_not_split_char i in
+        if i < 0
+          then []
+          else
+            let j = string_find_index s is_split_char i in
+            let j = if j < 0 then slen s else j in
+            (String.sub s i (j - i)) :: loop is_split_char is_not_split_char s j
+      end
+  in
+  loop is_split_char (neg is_split_char) s 0
+
 module Options = struct
   let some x = Some x
 
@@ -424,3 +448,18 @@ module Rec = struct
   let rect_to_string { x0 ; y0 ; w ; h } =
     Printf.sprintf "(%d,%d)x%dx%d" x0 y0 w h
 end
+
+let read_file f =
+  let lines = Arraybuffer.mk_arraybuffer 32 "" in
+  begin try
+    let ch = open_in f in
+    try
+      while true do
+        ch |> input_line |> Arraybuffer.append lines
+      done
+    with
+      End_of_file -> close_in ch
+  with
+    _ -> ()
+  end ;
+  Arraybuffer.to_array lines

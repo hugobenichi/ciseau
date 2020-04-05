@@ -57,6 +57,7 @@ val string_last               : string -> char
 val string_drop               : int -> string -> string
 (* cut 'n' last characters *)
 val string_cut                : int -> string -> string
+val string_split              : (char -> bool) -> string -> string list
 
 (* Combinators for options *)
 module Options : sig
@@ -159,3 +160,6 @@ module Rec : sig
   val rect_to_string          : rec2 -> string
   val assert_rect_inside      : Vec.vec2 -> rec2 -> unit
 end
+
+(* TODO: return errors *)
+val read_file : string -> string array

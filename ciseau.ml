@@ -395,24 +395,6 @@ end = struct
   let cursor { buffer } v =
     Cursor.mk_cursor buffer (Vec.x v) (Vec.y v)
 
-  let read_file f =
-    let rec loop lines ch =
-      match input_line ch with
-      | s                     -> Arraybuffer.append lines s ; loop lines ch
-      | exception End_of_file -> lines
-    in
-    let ch = open_in f in
-    try
-      let r = loop (Arraybuffer.mk_arraybuffer 32 "") ch
-                |> Arraybuffer.to_array
-      in
-        close_in ch ;
-        r
-    with
-      e ->
-        close_in ch ;
-        raise e
-
   let from_lines file lines =
     let filepath = (Sys.getcwd ()) ^ "/" ^ file in {
       filename      = file ;

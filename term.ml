@@ -7,11 +7,11 @@ let kFORCE_TERM_DIM = Some (Vec.mk_v2 60 40)
 let kFAIL_ON_GEOMETRY_ASSERTS = false
 let kDRAW_TERMINAL_CURSOR = false
 
-let opt_wrap_lines              = Config.define_option "wrap_lines"               bool_of_string true
-let opt_show_lineno             = Config.define_option "show_lineno"              bool_of_string true
-let opt_current_line_highlight  = Config.define_option "highlight_cursor_line"    bool_of_string true
-let opt_current_colm_highlight  = Config.define_option "highlight_cursor_column"  bool_of_string true
-let opt_relative_lineno         = Config.define_option "show_relative_lineno"     bool_of_string true
+let opt_wrap_lines              = Config.bool_option true "wrap_lines"
+let opt_show_lineno             = Config.bool_option true "show_lineno"
+let opt_current_line_highlight  = Config.bool_option true "highlight_cursor_line"
+let opt_current_colm_highlight  = Config.bool_option true "highlight_cursor_column"
+let opt_relative_lineno         = Config.bool_option true "show_relative_lineno"
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 let terminal_dimensions  =
@@ -587,11 +587,11 @@ module Source = struct
   let cursor_highlight_background = Color.Gray 4
   let cursor_highlight_lineno = Color.Yellow
   let default_options = {
-    wrap_lines                = Config.get_option opt_wrap_lines ;
-    show_lineno               = Config.get_option opt_show_lineno ;
-    current_line_highlight    = Config.get_option opt_current_line_highlight ;
-    current_colm_highlight    = Config.get_option opt_current_colm_highlight ;
-    relative_lineno           = Config.get_option opt_relative_lineno ;
+    wrap_lines                = Config.get opt_wrap_lines ;
+    show_lineno               = Config.get opt_show_lineno ;
+    current_line_highlight    = Config.get opt_current_line_highlight ;
+    current_colm_highlight    = Config.get opt_current_colm_highlight ;
+    relative_lineno           = Config.get opt_relative_lineno ;
   }
 
   let draw_line framebuffer origin size source ops lineno y =
