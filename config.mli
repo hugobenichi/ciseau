@@ -10,6 +10,8 @@ val has             : 'a option_t -> bool
 val load_options    : string -> string option
 val generate_config : unit -> unit
 val clear_options   : unit -> unit
+val reload          : unit -> unit
+val gen             : unit -> int
 
 (* Defining new options *)
 val define_option   : name:string -> parser:(string -> 'a) -> serializer:('a -> string) -> default:'a -> 'a option_t

@@ -6,22 +6,34 @@ let kLOCAL_OPTION_PATH    = "./.ciseaurc"
 
 (* TODO: change val from string to string list *)
 type 'a option_t = {
-  name        : string ;
-  parser      : string -> 'a ;
-  serializer  : 'a -> string ;
-  default     : 'a ;
+  name                  : string ;
+  parser                : string -> 'a ;
+  serializer            : 'a -> string ;
+  default               : 'a ;
+  mutable cached_value  : 'a ;
+  mutable cached_gen    : int ;
 }
+
 
 (* Global hashtable that stores raw key values read from config files *)
 let sKeyvals : (string, string) Hashtbl.t = Hashtbl.create 10
 (* Global hashtable that stores all defined options *)
 let sOptions : (string, unit option_t) Hashtbl.t = Hashtbl.create 10
+(* TODO: instead of using cache generation, directly mutate cached values in all options *)
+let sCacheGeneration = ref 0
 
 let get opt =
-  try
-    opt.name |> Hashtbl.find sKeyvals |> opt.parser
-  with
-    _ -> opt.default
+  if !sCacheGeneration <= opt.cached_gen
+    then opt.cached_value
+    else let v =
+      try
+        opt.name |> Hashtbl.find sKeyvals |> opt.parser
+      with
+        _ -> opt.default
+    in
+      opt.cached_value <- v ;
+      opt.cached_gen <- !sCacheGeneration ;
+      v
 
 let has { name } = Hashtbl.mem sKeyvals name
 
@@ -36,13 +48,14 @@ let process_lines lines =
   done
 
 let load_options path =
+  incr sCacheGeneration ;
   path |> read_file |> process_lines ;
   None
 
 let clear_options () = Hashtbl.clear sKeyvals
 
 let define_option ~name:name ~parser:parser ~serializer:serializer ~default:default =
-  let opt = { name ; parser ; serializer ; default } in
+  let opt = { name ; parser ; serializer ; default ; cached_gen = 0 ; cached_value = default } in
   Hashtbl.replace sOptions name (Obj.magic opt) ; (* maaaagic ! *)
   opt
 
@@ -75,9 +88,14 @@ let generate_config () =
     close_out ch
   with _ -> ()
 
-let _ =
+let reload () =
   ignore (load_options kDEFAULT_OPTION_PATH) ;
-  ignore (load_options kLOCAL_OPTION_PATH) ;
+  ignore (load_options kLOCAL_OPTION_PATH)
+
+let gen () = !sCacheGeneration
+
+let _ =
+  reload () ;
   at_exit generate_config ;
   ()
 

@@ -394,6 +394,8 @@ module Framebuffer = struct
     Array.fill t.bg_colors offset len default_bg_color_code
 
   let render framebuffer =
+    let g = Config.gen () |> string_of_int in
+    Arrays.bytes_blit_string g 0 framebuffer.text 0 (slen g) ;
     Buffer.clear buffer ;
     (* Do not clear with \027c to avoid flickering *)
     if kTERM_ESCAPE = false then begin
@@ -587,7 +589,7 @@ module Source = struct
   let lineno_color = Color.Green
   let cursor_highlight_background = Color.Gray 4
   let cursor_highlight_lineno = Color.Yellow
-  let default_options = {
+  let get_default_options () = {
     wrap_lines                = Config.get opt_wrap_lines ;
     show_lineno               = Config.get opt_show_lineno ;
     current_line_highlight    = Config.get opt_current_line_highlight ;
@@ -731,7 +733,7 @@ module Source = struct
     lineno  ;
     source  ;
     ops     = string_array_typeclass ;
-    options = default_options ;
+    options = get_default_options () ;
   }
 
 end
@@ -800,6 +802,7 @@ let smoke_test () =
           | Key 'j'     -> cursor := Vec.add !cursor (Vec.mk_v2 0 1)
           | Key 'k'     -> cursor := Vec.sub !cursor (Vec.mk_v2 0 1)
           | Key 'l'     -> cursor := Vec.add !cursor (Vec.mk_v2 1 0)
+          | Key 'r'     -> Config.reload ()
           | Key '\x03'  -> running := false
           | _           -> ()
         end ;
