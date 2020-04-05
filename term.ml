@@ -394,8 +394,6 @@ module Framebuffer = struct
     Array.fill t.bg_colors offset len default_bg_color_code
 
   let render framebuffer =
-    let g = Config.gen () |> string_of_int in
-    Arrays.bytes_blit_string g 0 framebuffer.text 0 (slen g) ;
     Buffer.clear buffer ;
     (* Do not clear with \027c to avoid flickering *)
     if kTERM_ESCAPE = false then begin

@@ -1,39 +1,38 @@
 open Util
 
 (* TODO: read these from environment variables first *)
+(* TODO: collapse into a list of path that is specified as a single ENV var *)
 let kDEFAULT_OPTION_PATH  = "$HOME/.ciseaurc"
 let kLOCAL_OPTION_PATH    = "./.ciseaurc"
 
-(* TODO: change val from string to string list *)
+(* TODO: change parser from string to string list *)
 type 'a option_t = {
   name                  : string ;
   parser                : string -> 'a ;
   serializer            : 'a -> string ;
   default               : 'a ;
-  mutable cached_value  : 'a ;
-  mutable cached_gen    : int ;
+  mutable cached_value  : 'a option ;
 }
 
 
 (* Global hashtable that stores raw key values read from config files *)
-let sKeyvals : (string, string) Hashtbl.t = Hashtbl.create 10
+let sKeyvals : (string, string list) Hashtbl.t = Hashtbl.create 10
 (* Global hashtable that stores all defined options *)
 let sOptions : (string, unit option_t) Hashtbl.t = Hashtbl.create 10
-(* TODO: instead of using cache generation, directly mutate cached values in all options *)
-let sCacheGeneration = ref 0
 
 let get opt =
-  if !sCacheGeneration <= opt.cached_gen
-    then opt.cached_value
-    else let v =
-      try
-        opt.name |> Hashtbl.find sKeyvals |> opt.parser
-      with
-        _ -> opt.default
-    in
-      opt.cached_value <- v ;
-      opt.cached_gen <- !sCacheGeneration ;
-      v
+  match opt.cached_value with
+    | Some v -> v
+    | None -> begin
+        let v =
+          try
+            opt.name |> Hashtbl.find sKeyvals |> List.hd |> opt.parser
+          with
+            _ -> opt.default
+        in
+          opt.cached_value <- Some v ;
+          v
+    end
 
 let has { name } = Hashtbl.mem sKeyvals name
 
@@ -43,19 +42,24 @@ let process_lines lines =
       |> string_split is_space
       |> function
           | [] -> ()
-          | k :: [] -> Hashtbl.replace sKeyvals k ""
-          | k :: v :: _ -> Hashtbl.replace sKeyvals k v
+          | k :: v -> begin
+            Hashtbl.replace sKeyvals k v ;
+            (* PERF: do nothing if the old v is like the new v *)
+            try
+              let opt = Hashtbl.find sOptions k in
+              opt.cached_value <- Some (v |> List.hd |> opt.parser)
+            with _ -> ()
+          end
   done
 
 let load_options path =
-  incr sCacheGeneration ;
   path |> read_file |> process_lines ;
   None
 
 let clear_options () = Hashtbl.clear sKeyvals
 
 let define_option ~name:name ~parser:parser ~serializer:serializer ~default:default =
-  let opt = { name ; parser ; serializer ; default ; cached_gen = 0 ; cached_value = default } in
+  let opt = { name ; parser ; serializer ; default ; cached_value = None } in
   Hashtbl.replace sOptions name (Obj.magic opt) ; (* maaaagic ! *)
   opt
 
@@ -89,10 +93,10 @@ let generate_config () =
   with _ -> ()
 
 let reload () =
+  (* BUG: if an option is removed from the config, the cached value might be incorrect
+   * and it should be reset to the default value *)
   ignore (load_options kDEFAULT_OPTION_PATH) ;
   ignore (load_options kLOCAL_OPTION_PATH)
-
-let gen () = !sCacheGeneration
 
 let _ =
   reload () ;

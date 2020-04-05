@@ -3,4 +3,4 @@ cursor.highlight.active_line    true
 lineno.offset                   3
 lineno.relative                 true
 lineno.show                     true
-text.wrap_lines                 true
+text.wrap_lines                 false
