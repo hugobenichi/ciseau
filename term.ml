@@ -7,11 +7,12 @@ let kFORCE_TERM_DIM = Some (Vec.mk_v2 60 40)
 let kFAIL_ON_GEOMETRY_ASSERTS = false
 let kDRAW_TERMINAL_CURSOR = false
 
-let opt_wrap_lines              = Config.bool_option true "wrap_lines"
-let opt_show_lineno             = Config.bool_option true "show_lineno"
-let opt_current_line_highlight  = Config.bool_option true "highlight_cursor_line"
-let opt_current_colm_highlight  = Config.bool_option true "highlight_cursor_column"
-let opt_relative_lineno         = Config.bool_option true "show_relative_lineno"
+let opt_wrap_lines              = Config.bool_option true "text.wrap_lines"
+let opt_show_lineno             = Config.bool_option true "lineno.show"
+let opt_current_line_highlight  = Config.bool_option true "cursor.highlight.active_line"
+let opt_current_colm_highlight  = Config.bool_option true "cursor.highlight.active_column"
+let opt_relative_lineno         = Config.bool_option true "lineno.relative"
+let opt_lineno_offset           = Config.int_option 3 "lineno.offset"
 
 external get_terminal_size : unit -> (int * int) = "get_terminal_size"
 let terminal_dimensions  =
