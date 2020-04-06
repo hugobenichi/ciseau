@@ -5,11 +5,10 @@ open Util
 let kDEFAULT_OPTION_PATH  = "$HOME/.ciseaurc"
 let kLOCAL_OPTION_PATH    = "./.ciseaurc"
 
-(* TODO: change parser from string to string list *)
 type 'a option_t = {
   name                  : string ;
-  parser                : string -> 'a ;
-  serializer            : 'a -> string ;
+  parser                : string list -> 'a ;
+  serializer            : 'a -> string list ;
   default               : 'a ;
   mutable cached_value  : 'a option ;
 }
@@ -26,7 +25,7 @@ let get opt =
     | None -> begin
         let v =
           try
-            opt.name |> Hashtbl.find sKeyvals |> List.hd |> opt.parser
+            opt.name |> Hashtbl.find sKeyvals |> opt.parser
           with
             _ -> opt.default
         in
@@ -47,7 +46,7 @@ let process_lines lines =
             (* PERF: do nothing if the old v is like the new v *)
             try
               let opt = Hashtbl.find sOptions k in
-              opt.cached_value <- Some (v |> List.hd |> opt.parser)
+              opt.cached_value <- Some (opt.parser v)
             with _ -> ()
           end
   done
@@ -63,9 +62,10 @@ let define_option ~name:name ~parser:parser ~serializer:serializer ~default:defa
   Hashtbl.replace sOptions name (Obj.magic opt) ; (* maaaagic ! *)
   opt
 
-let int_option      default name = define_option ~name:name ~parser:int_of_string   ~serializer:string_of_int   ~default:default
-let bool_option     default name = define_option ~name:name ~parser:bool_of_string  ~serializer:string_of_bool  ~default:default
-let string_option   default name = define_option ~name:name ~parser:id              ~serializer:id              ~default:default
+let list1 x = [x]
+let int_option      default name = define_option ~name:name ~parser:(List.hd >> int_of_string)   ~serializer:(string_of_int >> list1)   ~default:default
+let bool_option     default name = define_option ~name:name ~parser:(List.hd >> bool_of_string)  ~serializer:(string_of_bool >> list1)  ~default:default
+let string_option   default name = define_option ~name:name ~parser:(List.hd >> id)              ~serializer:(list1)                    ~default:default
 
 let generate_config () =
   try
@@ -85,7 +85,16 @@ let generate_config () =
       for j = 0 to tab_len - (slen name) - 1 do
         output_char ch ' '
       done ;
-      output_string ch (opt.serializer (get opt)) ;
+      let rec loop sep =
+        function
+          | [] -> ()
+          | hd :: tl -> begin
+              output_string ch sep ;
+              output_string ch hd ;
+              loop " " tl
+            end
+      in
+      loop "" (opt.serializer (get opt)) ;
       output_char ch '\r' ;
       output_char ch '\n' ;
     done ;

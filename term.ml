@@ -237,6 +237,7 @@ module Color = struct
 
   type color_layer = Foreground | Background
 
+
   let color_code_raw =
     function
       | Black           -> 0
@@ -262,6 +263,60 @@ module Color = struct
                            assert_that (0 <= g && g < 6) ;
                            assert_that (0 <= b && b < 6) ;
                            16 + 36 * r + 6 * g + b
+
+  let serialize_color =
+    function
+      | Black                 -> ["black"]
+      | Red                   -> ["red"]
+      | Green                 -> ["green"]
+      | Yellow                -> ["yellow"]
+      | Blue                  -> ["blue"]
+      | Magenta               -> ["magenta"]
+      | Cyan                  -> ["cyan"]
+      | White                 -> ["white"]
+      | Bold_Black            -> ["bold black"]
+      | Bold_Red              -> ["bold red"]
+      | Bold_Green            -> ["bold green"]
+      | Bold_Yellow           -> ["bold yellow"]
+      | Bold_Blue             -> ["bold blue"]
+      | Bold_Magenta          -> ["bold magenta"]
+      | Bold_Cyan             -> ["bold cyan"]
+      | Bold_White            -> ["bold white"]
+      | Gray g                -> ["gray" ; string_of_int g]
+      | RGB216 (r,g,b)        -> ["rgb" ; string_of_int r ; string_of_int g ; string_of_int b]
+
+  exception BadColor of string
+  let parse_color =
+    function
+      | ["black"]             -> Black
+      | ["red"]               -> Red
+      | ["green"]             -> Green
+      | ["yellow"]            -> Yellow
+      | ["blue"]              -> Blue
+      | ["magenta"]           -> Magenta
+      | ["cyan"]              -> Cyan
+      | ["white"]             -> White
+      | ["bold black"]        -> Bold_Black
+      | ["bold red"]          -> Bold_Red
+      | ["bold green"]        -> Bold_Green
+      | ["bold yellow"]       -> Bold_Yellow
+      | ["bold blue"]         -> Bold_Blue
+      | ["bold magenta"]      -> Bold_Magenta
+      | ["bold cyan"]         -> Bold_Cyan
+      | ["bold white"]        -> Bold_White
+      | ["gray" ; g]          -> let gx = int_of_string g in
+                                 assert_that (0 <= gx && gx < 24) ;
+                                 Gray gx
+      | ["rgb" ; r ; g ; b]   -> let rx = int_of_string r in
+                                 let gx = int_of_string g in
+                                 let bx = int_of_string b in
+                                 assert_that (0 <= rx && rx < 6) ;
+                                 assert_that (0 <= gx && gx < 6) ;
+                                 assert_that (0 <= bx && bx < 6) ;
+                                 RGB216 (rx, gx, bx)
+      | inval                 -> raise (BadColor (String.concat " " inval))
+
+  let color_option default name = Config.define_option ~name:name ~parser:parse_color ~serializer:serialize_color ~default:default
 
   let color_code_fg =  color_code_raw
   let color_code_bg =  color_code_raw >> ((+) 256)
@@ -316,9 +371,9 @@ module Framebuffer = struct
    *  primary:    main cursor of any other source.
    *  secondary:  any other cursor.
    *)
-  let default_cursor_color_active     = Color.Bold_Red
-  let default_cursor_color_primary    = Color.Magenta
-  let default_cursor_color_secondary  = Color.Red
+  let opt_color_cursor_active     = Color.color_option Color.Bold_Red "color.cursor.active"
+  let opt_color_cursor_primary    = Color.color_option Color.Magenta  "color.cursor.primary"
+  let opt_color_cursor_secondary  = Color.color_option Color.Red      "color.cursor.secondary"
 
   type t = {
     text                      : Bytes.t ;
@@ -544,9 +599,9 @@ module Framebuffer = struct
     if cursor' = cursor then
       let color =
         match (active, primary) with
-          | (true, _)       -> default_cursor_color_active
-          | (false, true)   -> default_cursor_color_primary
-          | (false, false)  -> default_cursor_color_secondary
+          | (true, _)       -> Config.get opt_color_cursor_active
+          | (false, true)   -> Config.get opt_color_cursor_primary
+          | (false, false)  -> Config.get opt_color_cursor_secondary
       in
       put_bg_color t color cursor v11
 
