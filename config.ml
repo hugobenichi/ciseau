@@ -1,9 +1,19 @@
 open Util
 
-(* TODO: read these from environment variables first *)
-(* TODO: collapse into a list of path that is specified as a single ENV var *)
-let kDEFAULT_OPTION_PATH  = "$HOME/.ciseaurc"
-let kLOCAL_OPTION_PATH    = "./.ciseaurc"
+(* First, read config file location from ENV variables *)
+let kConfigHomePath     = "$HOME/.ciseaurc"
+let kConfigLocalPath    = "./.ciseaurc"
+let kConfigFilesDefault = [kConfigLocalPath ; kConfigHomePath]
+let kConfigFilesKey     = "CISEAU_CONFIGS"
+let kConfigFiles =
+  Unix.environment ()
+    |> Array.to_list
+    |> List.find_opt (string_starts_with kConfigFilesKey)
+    |> Option.map (String.split_on_char '=')
+    |> (flip Option.bind) ((flip List.nth_opt) 1)
+    |> Option.map (String.split_on_char ':')
+    |> Option.value ~default:kConfigFilesDefault
+
 
 type 'a option_t = {
   name                  : string ;
@@ -51,9 +61,14 @@ let process_lines lines =
           end
   done
 
-let load_options path =
-  path |> read_file |> process_lines ;
-  None
+let load = read_file >> process_lines
+
+let reload () =
+  (* BUG: if an option is removed from the config, the cached value might be incorrect
+   * and it should be reset to the default value *)
+  kConfigFiles
+    |> List.rev
+    |> List.iter load
 
 let clear_options () = Hashtbl.clear sKeyvals
 
@@ -67,9 +82,9 @@ let int_option      default name = define_option ~name:name ~parser:(List.hd >> 
 let bool_option     default name = define_option ~name:name ~parser:(List.hd >> bool_of_string)  ~serializer:(string_of_bool >> list1)  ~default:default
 let string_option   default name = define_option ~name:name ~parser:(List.hd >> id)              ~serializer:(list1)                    ~default:default
 
-let generate_config () =
+let generate_config ?path:(path=kConfigLocalPath) () =
   try
-    let ch = open_out kLOCAL_OPTION_PATH in
+    let ch = open_out path in
     let options = keys sOptions in
     Array.sort String.compare options ;
     let keep_longest n1 n2 =
@@ -100,12 +115,6 @@ let generate_config () =
     done ;
     close_out ch
   with _ -> ()
-
-let reload () =
-  (* BUG: if an option is removed from the config, the cached value might be incorrect
-   * and it should be reset to the default value *)
-  ignore (load_options kDEFAULT_OPTION_PATH) ;
-  ignore (load_options kLOCAL_OPTION_PATH)
 
 let _ =
   reload () ;

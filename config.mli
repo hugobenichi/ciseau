@@ -8,10 +8,10 @@ val has             : 'a option_t -> bool
 
 (* Load options from given directory path, overwriting any previously loaded options,
  * Return error message or None *)
-val load_options    : string -> string option
-val generate_config : unit -> unit
-val clear_options   : unit -> unit
+val load            : string -> unit
 val reload          : unit -> unit
+val generate_config : ?path:string -> unit -> unit
+val clear_options   : unit -> unit
 
 (* Defining new options *)
 val define_option   : name:string -> parser:(string list -> 'a) -> serializer:('a -> string list) -> default:'a -> 'a option_t
