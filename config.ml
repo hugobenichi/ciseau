@@ -1,5 +1,15 @@
 open Util
 
+type 'a option_t = unit -> 'a
+
+type 'a option_info_t = {
+  name                  : string ;
+  parser                : string list -> 'a ;
+  serializer            : 'a -> string list ;
+  default               : 'a ;
+  mutable cached_value  : 'a option ;
+}
+
 (* First, read config file location from ENV variables *)
 let kConfigHomePath     = "$HOME/.ciseaurc"
 let kConfigLocalPath    = "./.ciseaurc"
@@ -14,20 +24,10 @@ let kConfigFiles =
     |> Option.map (String.split_on_char ':')
     |> Option.value ~default:kConfigFilesDefault
 
-
-type 'a option_t = {
-  name                  : string ;
-  parser                : string list -> 'a ;
-  serializer            : 'a -> string list ;
-  default               : 'a ;
-  mutable cached_value  : 'a option ;
-}
-
-
 (* Global hashtable that stores raw key values read from config files *)
 let sKeyvals : (string, string list) Hashtbl.t = Hashtbl.create 10
 (* Global hashtable that stores all defined options *)
-let sOptions : (string, unit option_t) Hashtbl.t = Hashtbl.create 10
+let sOptions : (string, unit option_info_t) Hashtbl.t = Hashtbl.create 10
 
 let get opt =
   match opt.cached_value with
@@ -43,7 +43,7 @@ let get opt =
           v
     end
 
-let has { name } = Hashtbl.mem sKeyvals name
+let make_opt_getter opt () = get opt
 
 let process_lines lines =
   for i = 0 to Arrays.astop lines do
@@ -75,7 +75,7 @@ let clear_options () = Hashtbl.clear sKeyvals
 let define_option ~name:name ~parser:parser ~serializer:serializer ~default:default =
   let opt = { name ; parser ; serializer ; default ; cached_value = None } in
   Hashtbl.replace sOptions name (Obj.magic opt) ; (* maaaagic ! *)
-  opt
+  make_opt_getter opt
 
 let list1 x = [x]
 let int_option      default name = define_option ~name:name ~parser:(List.hd >> int_of_string)   ~serializer:(string_of_int >> list1)   ~default:default

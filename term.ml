@@ -599,9 +599,9 @@ module Framebuffer = struct
     if cursor' = cursor then
       let color =
         match (active, primary) with
-          | (true, _)       -> Config.get opt_color_cursor_active
-          | (false, true)   -> Config.get opt_color_cursor_primary
-          | (false, false)  -> Config.get opt_color_cursor_secondary
+          | (true, _)       -> opt_color_cursor_active ()
+          | (false, true)   -> opt_color_cursor_primary ()
+          | (false, false)  -> opt_color_cursor_secondary ()
       in
       put_bg_color t color cursor v11
 
@@ -643,11 +643,11 @@ module Source = struct
   let cursor_highlight_background = Color.Gray 4
   let cursor_highlight_lineno = Color.Yellow
   let get_default_options () = {
-    wrap_lines                = Config.get opt_wrap_lines ;
-    show_lineno               = Config.get opt_show_lineno ;
-    current_line_highlight    = Config.get opt_current_line_highlight ;
-    current_colm_highlight    = Config.get opt_current_colm_highlight ;
-    relative_lineno           = Config.get opt_relative_lineno ;
+    wrap_lines                = opt_wrap_lines () ;
+    show_lineno               = opt_show_lineno () ;
+    current_line_highlight    = opt_current_line_highlight () ;
+    current_colm_highlight    = opt_current_colm_highlight () ;
+    relative_lineno           = opt_relative_lineno () ;
   }
 
   let draw_line framebuffer origin size source ops lineno y =

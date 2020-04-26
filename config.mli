@@ -1,10 +1,7 @@
 (* Types of Keys generated when defining an option for parametric type 'a *)
-(* TODO: remove this and instead directly return a (() -> 'a) function *)
-type 'a option_t
 
-(* Accessing current option from loaded config files *)
-val get             : 'a option_t -> 'a
-val has             : 'a option_t -> bool
+(* An option value is simply a stateful getter *)
+type 'a option_t = unit -> 'a
 
 (* Load options from given directory path, overwriting any previously loaded options,
  * Return error message or None *)
