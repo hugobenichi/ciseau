@@ -10,6 +10,23 @@ type 'a option_info_t = {
   mutable cached_value  : 'a option ;
 }
 
+module Option = struct
+  let map fn =
+    function
+      | None -> None
+      | Some x -> Some (fn x)
+
+  let bind opt fn =
+    match opt with
+      | None -> None
+      | Some x -> fn x
+
+  let value ~default:default =
+    function
+      | None -> default
+      | Some x -> x
+end
+
 (* First, read config file location from ENV variables *)
 let kConfigHomePath     = "$HOME/.ciseaurc"
 let kConfigLocalPath    = "./.ciseaurc"
