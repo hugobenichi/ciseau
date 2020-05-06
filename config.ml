@@ -61,6 +61,7 @@ let process_lines lines =
           end
   done
 
+(* TODO: remember the loaded path for the next call to reload *)
 let load = read_file >> process_lines
 
 let reload () =
@@ -69,8 +70,6 @@ let reload () =
   kConfigFiles
     |> List.rev
     |> List.iter load
-
-let clear_options () = Hashtbl.clear sKeyvals
 
 let define_option ~name:name ~parser:parser ~serializer:serializer ~default:default =
   let opt = { name ; parser ; serializer ; default ; cached_value = None } in
