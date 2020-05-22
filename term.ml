@@ -868,10 +868,6 @@ let smoke_test () =
           Printf.printf "\nerror: %s\n" (Printexc.to_string e) ;
           Printexc.print_backtrace stdout
 
-let () =
-  smoke_test () ;
-  exit 0
-
 (*
  * NEXT: - add text_view_origin
  *       - draw secondary cursors

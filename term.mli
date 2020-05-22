@@ -118,3 +118,5 @@ module Source : sig
   val draw_source             : Framebuffer.t -> 's t -> unit
   val string_array_to_source  : Vec.vec2 -> Vec.vec2 -> Vec.vec2 -> int -> string array -> string array t
 end
+
+val smoke_test : unit -> unit
