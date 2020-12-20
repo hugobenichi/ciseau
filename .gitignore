@@ -1,5 +1,6 @@
 ciseau
 *.xml
+*.bkp
 spacetime*
 gmon.out
 _build/*
